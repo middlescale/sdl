@@ -191,6 +191,7 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                     rsa_cipher.public_key()?.clone(),
                     response.key_finger,
                     response.version,
+                    response.capabilities,
                 );
                 log::info!("加密握手请求:{:?}", handshake_info);
 
@@ -209,7 +210,8 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             if let Ok(rsa_cipher) = RsaCipher::new(&response.public_key) {
                 self.rsa_cipher.lock().replace(rsa_cipher);
             }
-            let handshake_info = HandshakeInfo::new_no_secret(response.version);
+            let handshake_info =
+                HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {
                 //没有加密，则发送注册请求
                 self.register(current_device, context, route_key)?;

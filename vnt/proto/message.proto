@@ -4,12 +4,14 @@ message HandshakeRequest {
     string version = 1;
     bool secret = 2;
     string key_finger = 3;
+    repeated string capabilities = 4;
 }
 message HandshakeResponse {
     string version = 1;
     bool secret = 2;
     bytes public_key = 3;
     string key_finger = 4;
+    repeated string capabilities = 5;
 }
 message SecretHandshakeRequest {
     string token = 1;
@@ -88,6 +90,9 @@ message ClientStatusInfo {
     uint64 up_stream = 3;
     uint64 down_stream = 4;
     PunchNatType nat_type = 5;
+    repeated fixed32 public_ip_list = 6;
+    repeated uint32 public_udp_ports = 7;
+    repeated uint32 local_udp_ports = 8;
 }
 message RouteItem {
     fixed32 next_ip = 1;

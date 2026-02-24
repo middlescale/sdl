@@ -1,5 +1,6 @@
 use crate::channel::context::ChannelContext;
 use crate::handle::CurrentDeviceInfo;
+use crate::nat::NatTest;
 use crate::proto::message::{ClientStatusInfo, PunchNatType, RouteItem};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
@@ -15,9 +16,10 @@ pub fn up_status(
     scheduler: &Scheduler,
     context: ChannelContext,
     current_device_info: Arc<AtomicCell<CurrentDeviceInfo>>,
+    nat_test: NatTest,
 ) {
     let _ = scheduler.timeout(Duration::from_secs(60), move |x| {
-        up_status0(x, context, current_device_info)
+        up_status0(x, context, current_device_info, nat_test)
     });
 }
 
@@ -25,12 +27,13 @@ fn up_status0(
     scheduler: &Scheduler,
     context: ChannelContext,
     current_device_info: Arc<AtomicCell<CurrentDeviceInfo>>,
+    nat_test: NatTest,
 ) {
-    if let Err(e) = send_up_status_packet(&context, &current_device_info) {
+    if let Err(e) = send_up_status_packet(&context, &current_device_info, &nat_test) {
         log::warn!("{:?}", e)
     }
     let rs = scheduler.timeout(Duration::from_secs(10 * 60), move |x| {
-        up_status0(x, context, current_device_info)
+        up_status0(x, context, current_device_info, nat_test)
     });
     if !rs {
         log::info!("定时任务停止");
@@ -40,6 +43,7 @@ fn up_status0(
 fn send_up_status_packet(
     context: &ChannelContext,
     current_device_info: &AtomicCell<CurrentDeviceInfo>,
+    nat_test: &NatTest,
 ) -> io::Result<()> {
     let device_info = current_device_info.load();
     if device_info.status.offline() {
@@ -60,6 +64,14 @@ fn send_up_status_packet(
     } else {
         PunchNatType::Symmetric
     });
+    let nat_info = nat_test.nat_info();
+    message.public_ip_list = nat_info
+        .public_ips
+        .iter()
+        .map(|ip| u32::from(*ip))
+        .collect();
+    message.public_udp_ports = nat_info.public_ports.iter().map(|p| *p as u32).collect();
+    message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
     let buf = message
         .write_to_bytes()
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("up_status_packet {:?}", e)))?;

@@ -19,6 +19,8 @@ use crate::proto::message::SecretHandshakeRequest;
 use crate::protocol::body::RSA_ENCRYPTION_RESERVED;
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 
+const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
+
 #[derive(Clone)]
 pub struct Handshake {
     time: Arc<AtomicCell<Instant>>,
@@ -56,6 +58,9 @@ impl Handshake {
         let mut request = HandshakeRequest::new();
         request.secret = secret;
         request.version = crate::VNT_VERSION.to_string();
+        request
+            .capabilities
+            .push(CAPABILITY_UDP_ENDPOINT_REPORT_V1.to_string());
         #[cfg(feature = "server_encrypt")]
         if let Some(finger) = self.rsa_cipher.lock().as_ref().map(|v| v.finger().clone()) {
             request.key_finger = finger;

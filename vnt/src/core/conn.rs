@@ -413,7 +413,12 @@ pub fn start<Call: VntCallback>(
             punch,
         );
     }
-    maintain::up_status(scheduler, context.clone(), current_device.clone())
+    maintain::up_status(
+        scheduler,
+        context.clone(),
+        current_device.clone(),
+        nat_test.clone(),
+    )
 }
 
 impl VntInner {
