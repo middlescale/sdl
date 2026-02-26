@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use std::collections::HashMap;
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 #[cfg(feature = "server_encrypt")]
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ use protobuf::Message;
 
 use crate::channel::context::ChannelContext;
 use crate::channel::{Route, RouteKey};
+use crate::channel::punch::{NatInfo, NatType, PunchModel};
 use crate::cipher::Cipher;
 #[cfg(feature = "server_encrypt")]
 use crate::cipher::RsaCipher;
@@ -23,6 +24,8 @@ use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo,
 #[cfg(feature = "server_encrypt")]
 use crate::handle::handshaker;
 use crate::handle::handshaker::Handshake;
+use crate::handle::maintain::trigger_up_status_with_nat_ready;
+use crate::handle::maintain::PunchSender;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::{registrar, BaseConfigInfo, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::NatTest;
@@ -50,6 +53,7 @@ pub struct ServerPacketHandler<Call, Device> {
     up_key_time: Arc<AtomicCell<Instant>>,
     external_route: ExternalRoute,
     handshake: Handshake,
+    punch_sender: PunchSender,
     #[cfg(feature = "integrated_tun")]
     tun_device_helper: crate::tun_tap_device::tun_create_helper::TunDeviceHelper,
 }
@@ -66,6 +70,7 @@ impl<Call, Device> ServerPacketHandler<Call, Device> {
         callback: Call,
         external_route: ExternalRoute,
         handshake: Handshake,
+        punch_sender: PunchSender,
         #[cfg(feature = "integrated_tun")]
         tun_device_helper: crate::tun_tap_device::tun_create_helper::TunDeviceHelper,
     ) -> Self {
@@ -87,6 +92,7 @@ impl<Call, Device> ServerPacketHandler<Call, Device> {
             )),
             external_route,
             handshake,
+            punch_sender,
             #[cfg(feature = "integrated_tun")]
             tun_device_helper,
         }
@@ -416,6 +422,11 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         }
                     }
                     self.set_device_info_list(response.device_info_list, response.epoch as _);
+                    trigger_up_status_with_nat_ready(
+                        context.clone(),
+                        self.current_device.clone(),
+                        self.nat_test.clone(),
+                    );
                     if old.status.offline() {
                         self.callback.success();
                     }
@@ -436,11 +447,14 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload()).map_err(|e| {
                     io::Error::new(io::ErrorKind::Other, format!("PunchStart {:?}", e))
                 })?;
-                let mut ack = PunchAck::new();
-                ack.session_id = punch_start.session_id;
-                ack.source = u32::from(current_device.virtual_ip);
-                ack.attempt = punch_start.attempt;
-                ack.accepted = true;
+                let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
+                let accepted = self.punch_sender.send(false, peer_ip, peer_nat_info);
+                let ack = build_punch_ack(
+                    punch_start.session_id,
+                    u32::from(current_device.virtual_ip),
+                    punch_start.attempt,
+                    accepted,
+                );
                 let bytes = ack
                     .write_to_bytes()
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("PunchAck {:?}", e)))?;
@@ -630,5 +644,90 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             _ => {}
         }
         Ok(())
+    }
+}
+
+fn build_punch_ack(session_id: u64, source: u32, attempt: u32, accepted: bool) -> PunchAck {
+    let mut ack = PunchAck::new();
+    ack.session_id = session_id;
+    ack.source = source;
+    ack.attempt = attempt;
+    ack.accepted = accepted;
+    ack
+}
+
+fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, NatInfo) {
+    let peer_ip = Ipv4Addr::from(punch_start.target);
+    let mut public_ips = Vec::new();
+    let mut public_ports = Vec::new();
+    let mut ipv6: Option<Ipv6Addr> = None;
+    let mut use_tcp = false;
+    for ep in &punch_start.peer_endpoints {
+        if ep.ip != 0 {
+            public_ips.push(Ipv4Addr::from(ep.ip));
+        }
+        if ep.port <= u16::MAX as u32 && ep.port > 0 {
+            public_ports.push(ep.port as u16);
+        }
+        if ipv6.is_none() && ep.ipv6.len() == 16 {
+            let mut v6 = [0u8; 16];
+            v6.copy_from_slice(&ep.ipv6);
+            ipv6 = Some(Ipv6Addr::from(v6));
+        }
+        if ep.tcp {
+            use_tcp = true;
+        }
+    }
+    let punch_model = if use_tcp {
+        PunchModel::IPv4Tcp
+    } else {
+        PunchModel::IPv4Udp
+    };
+    (
+        peer_ip,
+        NatInfo::new(
+            public_ips,
+            public_ports.clone(),
+            0,
+            None,
+            ipv6,
+            public_ports,
+            0,
+            0,
+            NatType::Cone,
+            punch_model,
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_peer_nat_info_from_punch_start;
+    use crate::channel::punch::PunchModel;
+    use crate::proto::message::{PunchEndpoint, PunchStart};
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn build_peer_nat_info_from_punch_start_uses_endpoints_and_tcp_flag() {
+        let mut start = PunchStart::new();
+        start.target = u32::from(Ipv4Addr::new(10, 26, 0, 3));
+        let mut ep1 = PunchEndpoint::new();
+        ep1.ip = u32::from(Ipv4Addr::new(1, 1, 1, 1));
+        ep1.port = 10001;
+        let mut ep2 = PunchEndpoint::new();
+        ep2.ip = u32::from(Ipv4Addr::new(2, 2, 2, 2));
+        ep2.port = 10002;
+        let ipv6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        ep2.ipv6 = ipv6.octets().to_vec();
+        ep2.tcp = true;
+        start.peer_endpoints.push(ep1);
+        start.peer_endpoints.push(ep2);
+
+        let (peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
+        assert_eq!(peer_ip, Ipv4Addr::new(10, 26, 0, 3));
+        assert_eq!(nat_info.public_ips.len(), 2);
+        assert_eq!(nat_info.public_ports, vec![10001, 10002]);
+        assert_eq!(nat_info.ipv6(), Some(ipv6));
+        assert_eq!(nat_info.punch_model, PunchModel::IPv4Tcp);
     }
 }

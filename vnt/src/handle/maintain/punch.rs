@@ -96,19 +96,9 @@ pub fn punch(
     receiver: PunchReceiver,
     punch: Punch,
 ) {
+    let _ = (scheduler, context, nat_test, device_map);
+    log::info!("control-driven punch enabled: periodic PunchRequest is disabled");
     let punch_record = Arc::new(Mutex::new(HashMap::new()));
-    let last_punch_record = HashMap::new();
-    punch_request(
-        scheduler,
-        context,
-        nat_test,
-        device_map,
-        current_device.clone(),
-        client_cipher.clone(),
-        0,
-        punch_record.clone(),
-        last_punch_record,
-    );
     let f = |receiver: Receiver<(Ipv4Addr, NatInfo)>| {
         let punch = punch.clone();
         let current_device = current_device.clone();

@@ -9,6 +9,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use protobuf::Message;
 use std::io;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 /// 上报状态给服务器
@@ -21,6 +22,44 @@ pub fn up_status(
     let _ = scheduler.timeout(Duration::from_secs(60), move |x| {
         up_status0(x, context, current_device_info, nat_test)
     });
+}
+
+/// 事件触发的即时上报（不影响周期上报）
+pub fn trigger_up_status(
+    context: &ChannelContext,
+    current_device_info: &AtomicCell<CurrentDeviceInfo>,
+    nat_test: &NatTest,
+) {
+    if let Err(e) = send_up_status_packet(context, current_device_info, nat_test) {
+        log::warn!("{:?}", e)
+    }
+}
+
+/// 事件触发上报：优先确保已有公网端点；若缺失则先发一次探测并短暂等待后再上报
+pub fn trigger_up_status_with_nat_ready(
+    context: ChannelContext,
+    current_device_info: Arc<AtomicCell<CurrentDeviceInfo>>,
+    nat_test: NatTest,
+) {
+    thread::Builder::new()
+        .name("upStatusEvent".into())
+        .spawn(move || {
+            let nat_info = nat_test.nat_info();
+            if !has_public_endpoints(&nat_info.public_ips, &nat_info.public_ports) {
+                if let Ok((data, addr)) = nat_test.send_data() {
+                    let _ = context.send_main_udp(0, &data, addr);
+                }
+                thread::sleep(Duration::from_secs(2));
+            }
+            if let Err(e) = send_up_status_packet(&context, &current_device_info, &nat_test) {
+                log::warn!("{:?}", e)
+            }
+        })
+        .expect("upStatusEvent");
+}
+
+fn has_public_endpoints(public_ips: &[std::net::Ipv4Addr], public_ports: &[u16]) -> bool {
+    !public_ips.is_empty() && !public_ports.is_empty()
 }
 
 fn up_status0(
@@ -87,4 +126,21 @@ fn send_up_status_packet(
     net_packet.set_payload(&buf)?;
     context.send_default(&net_packet, device_info.connect_server)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_public_endpoints;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn has_public_endpoints_requires_both_ip_and_port() {
+        assert!(!has_public_endpoints(&[], &[]));
+        assert!(!has_public_endpoints(&[Ipv4Addr::new(1, 1, 1, 1)], &[]));
+        assert!(!has_public_endpoints(&[], &[12345]));
+        assert!(has_public_endpoints(
+            &[Ipv4Addr::new(1, 1, 1, 1)],
+            &[12345]
+        ));
+    }
 }

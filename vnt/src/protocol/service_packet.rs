@@ -66,3 +66,32 @@ impl Into<u8> for Protocol {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Protocol;
+
+    #[test]
+    fn punch_protocol_mapping_roundtrip() {
+        let cases = [
+            (10u8, Protocol::PunchRequest),
+            (11u8, Protocol::PunchAck),
+            (12u8, Protocol::PunchStart),
+            (13u8, Protocol::PunchResult),
+            (14u8, Protocol::PunchCancel),
+        ];
+        for (raw, expect) in cases {
+            assert_eq!(Protocol::from(raw), expect);
+            let back: u8 = expect.into();
+            assert_eq!(back, raw);
+        }
+    }
+
+    #[test]
+    fn unknown_protocol_passthrough() {
+        let p = Protocol::from(200);
+        assert_eq!(p, Protocol::Unknown(200));
+        let back: u8 = p.into();
+        assert_eq!(back, 200);
+    }
+}

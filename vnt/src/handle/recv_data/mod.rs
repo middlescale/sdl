@@ -107,6 +107,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             callback,
             external_route.clone(),
             handshake,
+            punch_sender.clone(),
             #[cfg(feature = "integrated_tun")]
             tun_device_helper,
         );
