@@ -34,7 +34,7 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 cargo build -p vnt-cli --no-default-features
 ```
 
-服务端地址协议支持 `udp://`(默认)、`tcp://`、`quic://`、`ws://`、`wss://`，例如：
+服务端地址协议当前仅支持 `quic://`，例如：
 
 ```
 ./vnt-cli -k <token> -d <device_id> -s quic://control.example.com:4433

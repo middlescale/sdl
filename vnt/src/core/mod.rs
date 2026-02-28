@@ -172,36 +172,30 @@ impl Config {
             return Err(anyhow!("name too long"));
         }
         let mut server_address_str = server_address_str.to_lowercase();
-        let mut _query_dns = true;
-        let mut protocol = ConnectProtocol::UDP;
-        if server_address_str.starts_with("ws://") {
-            #[cfg(not(feature = "ws"))]
-            Err(anyhow!("Ws not supported"))?;
-            protocol = ConnectProtocol::WS;
-            _query_dns = false;
+        let _query_dns = true;
+        let protocol = ConnectProtocol::QUIC;
+        if server_address_str.starts_with("udp://")
+            || server_address_str.starts_with("tcp://")
+            || server_address_str.starts_with("ws://")
+            || server_address_str.starts_with("wss://")
+            || server_address_str.starts_with("http://")
+            || server_address_str.starts_with("https://")
+        {
+            Err(anyhow!(
+                "only quic:// is supported for vnt-control connection currently"
+            ))?;
         }
-        if server_address_str.starts_with("wss://") {
-            #[cfg(not(feature = "wss"))]
-            Err(anyhow!("Wss not supported"))?;
-            protocol = ConnectProtocol::WSS;
-            _query_dns = false;
+        if let Some(s) = server_address_str.strip_prefix("quic://") {
+            server_address_str = s.to_string();
         }
-        if server_address_str.starts_with("quic://") {
-            #[cfg(not(feature = "quic"))]
+        #[cfg(not(feature = "quic"))]
+        {
+            let _ = protocol;
             Err(anyhow!("Quic not supported"))?;
-            protocol = ConnectProtocol::QUIC;
         }
 
         let mut server_address = "0.0.0.0:0".parse().unwrap();
         if _query_dns {
-            if let Some(s) = server_address_str.strip_prefix("udp://") {
-                server_address_str = s.to_string();
-            } else if let Some(s) = server_address_str.strip_prefix("tcp://") {
-                server_address_str = s.to_string();
-                protocol = ConnectProtocol::TCP;
-            } else if let Some(s) = server_address_str.strip_prefix("quic://") {
-                server_address_str = s.to_string();
-            }
             server_address = address_choose(dns_query_all(
                 &server_address_str,
                 name_servers.clone(),

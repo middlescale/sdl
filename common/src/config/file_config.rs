@@ -66,7 +66,7 @@ impl Default for FileConfig {
                 .to_str()
                 .unwrap_or("UnknownName")
                 .to_string(),
-            server_address: "nat1.wherewego.top:29872".to_string(),
+            server_address: "quic://nat1.wherewego.top:29872".to_string(),
             stun_server,
             dns: vec![],
             in_ips: vec![],

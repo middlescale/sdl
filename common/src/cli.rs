@@ -351,7 +351,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("-k <token>", ("使用相同的token,就能组建一个局域网络", "Use the same token to form a local network")),
         ("-n <name>", ("给设备一个名字,便于区分不同设备,默认使用系统版本", "Give the device a name to distinguish it, defaults to system version")),
         ("-d <id>", ("设备唯一标识符,不使用--ip参数时,服务端凭此参数分配虚拟ip,注意不能重复", "Device unique identifier, used by the server to allocate virtual IP when --ip parameter is not used, must be unique")),
-        ("-s <server>", ("注册和中继服务器地址,协议支持使用quic://、tcp://、ws://和wss://,默认为udp://", "Registration and relay server address, protocols support using quic://, tcp://, ws://, and wss://, default is udp://")),
+        ("-s <server>", ("注册和中继服务器地址,当前仅支持quic://", "Registration and relay server address, currently only quic:// is supported")),
         ("-e <stun-server>", ("stun服务器,用于探测NAT类型,可使用多个地址,如-e stun.miwifi.com -e turn.cloudflare.com", "STUN server for detecting NAT type, can specify multiple addresses, e.g., -e stun.miwifi.com -e turn.cloudflare.com")),
         ("-i <in-ip>", ("配置点对网(IP代理)时使用,-i 192.168.0.0/24,10.26.0.3表示允许接收网段192.168.0.0/24的数据并转发到10.26.0.3,可指定多个网段", "Used when configuring point-to-point network (IP proxy), -i 192.168.0.0/24,10.26.0.3 allows receiving data from subnet 192.168.0.0/24 and forwarding to 10.26.0.3, specify multiple subnets")),
         ("-o <out-ip>", ("配置点对网时使用,-o 192.168.0.0/24表示允许将数据转发到192.168.0.0/24,可指定多个网段", "Used when configuring point-to-point network, -o 192.168.0.0/24 allows forwarding data to 192.168.0.0/24, specify multiple subnets")),
