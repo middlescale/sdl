@@ -14,6 +14,8 @@ pub fn registration_request_packet(
     server_cipher: &Cipher,
     token: String,
     device_id: String,
+    device_pub_key: Vec<u8>,
+    device_pub_key_alg: String,
     name: String,
     ip: Option<Ipv4Addr>,
     is_fast: bool,
@@ -23,6 +25,8 @@ pub fn registration_request_packet(
     let mut request = RegistrationRequest::new();
     request.token = token;
     request.device_id = device_id;
+    request.device_pub_key = device_pub_key;
+    request.device_pub_key_alg = device_pub_key_alg;
     request.name = name;
     if let Some(ip) = ip {
         request.virtual_ip = ip.into();

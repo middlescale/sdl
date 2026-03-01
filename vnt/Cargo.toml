@@ -43,6 +43,7 @@ mio = { version = "=0.8.11", features = ["os-poll", "net", "os-ext"] }
 crossbeam-queue = "0.3.11"
 anyhow = "1.0.82"
 dns-parser = "0.8.0"
+ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 
 tokio = { version = "1.37.0", features = ["full"] }
 

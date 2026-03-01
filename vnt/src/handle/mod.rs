@@ -61,6 +61,8 @@ pub struct BaseConfigInfo {
     pub client_secret_hash: Option<[u8; 16]>,
     pub server_secret: bool,
     pub device_id: String,
+    pub device_pub_key: Vec<u8>,
+    pub device_pub_key_alg: String,
     pub server_addr: String,
     pub name_servers: Vec<String>,
     pub mtu: u32,
@@ -72,48 +74,6 @@ pub struct BaseConfigInfo {
     pub device_name: Option<String>,
     pub allow_wire_guard: bool,
     pub default_interface: LocalInterface,
-}
-
-impl BaseConfigInfo {
-    pub fn new(
-        name: String,
-        token: String,
-        ip: Option<Ipv4Addr>,
-        client_secret_hash: Option<[u8; 16]>,
-        server_secret: bool,
-        device_id: String,
-        server_addr: String,
-        name_servers: Vec<String>,
-        mtu: u32,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(target_os = "windows")]
-        tap: bool,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-        device_name: Option<String>,
-        allow_wire_guard: bool,
-        default_interface: LocalInterface,
-    ) -> Self {
-        Self {
-            name,
-            token,
-            ip,
-            client_secret_hash,
-            server_secret,
-            device_id,
-            server_addr,
-            name_servers,
-            mtu,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(target_os = "windows")]
-            tap,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            device_name,
-            allow_wire_guard,
-            default_interface,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

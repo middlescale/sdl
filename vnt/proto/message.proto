@@ -27,6 +27,8 @@ message RegistrationRequest {
     bool allow_ip_change = 7;
     bool client_secret = 8;
     bytes client_secret_hash = 9;
+    bytes device_pub_key = 10;
+    string device_pub_key_alg = 11;
 }
 
 message RegistrationResponse {
@@ -38,6 +40,34 @@ message RegistrationResponse {
     fixed32 public_ip = 6;
     uint32 public_port = 7;
     bytes public_ipv6 = 8;
+    GatewayAccessGrant gateway_access_grant = 9;
+}
+message GatewayAccessGrant {
+    repeated string gateway_addrs = 1;
+    string gateway_server_name = 2;
+    bytes gateway_ca_pem = 3;
+    string ticket = 4;
+    int64 ticket_expire_unix_ms = 5;
+    uint64 session_id = 6;
+    uint64 policy_rev = 7;
+}
+message GatewayConnectHello {
+    string device_id = 1;
+    fixed32 virtual_ip = 2;
+    uint64 session_id = 3;
+    string ticket = 4;
+    bytes nonce = 5;
+    int64 client_time_unix_ms = 6;
+    bytes device_pub_key = 7;
+    string device_pub_key_alg = 8;
+    bytes device_signature = 9;
+}
+message GatewayConnectAck {
+    bool ok = 1;
+    string reason = 2;
+    uint64 session_id = 3;
+    uint32 negotiated_mtu = 4;
+    uint32 keepalive_secs = 5;
 }
 message DeviceInfo {
     string name = 1;

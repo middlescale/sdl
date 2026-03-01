@@ -14,8 +14,8 @@ use parking_lot::Mutex;
 use protobuf::Message;
 
 use crate::channel::context::ChannelContext;
-use crate::channel::{Route, RouteKey};
 use crate::channel::punch::{NatInfo, NatType, PunchModel};
+use crate::channel::{Route, RouteKey};
 use crate::cipher::Cipher;
 #[cfg(feature = "server_encrypt")]
 use crate::cipher::RsaCipher;
@@ -344,7 +344,8 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         transport: service_packet::Protocol,
         payload: &[u8],
     ) -> anyhow::Result<()> {
-        let mut packet = NetPacket::new_encrypt(vec![0u8; 12 + payload.len() + ENCRYPTION_RESERVED])?;
+        let mut packet =
+            NetPacket::new_encrypt(vec![0u8; 12 + payload.len() + ENCRYPTION_RESERVED])?;
         packet.set_source(current_device.virtual_ip);
         packet.set_destination(current_device.virtual_gateway);
         packet.set_default_version();
@@ -553,9 +554,10 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.register(current_device, context, route_key)?;
             }
             service_packet::Protocol::PunchStart => {
-                let punch_start = PunchStart::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("PunchStart {:?}", e))
-                })?;
+                let punch_start =
+                    PunchStart::parse_from_bytes(net_packet.payload()).map_err(|e| {
+                        io::Error::new(io::ErrorKind::Other, format!("PunchStart {:?}", e))
+                    })?;
                 let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
                 let deadline_unix_ms = if punch_start.deadline_unix_ms > 0 {
                     punch_start.deadline_unix_ms
@@ -610,9 +612,9 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     accepted,
                     reason,
                 );
-                let bytes = ack
-                    .write_to_bytes()
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("PunchAck {:?}", e)))?;
+                let bytes = ack.write_to_bytes().map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, format!("PunchAck {:?}", e))
+                })?;
                 self.send_service_packet(
                     context,
                     current_device,
@@ -686,6 +688,8 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         context.set_default_route_key(route_key);
         let token = self.config_info.token.clone();
         let device_id = self.config_info.device_id.clone();
+        let device_pub_key = self.config_info.device_pub_key.clone();
+        let device_pub_key_alg = self.config_info.device_pub_key_alg.clone();
         let name = self.config_info.name.clone();
         let client_secret = self
             .config_info
@@ -700,6 +704,8 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             &self.server_cipher,
             token,
             device_id,
+            device_pub_key,
+            device_pub_key_alg,
             name,
             ip,
             false,
@@ -889,9 +895,7 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-    };
+    use super::{build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result};
     use crate::channel::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
     use std::net::{Ipv4Addr, Ipv6Addr};
@@ -932,12 +936,16 @@ mod tests {
 
     #[test]
     fn build_punch_result_sets_code_and_reason() {
-        let result = build_punch_result(12, 3, 4, 5, PunchResultCode::PunchResultTimeout, "timeout");
+        let result =
+            build_punch_result(12, 3, 4, 5, PunchResultCode::PunchResultTimeout, "timeout");
         assert_eq!(result.session_id, 12);
         assert_eq!(result.source, 3);
         assert_eq!(result.target, 4);
         assert_eq!(result.attempt, 5);
-        assert_eq!(result.code.enum_value_or_default(), PunchResultCode::PunchResultTimeout);
+        assert_eq!(
+            result.code.enum_value_or_default(),
+            PunchResultCode::PunchResultTimeout
+        );
         assert_eq!(result.reason, "timeout");
     }
 }

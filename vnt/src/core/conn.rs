@@ -28,7 +28,7 @@ use crate::nat::NatTest;
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::limit::TrafficMeterMultiAddress;
-use crate::util::{Scheduler, StopManager};
+use crate::util::{device_key_alg, load_or_create_device_public_key, Scheduler, StopManager};
 use crate::{nat, VntCallback};
 
 #[derive(Clone)]
@@ -140,25 +140,27 @@ impl VntInner {
         let default_interface = config.local_interface.clone();
 
         //基础信息
-        let config_info = BaseConfigInfo::new(
-            config.name.clone(),
-            config.token.clone(),
-            config.ip,
-            config.password_hash(),
-            config.server_encrypt,
-            config.device_id.clone(),
-            config.server_address_str.clone(),
-            config.name_servers.clone(),
-            config.mtu.unwrap_or(1420),
+        let config_info = BaseConfigInfo {
+            name: config.name.clone(),
+            token: config.token.clone(),
+            ip: config.ip,
+            client_secret_hash: config.password_hash(),
+            server_secret: config.server_encrypt,
+            device_id: config.device_id.clone(),
+            device_pub_key: load_or_create_device_public_key(&config.device_id)?,
+            device_pub_key_alg: device_key_alg().to_string(),
+            server_addr: config.server_address_str.clone(),
+            name_servers: config.name_servers.clone(),
+            mtu: config.mtu.unwrap_or(1420),
             #[cfg(feature = "integrated_tun")]
             #[cfg(target_os = "windows")]
-            config.tap,
+            tap: config.tap,
             #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-            config.device_name.clone(),
-            config.allow_wire_guard,
-            default_interface.clone(),
-        );
+            device_name: config.device_name.clone(),
+            allow_wire_guard: config.allow_wire_guard,
+            default_interface: default_interface.clone(),
+        };
         // 服务停止管理器
         let stop_manager = {
             let callback = callback.clone();

@@ -138,9 +138,6 @@ mod tests {
         assert!(!has_public_endpoints(&[], &[]));
         assert!(!has_public_endpoints(&[Ipv4Addr::new(1, 1, 1, 1)], &[]));
         assert!(!has_public_endpoints(&[], &[12345]));
-        assert!(has_public_endpoints(
-            &[Ipv4Addr::new(1, 1, 1, 1)],
-            &[12345]
-        ));
+        assert!(has_public_endpoints(&[Ipv4Addr::new(1, 1, 1, 1)], &[12345]));
     }
 }

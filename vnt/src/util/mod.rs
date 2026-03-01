@@ -8,6 +8,8 @@ pub use scheduler::Scheduler;
 
 mod dns_query;
 pub use dns_query::*;
+mod device_identity;
+pub use device_identity::*;
 
 #[cfg(feature = "upnp")]
 mod upnp;
