@@ -73,7 +73,6 @@ pub struct BaseConfigInfo {
     #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
-    pub allow_wire_guard: bool,
     pub default_interface: LocalInterface,
     pub auth_user_id: Option<String>,
     pub auth_group: Option<String>,

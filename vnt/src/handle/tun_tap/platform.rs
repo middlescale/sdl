@@ -27,7 +27,6 @@ pub(crate) fn start_simple(
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
-    allow_wire_guard: bool,
 ) -> anyhow::Result<()> {
     let event = Arc::new(InterruptEvent::new()?);
 
@@ -61,7 +60,6 @@ pub(crate) fn start_simple(
         client_cipher,
         device_map,
         compressor,
-        allow_wire_guard,
     ) {
         log::error!("{:?}", e);
     }
@@ -82,7 +80,6 @@ fn start_simple0(
     client_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
-    allow_wire_guard: bool,
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
@@ -112,7 +109,6 @@ fn start_simple0(
             &client_cipher,
             &device_map,
             &compressor,
-            allow_wire_guard,
         ) {
             Ok(_) => {}
             Err(e) => {
@@ -135,7 +131,6 @@ pub(crate) fn start_simple(
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
-    allow_wire_guard: bool,
 ) -> anyhow::Result<()> {
     let worker = {
         let device = device.clone();
@@ -165,7 +160,6 @@ pub(crate) fn start_simple(
         client_cipher,
         device_map,
         compressor,
-        allow_wire_guard,
     ) {
         log::error!("{:?}", e);
     }
@@ -186,7 +180,6 @@ fn start_simple0(
     client_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
-    allow_wire_guard: bool,
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
@@ -207,7 +200,6 @@ fn start_simple0(
             &client_cipher,
             &device_map,
             &compressor,
-            allow_wire_guard,
         ) {
             Ok(_) => {}
             Err(e) => {

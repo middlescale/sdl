@@ -143,7 +143,6 @@ impl VntInner {
             #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
-            allow_wire_guard: config.allow_wire_guard,
             default_interface: default_interface.clone(),
             auth_user_id: config.auth_user_id.clone(),
             auth_group: config.auth_group.clone(),
@@ -507,10 +506,7 @@ impl VntInner {
                 self.current_device.clone(),
                 self.compressor.clone(),
                 self.client_cipher.clone(),
-                Cipher::None,
                 self.external_route.clone(),
-                self.device_map.clone(),
-                self.config.allow_wire_guard,
             ))
         } else {
             None

@@ -41,6 +41,8 @@ message RegistrationResponse {
     uint32 public_port = 7;
     bytes public_ipv6 = 8;
     GatewayAccessGrant gateway_access_grant = 9;
+    uint32 error_code = 10;
+    string error_message = 11;
 }
 message GatewayAccessGrant {
     repeated string gateway_addrs = 1;

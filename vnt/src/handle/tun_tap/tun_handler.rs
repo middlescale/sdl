@@ -52,7 +52,6 @@ pub fn start(
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
-    allow_wire_guard: bool,
 ) -> io::Result<()> {
     thread::Builder::new()
         .name("tunHandlerS".into())
@@ -69,7 +68,6 @@ pub fn start(
                 device_map,
                 compressor,
                 device_stop,
-                allow_wire_guard,
             ) {
                 log::warn!("stop:{}", e);
             }
@@ -159,7 +157,6 @@ pub(crate) fn handle(
     client_cipher: &Cipher,
     device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
     compressor: &Compressor,
-    allow_wire_guard: bool,
 ) -> anyhow::Result<()> {
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
     let ipv4_packet = match IpV4Packet::new(&mut buf[12..data_len]) {
@@ -213,7 +210,6 @@ pub(crate) fn handle(
         net_packet.set_destination(Ipv4Addr::BROADCAST);
     }
     let is_broadcast = dest_ip.is_broadcast() || current_device.broadcast_ip == dest_ip;
-    let _ = allow_wire_guard;
 
     let mut net_packet = if compressor.compress(&net_packet, &mut out)? {
         out.set_default_version();

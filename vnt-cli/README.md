@@ -222,7 +222,6 @@ mapping:
   - tcp:0.0.0.0:80-10.26.0.10:81 # 映射tcp数据
   - tcp:0.0.0.0:82-localhost:83 # 映射tcp数据
 disable_stats: false # 为true表示关闭统计
-allow_wire_guard: false # 为true则表示允许接入wg
 ```
 
 或者需要哪个配置就加哪个，当然token是必须的
@@ -248,10 +247,6 @@ token: xxx #组网token
 ### --disable-stats
 
 关闭流量统计
-
-### --allow-wg
-
-允许接入WireGuard客户端，和wg混用时必须开启此参数
 
 ### --list
 

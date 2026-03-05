@@ -82,7 +82,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
     opts.optopt("", "compressor", "压缩算法", "<lz4>");
     opts.optopt("", "local-dev", "指定本地ipv4网卡名称", "<NAME>");
     opts.optflag("", "disable-stats", "关闭流量统计");
-    opts.optflag("", "allow-wg", "允许接入WireGuard");
     //"后台运行时,查看其他设备列表"
     opts.optflag("", "add", "后台运行时,添加地址");
     opts.optflag("", "list", "后台运行时,查看其他设备列表");
@@ -280,7 +279,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
         let local_dev: Option<String> = matches.opt_get("local-dev").unwrap();
 
         let disable_stats = matches.opt_present("disable-stats");
-        let allow_wire_guard = matches.opt_present("allow-wg");
         let compressor = if let Some(compressor) = matches.opt_str("compressor").as_ref() {
             Compressor::from_str(compressor)
                 .map_err(|e| anyhow!("{}", e))
@@ -320,7 +318,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             port_mapping_list,
             compressor,
             !disable_stats,
-            allow_wire_guard,
             local_dev,
             None,
             None,
@@ -371,7 +368,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--vnt-mapping <x>", ("vnt地址映射,例如 --vnt-mapping tcp:80-10.26.0.10:80 映射目标是vnt网络或其子网中的设备", "VNT address mapping, e.g., --vnt-mapping tcp:80-10.26.0.10:80 maps to a device in VNT network or its subnet")),
         ("--local-dev", ("本地出口网卡的名称", "name of local export network card")),
         ("--disable-stats", ("关闭流量统计", "Disable traffic statistics")),
-        ("--allow-wg", ("允许接入WireGuard客户端", "Allow access to WireGuard client")),
         ("--list", ("后台运行时,查看其他设备列表", "View list of other devices when running in background")),
         ("--all", ("后台运行时,查看其他设备完整信息", "View complete information of other devices when running in background")),
         ("--info", ("后台运行时,查看当前设备信息", "View information of current device when running in background")),
@@ -559,10 +555,6 @@ fn print_usage(program: &str, _opts: Options) {
     println!(
         "  --disable-stats     {}",
         get_description("--disable-stats", &language)
-    );
-    println!(
-        "  --allow-wg          {}",
-        get_description("--allow-wg", &language)
     );
     println!();
     #[cfg(feature = "command")]

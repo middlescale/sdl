@@ -113,7 +113,7 @@ impl TunDeviceHelper {
         }
     }
     /// 要保证先stop 再start
-    pub fn start(&self, device: Arc<SyncDevice>, allow_wire_guard: bool) -> io::Result<()> {
+    pub fn start(&self, device: Arc<SyncDevice>) -> io::Result<()> {
         self.device_adapter.insert(device.clone());
         let device_stop = DeviceStop::default();
         let s = self.device_stop.lock().replace(device_stop.clone());
@@ -131,7 +131,6 @@ impl TunDeviceHelper {
             inner.device_map,
             inner.compressor,
             device_stop,
-            allow_wire_guard,
         )
     }
 }

@@ -238,10 +238,10 @@ pub fn command_info(vnt: &Vnt) -> Info {
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
     let connect_status = format!("{:?}", vnt.connection_status());
-    let relay_server = if current_device.connect_server.port() == 0 {
+    let relay_server = if current_device.control_server.port() == 0 {
         config.server_address_str.clone()
     } else {
-        current_device.connect_server.to_string()
+        current_device.control_server.to_string()
     };
     let nat_type = format!("{:?}", nat_info.nat_type);
     let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();

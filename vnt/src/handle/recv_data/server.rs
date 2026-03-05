@@ -171,11 +171,7 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                             _ => {}
                         }
                     }
-                    ip_turn_packet::Protocol::WGIpv4 => {
-                        if self.config_info.allow_wire_guard {
-                            self.device.write(net_packet.payload())?;
-                        }
-                    }
+                    ip_turn_packet::Protocol::WGIpv4 => {}
                     ip_turn_packet::Protocol::Ipv4Broadcast => {}
                     ip_turn_packet::Protocol::Unknown(_) => {}
                 }
@@ -296,6 +292,18 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             format!("RegistrationResponse {:?}", e),
                         )
                     })?;
+                if response.error_code != 0 {
+                    let reason = if response.error_message.is_empty() {
+                        "registration rejected by control".to_string()
+                    } else {
+                        response.error_message.clone()
+                    };
+                    return Err(anyhow!(
+                        "RegistrationResponse error_code={}, reason={}",
+                        response.error_code,
+                        reason
+                    ));
+                }
                 let virtual_ip = Ipv4Addr::from(response.virtual_ip);
                 let virtual_netmask = Ipv4Addr::from(response.virtual_netmask);
                 let virtual_gateway = Ipv4Addr::from(response.virtual_gateway);
@@ -401,8 +409,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                     );
                                     log::info!("tun信息{:?}", tun_info);
                                     self.callback.create_tun(tun_info);
-                                    self.tun_device_helper
-                                        .start(device, self.config_info.allow_wire_guard)?;
+                                    self.tun_device_helper.start(device)?;
                                 }
                                 Err(e) => {
                                     log::error!("{:?}", e);
@@ -428,10 +435,9 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                 } else {
                                     match tun_rs::platform::Device::from_fd(device_fd as _) {
                                         Ok(device) => {
-                                            if let Err(e) = self.tun_device_helper.start(
-                                                Arc::new(device),
-                                                self.config_info.allow_wire_guard,
-                                            ) {
+                                            if let Err(e) =
+                                                self.tun_device_helper.start(Arc::new(device))
+                                            {
                                                 self.callback.error(ErrorInfo::new_msg(
                                                     ErrorType::FailedToCreateDevice,
                                                     format!("{:?}", e),
