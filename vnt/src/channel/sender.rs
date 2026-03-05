@@ -133,7 +133,7 @@ impl IpPacketSender {
         if dest_ip.is_broadcast() || dest_ip == device_info.broadcast_ip {
             //走服务端广播
             self.context
-                .send_default(&net_packet, device_info.connect_server)?;
+                .send_default(&net_packet, device_info.control_server)?;
             return Ok(());
         }
 
@@ -144,7 +144,7 @@ impl IpPacketSender {
         self.context.send_ipv4_by_id(
             &net_packet,
             &dest_ip,
-            device_info.connect_server,
+            device_info.control_server,
             device_info.status.online(),
         )?;
         Ok(())
@@ -167,7 +167,7 @@ pub fn send_to_wg_broadcast(
     copy_packet.set_gateway_flag(true);
     copy_packet.set_payload(net_packet.payload())?;
     server_cipher.encrypt_ipv4(&mut copy_packet)?;
-    sender.send_default(&copy_packet, current_device.connect_server)?;
+    sender.send_default(&copy_packet, current_device.control_server)?;
 
     Ok(())
 }
@@ -180,7 +180,7 @@ pub fn send_to_wg(
     net_packet.set_transport_protocol(ip_turn_packet::Protocol::WGIpv4.into());
     net_packet.set_gateway_flag(true);
     server_cipher.encrypt_ipv4(net_packet)?;
-    sender.send_default(&net_packet, current_device.connect_server)?;
+    sender.send_default(&net_packet, current_device.control_server)?;
 
     Ok(())
 }

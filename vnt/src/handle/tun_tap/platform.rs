@@ -24,7 +24,6 @@ pub(crate) fn start_simple(
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -60,7 +59,6 @@ pub(crate) fn start_simple(
         #[cfg(feature = "ip_proxy")]
         ip_proxy_map,
         client_cipher,
-        server_cipher,
         device_map,
         compressor,
         allow_wire_guard,
@@ -82,7 +80,6 @@ fn start_simple0(
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     allow_wire_guard: bool,
@@ -113,7 +110,6 @@ fn start_simple0(
             #[cfg(feature = "ip_proxy")]
             &ip_proxy_map,
             &client_cipher,
-            &server_cipher,
             &device_map,
             &compressor,
             allow_wire_guard,
@@ -136,7 +132,6 @@ pub(crate) fn start_simple(
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -168,7 +163,6 @@ pub(crate) fn start_simple(
         #[cfg(feature = "ip_proxy")]
         ip_proxy_map,
         client_cipher,
-        server_cipher,
         device_map,
         compressor,
         allow_wire_guard,
@@ -190,7 +184,6 @@ fn start_simple0(
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     allow_wire_guard: bool,
@@ -212,7 +205,6 @@ fn start_simple0(
             #[cfg(feature = "ip_proxy")]
             &ip_proxy_map,
             &client_cipher,
-            &server_cipher,
             &device_map,
             &compressor,
             allow_wire_guard,

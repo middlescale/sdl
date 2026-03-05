@@ -84,7 +84,7 @@ pub fn dns_query_all(
     default_interface: &LocalInterface,
 ) -> anyhow::Result<Vec<SocketAddr>> {
     let mut current_domain = domain.to_string(); // 引入可变变量存储当前域名
-    for prefix in ["quic://", "udp://", "tcp://", "ws://", "wss://"] {
+    for prefix in ["quic://", "udp://", "tcp://"] {
         if let Some(stripped) = current_domain.to_lowercase().strip_prefix(prefix) {
             current_domain = stripped.to_string();
             break;

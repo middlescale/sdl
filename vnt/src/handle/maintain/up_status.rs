@@ -121,7 +121,7 @@ fn send_up_status_packet(
     net_packet.set_source(device_info.virtual_ip);
     net_packet.set_destination(device_info.virtual_gateway);
     net_packet.set_payload(&buf)?;
-    context.send_default(&net_packet, device_info.connect_server)?;
+    context.send_default(&net_packet, device_info.control_server)?;
     Ok(())
 }
 

@@ -50,14 +50,13 @@ message GatewayAccessGrant {
     int64 ticket_expire_unix_ms = 5;
     uint64 session_id = 6;
     uint64 policy_rev = 7;
-    string wireguard_endpoint = 8;
-    string wireguard_public_key = 9;
+    reserved 8, 9;
     repeated string gateway_capabilities = 10;
 }
 message GatewayReportRequest {
     string gateway_id = 1;
     string endpoint = 2;
-    string wireguard_public_key = 3;
+    reserved 3;
     repeated string capabilities = 4;
     int64 report_unix_ms = 5;
 }

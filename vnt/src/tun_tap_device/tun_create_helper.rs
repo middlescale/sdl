@@ -65,7 +65,6 @@ struct TunDeviceHelperInner {
     #[cfg(feature = "ip_proxy")]
     ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
 }
@@ -78,7 +77,6 @@ impl TunDeviceHelper {
         ip_route: ExternalRoute,
         #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
         client_cipher: Cipher,
-        server_cipher: Cipher,
         device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
         compressor: Compressor,
         device_adapter: DeviceAdapter,
@@ -91,7 +89,6 @@ impl TunDeviceHelper {
             #[cfg(feature = "ip_proxy")]
             ip_proxy_map,
             client_cipher,
-            server_cipher,
             device_map,
             compressor,
         };
@@ -131,7 +128,6 @@ impl TunDeviceHelper {
             #[cfg(feature = "ip_proxy")]
             inner.ip_proxy_map,
             inner.client_cipher,
-            inner.server_cipher,
             inner.device_map,
             inner.compressor,
             device_stop,

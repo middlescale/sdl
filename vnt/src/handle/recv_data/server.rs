@@ -23,8 +23,8 @@ use crate::handle::recv_data::PacketHandler;
 use crate::handle::{registrar, BaseConfigInfo, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::NatTest;
 use crate::proto::message::{
-    DeviceAuthAck, DeviceList, HandshakeResponse, PunchAck, PunchResult, PunchResultCode,
-    PunchStart, RegistrationResponse,
+    DeviceAuthAck, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult,
+    PunchResultCode, PunchStart, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -103,12 +103,14 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !current_device.is_server_addr(route_key.addr) {
-            //拦截不是服务端的流量
+        if !current_device.is_server_addr(route_key.addr)
+            && !crate::handle::gateway_relay::is_gateway_addr(route_key.addr)
+        {
+            // 拦截既不是控制端也不是已授权网关的数据
             log::warn!(
-                "route_key={:?},不是来源于服务端地址{}",
+                "route_key={:?}, not from control server {} or gateway endpoint",
                 route_key,
-                current_device.connect_server
+                current_device.control_server
             );
         }
         context
@@ -251,7 +253,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         packet.set_protocol(Protocol::Service);
         packet.set_transport_protocol(transport.into());
         packet.set_payload(payload)?;
-        context.send_default(&packet, current_device.connect_server)?;
+        context.send_default(&packet, current_device.control_server)?;
         Ok(())
     }
 
@@ -305,16 +307,21 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     let grant = response.gateway_access_grant.as_ref().unwrap();
                     self.gateway_ticket_expire_unix_ms
                         .store(grant.ticket_expire_unix_ms);
+                    crate::handle::gateway_relay::set_gateway_grant(
+                        grant,
+                        virtual_ip,
+                        self.config_info.device_id.clone(),
+                    );
                     log::info!(
-                        "gateway grant: addrs={:?} wg_endpoint={} session_id={} expire={} caps={:?}",
+                        "gateway grant: addrs={:?} session_id={} expire={} caps={:?}",
                         grant.gateway_addrs,
-                        grant.wireguard_endpoint,
                         grant.session_id,
                         grant.ticket_expire_unix_ms,
                         grant.gateway_capabilities
                     );
                 } else {
                     self.gateway_ticket_expire_unix_ms.store(0);
+                    crate::handle::gateway_relay::clear_gateway_grant();
                 }
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);
@@ -577,6 +584,17 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     )?;
                 }
             }
+            service_packet::Protocol::GatewayConnectAck => {
+                let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload()).map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, format!("GatewayConnectAck {:?}", e))
+                })?;
+                crate::handle::gateway_relay::handle_connect_ack(
+                    route_key.addr,
+                    ack.session_id,
+                    ack.ok,
+                    &ack.reason,
+                );
+            }
             _ => {
                 log::warn!(
                     "service_packet::Protocol::Unknown = {:?}",
@@ -655,7 +673,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         )?;
         log::info!("发送注册请求，{:?}", self.config_info);
         //注册请求只发送到默认通道
-        context.send_default(&response, current_device.connect_server)?;
+        context.send_default(&response, current_device.control_server)?;
         Ok(())
     }
     fn send_device_auth(
@@ -758,7 +776,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     poll_device
                         .set_transport_protocol(service_packet::Protocol::PullDeviceList.into());
                     //发送到默认服务端即可
-                    context.send_default(&poll_device, current_device.connect_server)?;
+                    context.send_default(&poll_device, current_device.control_server)?;
                 }
             }
             ControlPacket::AddrResponse(addr_packet) => {

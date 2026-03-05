@@ -88,7 +88,7 @@ fn idle_gateway0<Call: VntCallback>(
         let cur = current_device.load();
         call.error(ErrorInfo::new_msg(
             ErrorType::Disconnect,
-            format!("connect:{},error:{:?}", cur.connect_server, e),
+            format!("connect:{},error:{:?}", cur.control_server, e),
         ));
     }
 }
@@ -135,9 +135,9 @@ fn check_gateway_channel<Call: VntCallback>(
                 domain_request0(current_device_info, config, context.default_interface());
         }
         //需要重连
-        call.connect(ConnectInfo::new(*count, current_device.connect_server));
+        call.connect(ConnectInfo::new(*count, current_device.control_server));
         log::info!("发送握手请求,{:?}", config);
-        if let Err(e) = handshake.send(context, config.server_secret, current_device.connect_server)
+        if let Err(e) = handshake.send(context, config.server_secret, current_device.control_server)
         {
             log::warn!("{:?}", e);
             let request_packet = handshake.handshake_request_packet(config.server_secret)?;
@@ -146,22 +146,24 @@ fn check_gateway_channel<Call: VntCallback>(
                 ConnectProtocol::TCP => {
                     connect_util.try_connect_tcp(
                         request_packet.into_buffer(),
-                        current_device.connect_server,
+                        current_device.control_server,
                     );
                 }
                 ConnectProtocol::QUIC => {
                     connect_util.try_connect_quic(
                         request_packet.into_buffer(),
                         config.server_addr.clone(),
-                        current_device.connect_server,
+                        current_device.control_server,
                     );
                 }
-                ConnectProtocol::WS | ConnectProtocol::WSS => {
-                    connect_util
-                        .try_connect_ws(request_packet.into_buffer(), config.server_addr.clone());
-                }
+                ConnectProtocol::WS | ConnectProtocol::WSS => {}
             }
         }
+    }
+    if let Err(e) =
+        crate::handle::gateway_relay::maintain_gateway_channel(context, connect_util, &current_device)
+    {
+        log::warn!("maintain gateway channel failed: {:?}", e);
     }
     Ok(())
 }
@@ -189,18 +191,18 @@ pub fn domain_request0(
 
             match address_choose(addrs) {
                 Ok(addr) => {
-                    if addr != current_dev.connect_server {
+                    if addr != current_dev.control_server {
                         let mut tmp = current_dev.clone();
-                        tmp.connect_server = addr;
+                        tmp.control_server = addr;
                         let rs = current_device.compare_exchange(current_dev, tmp);
                         log::info!(
                             "服务端地址变化,旧地址:{}，新地址:{},替换结果:{}",
-                            current_dev.connect_server,
+                            current_dev.control_server,
                             addr,
                             rs.is_ok()
                         );
                         if rs.is_ok() {
-                            current_dev.connect_server = addr;
+                            current_dev.control_server = addr;
                         }
                     }
                 }

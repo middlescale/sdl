@@ -72,7 +72,7 @@ fn heartbeat0(
     let mut is_send_gateway = false;
     match heartbeat_packet_server(device_map, src_ip, gateway_ip) {
         Ok(net_packet) => {
-            if let Err(e) = context.send_default(&net_packet, current_device.connect_server) {
+            if let Err(e) = context.send_default(&net_packet, current_device.control_server) {
                 log::warn!("heartbeat err={:?}", e)
             } else {
                 is_send_gateway = true
@@ -134,7 +134,7 @@ fn heartbeat0(
                     continue;
                 }
             };
-            if let Err(e) = context.send_default(&net_packet, current_device.connect_server) {
+            if let Err(e) = context.send_default(&net_packet, current_device.control_server) {
                 log::error!("heartbeat_packet send_default err={:?}", e);
             }
         }
@@ -179,7 +179,7 @@ fn try_refresh_gateway_grant(
             return;
         }
     };
-    match context.send_default(&packet, current_device.connect_server) {
+    match context.send_default(&packet, current_device.control_server) {
         Ok(_) => {
             gateway_ticket_expire_unix_ms.store(0);
             log::info!("gateway grant nearing expiration, requested registration refresh");

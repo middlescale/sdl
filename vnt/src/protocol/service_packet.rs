@@ -24,6 +24,8 @@ pub enum Protocol {
     DeviceAuthAck,
     GatewayReportRequest,
     GatewayReportAck,
+    GatewayConnectHello,
+    GatewayConnectAck,
     Unknown(u8),
 }
 
@@ -48,6 +50,8 @@ impl From<u8> for Protocol {
             16 => Self::DeviceAuthAck,
             17 => Self::GatewayReportRequest,
             18 => Self::GatewayReportAck,
+            19 => Self::GatewayConnectHello,
+            20 => Self::GatewayConnectAck,
             val => Self::Unknown(val),
         }
     }
@@ -74,6 +78,8 @@ impl Into<u8> for Protocol {
             Self::DeviceAuthAck => 16,
             Self::GatewayReportRequest => 17,
             Self::GatewayReportAck => 18,
+            Self::GatewayConnectHello => 19,
+            Self::GatewayConnectAck => 20,
             Self::Unknown(val) => val,
         }
     }

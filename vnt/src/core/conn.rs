@@ -229,7 +229,6 @@ impl VntInner {
                 #[cfg(feature = "ip_proxy")]
                 proxy_map.clone(),
                 client_cipher.clone(),
-                Cipher::None,
                 device_map.clone(),
                 config.compressor,
                 device.clone().into_device_adapter(),

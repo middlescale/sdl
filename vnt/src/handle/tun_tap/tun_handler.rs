@@ -11,7 +11,6 @@ use std::{io, thread};
 use tun_rs::SyncDevice;
 
 use crate::channel::context::ChannelContext;
-use crate::channel::sender::{send_to_wg, send_to_wg_broadcast};
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
 use crate::external_route::ExternalRoute;
@@ -50,7 +49,6 @@ pub fn start(
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
-    server_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -68,7 +66,6 @@ pub fn start(
                 #[cfg(feature = "ip_proxy")]
                 ip_proxy_map,
                 client_cipher,
-                server_cipher,
                 device_map,
                 compressor,
                 device_stop,
@@ -82,7 +79,6 @@ pub fn start(
 }
 
 fn broadcast(
-    server_cipher: &Cipher,
     sender: &ChannelContext,
     net_packet: &mut NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
@@ -125,7 +121,7 @@ fn broadcast(
     }
     if p2p_ips.is_empty() {
         //都没有p2p则直接由服务器转发
-        sender.send_default(&net_packet, current_device.connect_server)?;
+        crate::handle::gateway_relay::send_relay(sender, &net_packet)?;
         return Ok(());
     }
 
@@ -144,8 +140,7 @@ fn broadcast(
     let mut broadcast = BroadcastPacket::unchecked(server_packet.payload_mut());
     broadcast.set_address(&p2p_ips)?;
     broadcast.set_data(net_packet.buffer())?;
-    server_cipher.encrypt_ipv4(&mut server_packet)?;
-    sender.send_default(&server_packet, current_device.connect_server)?;
+    crate::handle::gateway_relay::send_relay(sender, &server_packet)?;
     Ok(())
 }
 
@@ -163,7 +158,6 @@ pub(crate) fn handle(
     ip_route: &ExternalRoute,
     #[cfg(feature = "ip_proxy")] proxy_map: &Option<IpProxyMap>,
     client_cipher: &Cipher,
-    server_cipher: &Cipher,
     device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
     compressor: &Compressor,
     allow_wire_guard: bool,
@@ -193,8 +187,7 @@ pub(crate) fn handle(
         // 发到网关的加密方式不一样，要单独处理
         if protocol == Protocol::Icmp {
             net_packet.set_gateway_flag(true);
-            server_cipher.encrypt_ipv4(&mut net_packet)?;
-            context.send_default(&net_packet, current_device.connect_server)?;
+            crate::handle::gateway_relay::send_relay(context, &net_packet)?;
         }
         return Ok(());
     }
@@ -226,32 +219,7 @@ pub(crate) fn handle(
         net_packet.set_destination(Ipv4Addr::BROADCAST);
     }
     let is_broadcast = dest_ip.is_broadcast() || current_device.broadcast_ip == dest_ip;
-    if allow_wire_guard {
-        if is_broadcast {
-            // wg客户端和vnt客户端分开广播
-            let exists_wg = device_map
-                .lock()
-                .1
-                .values()
-                .any(|v| v.status.is_online() && v.wireguard);
-            if exists_wg {
-                send_to_wg_broadcast(context, &net_packet, server_cipher, &current_device)?;
-            }
-        } else {
-            // 如果是wg客户端则发到vnts转发
-            let guard = device_map.lock();
-            if let Some(peer_info) = guard.1.get(&dest_ip) {
-                if peer_info.status.is_offline() {
-                    return Ok(());
-                }
-                if peer_info.wireguard {
-                    drop(guard);
-                    send_to_wg(context, &mut net_packet, server_cipher, &current_device)?;
-                    return Ok(());
-                }
-            }
-        }
-    }
+    let _ = allow_wire_guard;
 
     let mut net_packet = if compressor.compress(&net_packet, &mut out)? {
         out.set_default_version();
@@ -268,7 +236,6 @@ pub(crate) fn handle(
         // 广播 发送到直连目标
         client_cipher.encrypt_ipv4(&mut net_packet)?;
         broadcast(
-            server_cipher,
             context,
             &mut net_packet,
             &current_device,
@@ -281,7 +248,7 @@ pub(crate) fn handle(
     context.send_ipv4_by_id(
         &net_packet,
         &dest_ip,
-        current_device.connect_server,
+        current_device.control_server,
         current_device.status.online(),
     )?;
     Ok(())

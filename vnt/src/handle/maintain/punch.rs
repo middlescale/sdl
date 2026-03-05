@@ -293,7 +293,7 @@ fn punch0(
                 punch_count,
                 total_count,
             );
-            context.send_default(&packet, current_device.connect_server)?;
+            context.send_default(&packet, current_device.control_server)?;
             break;
         }
     }

@@ -162,7 +162,7 @@ fn recv_handle(
                         if let Err(e) = context.send_ipv4_by_id(
                             &net_packet,
                             &dest_ip,
-                            current_device.connect_server,
+                            current_device.control_server,
                             current_device.status.online(),
                         ) {
                             log::warn!("发送到目标失败:{}", e);

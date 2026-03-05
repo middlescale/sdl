@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub mod callback;
 mod extension;
+pub mod gateway_relay;
 pub mod handshaker;
 pub mod maintain;
 pub mod recv_data;
@@ -141,7 +142,7 @@ pub struct CurrentDeviceInfo {
     //直接广播地址
     pub broadcast_ip: Ipv4Addr,
     //链接的服务器地址
-    pub connect_server: SocketAddr,
+    pub control_server: SocketAddr,
     //连接状态
     pub status: ConnectStatus,
 }
@@ -151,7 +152,7 @@ impl CurrentDeviceInfo {
         virtual_ip: Ipv4Addr,
         virtual_netmask: Ipv4Addr,
         virtual_gateway: Ipv4Addr,
-        connect_server: SocketAddr,
+        control_server: SocketAddr,
     ) -> Self {
         let broadcast_ip = (!u32::from_be_bytes(virtual_netmask.octets()))
             | u32::from_be_bytes(virtual_gateway.octets());
@@ -165,18 +166,18 @@ impl CurrentDeviceInfo {
             virtual_gateway,
             virtual_network,
             broadcast_ip,
-            connect_server,
+            control_server,
             status: ConnectStatus::Connecting,
         }
     }
-    pub fn new0(connect_server: SocketAddr) -> Self {
+    pub fn new0(control_server: SocketAddr) -> Self {
         Self {
             virtual_ip: Ipv4Addr::UNSPECIFIED,
             virtual_gateway: Ipv4Addr::UNSPECIFIED,
             virtual_netmask: Ipv4Addr::UNSPECIFIED,
             virtual_network: Ipv4Addr::UNSPECIFIED,
             broadcast_ip: Ipv4Addr::UNSPECIFIED,
-            connect_server,
+            control_server,
             status: ConnectStatus::Connecting,
         }
     }
@@ -215,14 +216,14 @@ impl CurrentDeviceInfo {
         u32::from(ip) & u32::from(self.virtual_netmask) != u32::from(self.virtual_network)
     }
     pub fn is_server_addr(&self, addr: SocketAddr) -> bool {
-        if self.connect_server == addr {
+        if self.control_server == addr {
             return true;
         }
         let f = |ip: IpAddr| match ip {
             IpAddr::V4(v4) => Some(v4),
             IpAddr::V6(v6) => v6.to_ipv4(),
         };
-        addr.port() == self.connect_server.port() && f(addr.ip()) == f(self.connect_server.ip())
+        addr.port() == self.control_server.port() && f(addr.ip()) == f(self.control_server.ip())
     }
 }
 pub fn change_status(

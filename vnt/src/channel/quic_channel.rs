@@ -2,7 +2,7 @@ use anyhow::Context;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{ClientConfig, Endpoint};
 use rustls::RootCertStore;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -13,8 +13,6 @@ use crate::channel::handler::RecvChannelHandler;
 use crate::channel::sender::PacketSender;
 use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
 use crate::util::StopManager;
-
-const QUIC_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
 
 pub fn quic_connect_accept<H>(
     receiver: Receiver<(Vec<u8>, String, SocketAddr)>,
@@ -56,18 +54,16 @@ async fn connect_quic_handle<H>(
 ) where
     H: RecvChannelHandler,
 {
-    let mut index = 0;
     while let Some((data, server_name, addr)) = receiver.recv().await {
         let recv_handler = recv_handler.clone();
         let context = context.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                connect_quic(data, server_name, addr, recv_handler, context, index).await
+                connect_quic(data, server_name, addr, recv_handler, context).await
             {
                 log::warn!("quic链接终止:{:?}", e);
             }
         });
-        index += 1;
     }
 }
 
@@ -77,7 +73,6 @@ async fn connect_quic<H>(
     addr: SocketAddr,
     recv_handler: H,
     context: ChannelContext,
-    index: usize,
 ) -> anyhow::Result<()>
 where
     H: RecvChannelHandler,
@@ -117,7 +112,7 @@ where
     send.write_all(&data).await?;
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, index, QUIC_ADDR);
+    let route_key = RouteKey::new(ConnectProtocol::QUIC, 0, addr);
     context
         .packet_map
         .write()
@@ -148,12 +143,6 @@ fn parse_server_name(server_name: &str, addr: SocketAddr) -> String {
         val = v.to_string();
     }
     if let Some(v) = val.strip_prefix("tcp://") {
-        val = v.to_string();
-    }
-    if let Some(v) = val.strip_prefix("ws://") {
-        val = v.to_string();
-    }
-    if let Some(v) = val.strip_prefix("wss://") {
         val = v.to_string();
     }
     let host = if let Some(v) = val.strip_prefix('[') {
