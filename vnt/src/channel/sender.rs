@@ -164,7 +164,6 @@ pub fn send_to_wg_broadcast(
     copy_packet.set_initial_ttl(6);
     copy_packet.set_source(net_packet.source());
     copy_packet.set_destination(net_packet.destination());
-    copy_packet.set_gateway_flag(true);
     copy_packet.set_payload(net_packet.payload())?;
     server_cipher.encrypt_ipv4(&mut copy_packet)?;
     sender.send_default(&copy_packet, current_device.control_server)?;
@@ -178,7 +177,6 @@ pub fn send_to_wg(
     current_device: &CurrentDeviceInfo,
 ) -> anyhow::Result<()> {
     net_packet.set_transport_protocol(ip_turn_packet::Protocol::WGIpv4.into());
-    net_packet.set_gateway_flag(true);
     server_cipher.encrypt_ipv4(net_packet)?;
     sender.send_default(&net_packet, current_device.control_server)?;
 

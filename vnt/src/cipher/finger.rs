@@ -32,7 +32,7 @@ impl Finger {
         nonce_raw[4..8].copy_from_slice(&net_packet.destination().octets());
         nonce_raw[8] = net_packet.protocol().into();
         nonce_raw[9] = net_packet.transport_protocol();
-        nonce_raw[10] = net_packet.is_gateway() as u8;
+        nonce_raw[10] = 0;
         nonce_raw[11] = net_packet.source_ttl();
         let payload = net_packet.payload();
         let finger = self.calculate_finger(&nonce_raw, &payload[..payload_len - 12]);
@@ -57,7 +57,7 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
         tag[4..8].copy_from_slice(&self.buffer()[8..12]);
         tag[8] = self.protocol().into();
         tag[9] = self.transport_protocol();
-        tag[10] = self.is_gateway() as u8;
+        tag[10] = 0;
         tag[11] = self.source_ttl();
         tag
     }

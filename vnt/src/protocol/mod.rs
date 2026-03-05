@@ -29,6 +29,7 @@ pub mod service_packet;
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum Version {
     V2,
+    V3,
     Unknown(u8),
 }
 
@@ -37,6 +38,7 @@ impl From<u8> for Version {
         match value {
             // 版本从2开始，用于和stun协议的binging响应区分开
             2 => Version::V2,
+            3 => Version::V3,
             val => Version::Unknown(val),
         }
     }
@@ -46,6 +48,7 @@ impl Into<u8> for Version {
     fn into(self) -> u8 {
         match self {
             Version::V2 => 2,
+            Version::V3 => 3,
             Version::Unknown(val) => val,
         }
     }
@@ -159,10 +162,6 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn is_encrypt(&self) -> bool {
         self.buffer.as_ref()[0] & 0x80 == 0x80
     }
-    /// 网关通信的标识
-    pub fn is_gateway(&self) -> bool {
-        self.buffer.as_ref()[0] & 0x40 == 0x40
-    }
     /// 扩展协议
     pub fn is_extension(&self) -> bool {
         self.buffer.as_ref()[0] & 0x20 == 0x20
@@ -212,13 +211,6 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
             self.buffer.as_mut()[0] = self.buffer.as_ref()[0] & 0x7F
         };
     }
-    pub fn set_gateway_flag(&mut self, is_gateway: bool) {
-        if is_gateway {
-            self.buffer.as_mut()[0] = self.buffer.as_ref()[0] | 0x40
-        } else {
-            self.buffer.as_mut()[0] = self.buffer.as_ref()[0] & 0xBF
-        };
-    }
     pub fn set_extension_flag(&mut self, is_extension: bool) {
         if is_extension {
             self.buffer.as_mut()[0] = self.buffer.as_ref()[0] | 0x20
@@ -227,7 +219,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         };
     }
     pub fn set_default_version(&mut self) {
-        let v: u8 = Version::V2.into();
+        let v: u8 = Version::V3.into();
         self.buffer.as_mut()[0] = (self.buffer.as_ref()[0] & 0xF0) | (0x0F & v);
     }
     pub fn set_protocol(&mut self, protocol: Protocol) {
@@ -295,7 +287,6 @@ impl<B: AsRef<[u8]>> fmt::Debug for NetPacket<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NetPacket")
             .field("version", &self.version())
-            .field("gateway", &self.is_gateway())
             .field("encrypt", &self.is_encrypt())
             .field("protocol", &self.protocol())
             .field("transport_protocol", &self.transport_protocol())

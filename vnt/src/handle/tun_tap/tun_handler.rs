@@ -129,7 +129,6 @@ fn broadcast(
     //剩余的发送到服务端，需要告知哪些已发送过
     let mut server_packet = NetPacket::new_encrypt(buf)?;
     server_packet.set_default_version();
-    server_packet.set_gateway_flag(true);
     server_packet.set_initial_ttl(MAX_TTL);
     server_packet.set_source(net_packet.source());
     //使用对应的目的地址
@@ -172,7 +171,6 @@ pub(crate) fn handle(
     if src_ip == dest_ip {
         return icmp(&device_writer, ipv4_packet);
     }
-    let protocol = ipv4_packet.protocol();
     let src_ip = ipv4_packet.source_ip();
     let mut dest_ip = ipv4_packet.destination_ip();
     let mut net_packet = NetPacket::new0(data_len, buf)?;
@@ -184,11 +182,7 @@ pub(crate) fn handle(
     net_packet.set_source(src_ip);
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
-        // 发到网关的加密方式不一样，要单独处理
-        if protocol == Protocol::Icmp {
-            net_packet.set_gateway_flag(true);
-            crate::handle::gateway_relay::send_relay(context, &net_packet)?;
-        }
+        crate::handle::gateway_relay::send_relay(context, &net_packet)?;
         return Ok(());
     }
     if !dest_ip.is_multicast() && !dest_ip.is_broadcast() && current_device.broadcast_ip != dest_ip

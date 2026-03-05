@@ -155,9 +155,6 @@ impl AesEcbCipher {
             if src_net_packet.transport_protocol() != net_packet.transport_protocol() {
                 return Err(anyhow!("data err"));
             }
-            if src_net_packet.is_gateway() != net_packet.is_gateway() {
-                return Err(anyhow!("data err"));
-            }
             if src_net_packet.source_ttl() != net_packet.source_ttl() {
                 return Err(anyhow!("data err"));
             }

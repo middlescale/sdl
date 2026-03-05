@@ -80,7 +80,7 @@ impl RsaCipher {
         nonce_raw[4..8].copy_from_slice(&net_packet.destination().octets());
         nonce_raw[8] = net_packet.protocol().into();
         nonce_raw[9] = net_packet.transport_protocol();
-        nonce_raw[10] = net_packet.is_gateway() as u8;
+        nonce_raw[10] = 0;
         nonce_raw[11] = net_packet.source_ttl();
 
         let mut secret_body = RsaSecretBody::new(net_packet.payload_mut())?;
