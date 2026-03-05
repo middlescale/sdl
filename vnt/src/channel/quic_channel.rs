@@ -109,7 +109,7 @@ where
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
     let (mut send, mut recv) = conn.open_bi().await?;
-    send.write_all(&data).await?;
+    send.write_all(&frame_quic_packet(&data)).await?;
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
     let route_key = RouteKey::new(ConnectProtocol::QUIC, 0, addr);
@@ -119,7 +119,7 @@ where
         .insert(route_key, PacketSender::new(sender));
     tokio::spawn(async move {
         while let Some(data) = receiver.recv().await {
-            if let Err(e) = send.write_all(&data).await {
+            if let Err(e) = send.write_all(&frame_quic_packet(&data)).await {
                 log::warn!("quic发送失败 {:?}", e);
                 break;
             }
@@ -168,14 +168,38 @@ where
 {
     let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
+    let mut pending = Vec::with_capacity(BUFFER_SIZE * 2);
     loop {
         let len = recv.read(&mut buf).await?;
         let Some(len) = len else {
             return Ok(());
         };
-        if len < 12 {
-            continue;
+        pending.extend_from_slice(&buf[..len]);
+        loop {
+            if pending.len() < 4 {
+                break;
+            }
+            let frame_len =
+                u32::from_be_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
+            if frame_len == 0 || frame_len > BUFFER_SIZE * 16 {
+                return Err(anyhow::anyhow!("invalid quic frame length: {}", frame_len));
+            }
+            if pending.len() < 4 + frame_len {
+                break;
+            }
+            let mut packet = pending[4..4 + frame_len].to_vec();
+            pending.drain(..4 + frame_len);
+            if packet.len() < 12 {
+                continue;
+            }
+            recv_handler.handle(&mut packet, &mut extend, route_key, context);
         }
-        recv_handler.handle(&mut buf[..len], &mut extend, route_key, context);
     }
+}
+
+fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(4 + data.len());
+    framed.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    framed.extend_from_slice(data);
+    framed
 }

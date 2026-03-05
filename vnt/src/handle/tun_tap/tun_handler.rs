@@ -235,11 +235,10 @@ pub(crate) fn handle(
     }
 
     client_cipher.encrypt_ipv4(&mut net_packet)?;
-    context.send_ipv4_by_id(
-        &net_packet,
-        &dest_ip,
-        current_device.control_server,
-        current_device.status.online(),
-    )?;
+    if let Some(route) = context.route_table.route_one_p2p(&dest_ip) {
+        context.send_by_key(&net_packet, route.route_key())?;
+    } else {
+        crate::handle::gateway_relay::send_relay(context, &net_packet)?;
+    }
     Ok(())
 }

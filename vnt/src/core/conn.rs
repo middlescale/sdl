@@ -365,16 +365,7 @@ pub fn start<Call: VntCallback>(
         current_device.clone(),
         callback,
     );
-    // 定时客户端中继检测
-    if !context.use_channel_type().is_only_p2p() {
-        maintain::client_relay(
-            &scheduler,
-            context.clone(),
-            current_device.clone(),
-            device_map.clone(),
-            client_cipher.clone(),
-        );
-    }
+    // 默认禁用客户端中继探测（client-relay）
 
     if !context.use_channel_type().is_only_relay() {
         // 定时地址探测
