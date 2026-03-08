@@ -766,9 +766,16 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 if current_time < pong_packet.time() {
                     return Ok(());
                 }
-                let metric = net_packet.source_ttl() - net_packet.ttl() + 1;
+                let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
+                let from_control_or_gateway = current_device.is_server_addr(route_key.addr)
+                    || crate::handle::gateway_relay::is_gateway_addr(route_key.addr);
+                let learned_metric = if from_control_or_gateway {
+                    metric.max(2)
+                } else {
+                    metric
+                };
                 let rt = (current_time - pong_packet.time()) as i64;
-                let route = Route::from(route_key, metric, rt);
+                let route = Route::from(route_key, learned_metric, rt);
                 context.route_table.add_route(net_packet.source(), route);
                 let epoch = self.device_map.lock().0;
                 if pong_packet.epoch() != epoch {

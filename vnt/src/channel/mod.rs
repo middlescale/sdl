@@ -9,7 +9,6 @@ use crate::channel::handler::RecvChannelHandler;
 use crate::channel::quic_channel::quic_connect_accept;
 use crate::channel::sender::{AcceptSocketSender, ConnectUtil};
 use crate::channel::socket::{bind_udp, LocalInterface};
-use crate::channel::tcp_channel::tcp_listen;
 use crate::channel::udp_channel::udp_listen;
 #[cfg(feature = "ws")]
 use crate::channel::ws_channel::ws_connect_accept;
@@ -342,7 +341,7 @@ fn bind_udp_v4_and_v6(
 }
 
 pub(crate) fn init_channel<H>(
-    tcp_listener: std::net::TcpListener,
+    _tcp_listener: std::net::TcpListener,
     context: ChannelContext,
     stop_manager: StopManager,
     recv_handler: H,
@@ -362,14 +361,8 @@ where
     // udp监听，udp_socket_sender 用于NAT类型切换
     let udp_socket_sender =
         udp_listen(stop_manager.clone(), recv_handler.clone(), context.clone())?;
-    // 建立tcp监听，tcp_socket_sender 用于tcp 直连
-    tcp_listen(
-        tcp_listener,
-        tcp_connect_r,
-        recv_handler.clone(),
-        context.clone(),
-        stop_manager.clone(),
-    )?;
+    // vnt client no longer supports TCP channel connections.
+    drop(tcp_connect_r);
     #[cfg(feature = "ws")]
     ws_connect_accept(
         _ws_connect_r,

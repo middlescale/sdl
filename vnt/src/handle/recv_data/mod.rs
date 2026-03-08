@@ -136,7 +136,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         let net_packet = NetPacket::new(buf)?;
 
         let extend = NetPacket::unchecked(extend);
-        if net_packet.ttl() == 0 || net_packet.source_ttl() < net_packet.ttl() {
+        if net_packet.ttl() == 0 || net_packet.origin_ttl() < net_packet.ttl() {
             log::warn!("丢弃过时包:{:?} {}", net_packet.head(), route_key.addr);
             return Ok(());
         }

@@ -178,8 +178,11 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn ttl(&self) -> u8 {
         self.buffer.as_ref()[3] & MAX_TTL
     }
-    pub fn source_ttl(&self) -> u8 {
+    pub fn origin_ttl(&self) -> u8 {
         self.buffer.as_ref()[3] >> 4
+    }
+    pub fn source_ttl(&self) -> u8 {
+        self.origin_ttl()
     }
     pub fn source(&self) -> Ipv4Addr {
         let tmp: [u8; 4] = self.buffer.as_ref()[4..8].try_into().unwrap();
@@ -242,8 +245,11 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         self.set_ttl(ttl);
         ttl
     }
+    pub fn set_origin_ttl(&mut self, origin_ttl: u8) {
+        self.buffer.as_mut()[3] = (origin_ttl << 4) | (MAX_TTL & self.buffer.as_ref()[3]);
+    }
     pub fn set_source_ttl(&mut self, source_ttl: u8) {
-        self.buffer.as_mut()[3] = (source_ttl << 4) | (MAX_TTL & self.buffer.as_ref()[3]);
+        self.set_origin_ttl(source_ttl);
     }
     pub fn set_source(&mut self, source: Ipv4Addr) {
         self.buffer.as_mut()[4..8].copy_from_slice(&source.octets());
@@ -291,7 +297,7 @@ impl<B: AsRef<[u8]>> fmt::Debug for NetPacket<B> {
             .field("protocol", &self.protocol())
             .field("transport_protocol", &self.transport_protocol())
             .field("ttl", &self.ttl())
-            .field("source_ttl", &self.source_ttl())
+            .field("origin_ttl", &self.origin_ttl())
             .field("source", &self.source())
             .field("destination", &self.destination())
             .field("payload", &self.payload())

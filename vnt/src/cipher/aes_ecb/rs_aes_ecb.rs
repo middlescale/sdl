@@ -93,7 +93,7 @@ impl AesEcbCipher {
                 if src_net_packet.transport_protocol() != net_packet.transport_protocol() {
                     return Err(anyhow!("data err"));
                 }
-                if src_net_packet.source_ttl() != net_packet.source_ttl() {
+                if src_net_packet.origin_ttl() != net_packet.origin_ttl() {
                     return Err(anyhow!("data err"));
                 }
                 net_packet.set_data_len(buf.len())?;

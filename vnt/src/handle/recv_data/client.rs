@@ -211,7 +211,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         mut net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
-        let metric = net_packet.source_ttl() - net_packet.ttl() + 1;
+        let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
         let source = net_packet.source();
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PingPacket(_) => {

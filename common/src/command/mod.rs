@@ -178,25 +178,22 @@ pub fn command_list(vnt: &Vnt) -> Vec<DeviceItem> {
                 )
             };
         let (nat_traversal_type, rt) = if let Some(route) = vnt.route(&peer.virtual_ip) {
+            let next_hop = vnt.route_key(&route.route_key());
             let nat_traversal_type = if route.metric == 1 {
-                if route.protocol.is_base_tcp() {
-                    "tcp-p2p"
+                if route.protocol.is_udp() {
+                    "udp-p2p".to_string()
                 } else {
-                    "p2p"
+                    format!("{:?}-p2p", route.protocol)
+                }
+            } else if let Some(next_hop) = next_hop {
+                if info.is_gateway(&next_hop) {
+                    "server-relay".to_string()
+                } else {
+                    "client-relay".to_string()
                 }
             } else {
-                let next_hop = vnt.route_key(&route.route_key());
-                if let Some(next_hop) = next_hop {
-                    if info.is_gateway(&next_hop) {
-                        "server-relay"
-                    } else {
-                        "client-relay"
-                    }
-                } else {
-                    "server-relay"
-                }
-            }
-            .to_string();
+                "server-relay".to_string()
+            };
             let rt = if route.rt < 0 {
                 "".to_string()
             } else {

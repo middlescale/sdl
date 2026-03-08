@@ -144,10 +144,7 @@ fn check_gateway_channel<Call: VntCallback>(
             match connect_protocol {
                 ConnectProtocol::UDP => {}
                 ConnectProtocol::TCP => {
-                    connect_util.try_connect_tcp(
-                        request_packet.into_buffer(),
-                        current_device.control_server,
-                    );
+                    log::warn!("tcp channel is disabled");
                 }
                 ConnectProtocol::QUIC => {
                     connect_util.try_connect_quic(
