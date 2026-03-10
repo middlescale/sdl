@@ -7,7 +7,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use protobuf::Message;
 
 use crate::channel::context::ChannelContext;
-use crate::handle::{GATEWAY_IP, SELF_IP};
+use crate::handle::{CONTROL_VIP, SELF_IP};
 use crate::proto::message::HandshakeRequest;
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 
@@ -62,7 +62,7 @@ impl Handshake {
         let buf = vec![0u8; 12 + bytes.len()];
         let mut net_packet = NetPacket::new(buf)?;
         net_packet.set_default_version();
-        net_packet.set_destination(GATEWAY_IP);
+        net_packet.set_destination(CONTROL_VIP);
         net_packet.set_source(SELF_IP);
         net_packet.set_protocol(Protocol::Service);
         net_packet.set_transport_protocol(service_packet::Protocol::HandshakeRequest.into());

@@ -186,7 +186,7 @@ pub fn command_list(vnt: &Vnt) -> Vec<DeviceItem> {
                     format!("{:?}-p2p", route.protocol)
                 }
             } else if let Some(next_hop) = next_hop {
-                if info.is_gateway(&next_hop) {
+                if info.is_gateway_vip(&next_hop) {
                     "server-relay".to_string()
                 } else {
                     "client-relay".to_string()

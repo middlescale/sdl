@@ -5,13 +5,14 @@ use std::time::Duration;
 use crossbeam_utils::atomic::AtomicCell;
 
 use crate::channel::context::ChannelContext;
-use crate::channel::idle::{Idle, IdleType};
+use crate::channel::idle::Idle;
 use crate::channel::sender::ConnectUtil;
 use crate::channel::socket::LocalInterface;
 use crate::channel::ConnectProtocol;
 use crate::handle::callback::{ConnectInfo, ErrorType};
 use crate::handle::handshaker::Handshake;
-use crate::handle::{BaseConfigInfo, ConnectStatus, CurrentDeviceInfo};
+use crate::handle::maintain::route_maintenance;
+use crate::handle::{BaseConfigInfo, CurrentDeviceInfo};
 use crate::util::{address_choose, dns_query_all, Scheduler};
 use crate::{ErrorInfo, VntCallback};
 
@@ -99,21 +100,7 @@ fn idle_route0<Call: VntCallback>(
     current_device: &AtomicCell<CurrentDeviceInfo>,
     call: &Call,
 ) -> Duration {
-    let cur = current_device.load();
-    match idle.next_idle() {
-        IdleType::Timeout(ip, route) => {
-            log::info!("route Timeout {:?},{:?}", ip, route);
-            context.remove_route(&ip, route.route_key());
-            if cur.is_gateway(&ip) {
-                //网关路由过期，则需要改变状态
-                crate::handle::change_status(current_device, ConnectStatus::Connecting);
-                call.error(ErrorInfo::new(ErrorType::Disconnect));
-            }
-            Duration::from_millis(100)
-        }
-        IdleType::Sleep(duration) => duration,
-        IdleType::None => Duration::from_millis(3000),
-    }
+    route_maintenance::next_cleanup_delay(idle, context, current_device, call)
 }
 
 fn check_gateway_channel<Call: VntCallback>(

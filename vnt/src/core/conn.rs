@@ -431,7 +431,7 @@ impl VntInner {
         self.context.lock().as_ref()?.route_table.route_one(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
-        self.current_device.load().is_gateway(ip)
+        self.current_device.load().is_gateway_vip(ip)
     }
     pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
         self.context

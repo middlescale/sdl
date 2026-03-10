@@ -153,8 +153,8 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             if let Some(down_traffic_meter) = &context.down_traffic_meter {
                 down_traffic_meter.add_traffic(net_packet.source(), net_packet.data_len())
             }
-            // 发给自己的包：按协议和来源判定是否为控制面
-            if is_control_plane_packet(&net_packet, &current_device) {
+
+            if is_control_or_service_packet(&net_packet, &current_device) {
                 //服务端-客户端包
                 self.server
                     .handle(net_packet, extend, route_key, context, &current_device)
@@ -171,13 +171,16 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
     }
 }
 
-fn is_control_plane_packet<B: AsRef<[u8]>>(
+fn is_control_or_service_packet<B: AsRef<[u8]>>(
     net_packet: &NetPacket<B>,
     current_device: &CurrentDeviceInfo,
 ) -> bool {
     match net_packet.protocol() {
         crate::protocol::Protocol::Service | crate::protocol::Protocol::Error => true,
-        crate::protocol::Protocol::Control => current_device.is_gateway(&net_packet.source()),
+        crate::protocol::Protocol::Control => {
+            current_device.is_control_vip(&net_packet.source())
+                || current_device.is_gateway_vip(&net_packet.source())
+        }
         _ => false,
     }
 }

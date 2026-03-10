@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
-use rand::prelude::SliceRandom;
 
 use crate::channel::context::ChannelContext;
 use crate::cipher::Cipher;
+use crate::handle::maintain::route_maintenance;
 use crate::handle::registrar;
 use crate::handle::BaseConfigInfo;
+use crate::handle::CONTROL_VIP;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{control_packet, NetPacket, Protocol};
@@ -65,17 +66,15 @@ fn heartbeat0(
         config_info,
         gateway_ticket_expire_unix_ms,
     );
-    let gateway_ip = current_device.virtual_gateway;
+
     let src_ip = current_device.virtual_ip;
     let channel_num = context.channel_num();
-    // 可能服务器ip发生变化，导致发送失败
-    let mut is_send_gateway = false;
-    match heartbeat_packet_server(device_map, src_ip, gateway_ip) {
+
+    // 通过 default/control 路径维持控制面活性（control 与 gateway 独立部署）。
+    match heartbeat_packet_server(device_map, src_ip, CONTROL_VIP) {
         Ok(net_packet) => {
             if let Err(e) = context.send_default(&net_packet, current_device.control_server) {
                 log::warn!("heartbeat err={:?}", e)
-            } else {
-                is_send_gateway = true
             }
         }
         Err(e) => {
@@ -84,14 +83,10 @@ fn heartbeat0(
     }
 
     for (dest_ip, routes) in context.route_table.route_table() {
-        let net_packet = if current_device.is_gateway(&dest_ip) {
-            if is_send_gateway {
-                continue;
-            }
-            heartbeat_packet_server(device_map, src_ip, gateway_ip)
-        } else {
-            heartbeat_packet_client(client_cipher, src_ip, dest_ip)
-        };
+        if current_device.is_gateway_vip(&dest_ip) {
+            continue;
+        }
+        let net_packet = heartbeat_packet_client(client_cipher, src_ip, dest_ip);
         let net_packet = match net_packet {
             Ok(net_packet) => net_packet,
             Err(e) => {
@@ -114,19 +109,14 @@ fn heartbeat0(
             }
         }
     }
+
     let peer_list = { device_map.lock().1.clone() };
     for peer in peer_list.values() {
-        if !peer.status.is_online() || peer.wireguard {
-            continue;
-        }
-        if current_device.is_gateway(&peer.virtual_ip) {
-            continue;
-        }
-        if current_device.status.offline() {
+        if !route_maintenance::should_probe_peer(current_device, peer) {
             continue;
         }
         if context.route_table.route_one(&peer.virtual_ip).is_none() {
-            //路由为空，则向服务端地址发送
+            // 路由为空时尝试走 gateway relay。
             let net_packet = match heartbeat_packet_client(client_cipher, src_ip, peer.virtual_ip) {
                 Ok(net_packet) => net_packet,
                 Err(e) => {
@@ -134,8 +124,12 @@ fn heartbeat0(
                     continue;
                 }
             };
-            if let Err(e) = context.send_default(&net_packet, current_device.control_server) {
-                log::error!("heartbeat_packet send_default err={:?}", e);
+            if let Err(e) = crate::handle::gateway_relay::send_relay(context, &net_packet) {
+                log::debug!(
+                    "heartbeat_packet relay unavailable for {}: {:?}",
+                    peer.virtual_ip,
+                    e
+                );
             }
         }
     }
@@ -186,94 +180,6 @@ fn try_refresh_gateway_grant(
         }
         Err(e) => log::warn!("gateway grant refresh send failed: {:?}", e),
     }
-}
-
-/// 客户端中继路径探测,延迟启动
-pub fn client_relay(
-    scheduler: &Scheduler,
-    context: ChannelContext,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    client_cipher: Cipher,
-) {
-    let rs = scheduler.timeout(Duration::from_secs(30), move |s| {
-        client_relay_(s, context, current_device, device_map, client_cipher)
-    });
-    if !rs {
-        log::info!("定时任务停止");
-    }
-}
-
-/// 客户端中继路径探测,每30秒探测一次
-fn client_relay_(
-    scheduler: &Scheduler,
-    context: ChannelContext,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    client_cipher: Cipher,
-) {
-    if let Err(e) = client_relay0(
-        &context,
-        &current_device.load(),
-        &device_map,
-        &client_cipher,
-    ) {
-        log::error!("{:?}", e);
-    }
-    let rs = scheduler.timeout(Duration::from_secs(30), move |s| {
-        client_relay_(s, context, current_device, device_map, client_cipher)
-    });
-    if !rs {
-        log::info!("定时任务停止");
-    }
-}
-
-fn client_relay0(
-    context: &ChannelContext,
-    current_device: &CurrentDeviceInfo,
-    device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
-    client_cipher: &Cipher,
-) -> anyhow::Result<()> {
-    // 离线了不再探测
-    if current_device.status.offline() {
-        return Ok(());
-    }
-    let peer_list = { device_map.lock().1.clone() };
-    let mut routes = context.route_table.route_table_p2p();
-    for peer in peer_list.values() {
-        if peer.wireguard
-            || !peer.status.is_online()
-            || peer.virtual_ip == current_device.virtual_ip
-        {
-            continue;
-        }
-        if context
-            .route_table
-            .route_one_p2p(&peer.virtual_ip)
-            .is_some()
-            && !context.latency_first()
-        {
-            continue;
-        }
-        let client_packet =
-            heartbeat_packet_client(client_cipher, current_device.virtual_ip, peer.virtual_ip)?;
-
-        //随机发送到其他地址，看有没有客户端符合转发条件
-        routes.shuffle(&mut rand::thread_rng());
-
-        for (index, (ip, route)) in routes.iter().enumerate() {
-            if current_device.is_gateway(ip) {
-                continue;
-            }
-            if let Err(e) = context.send_by_key(&client_packet, route.route_key()) {
-                log::error!("{:?}", e);
-            }
-            if index >= 2 {
-                break;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// 构建心跳包

@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 
 use protobuf::Message;
 
-use crate::handle::{GATEWAY_IP, SELF_IP};
+use crate::handle::{CONTROL_VIP, SELF_IP};
 use crate::proto::message::{DeviceAuthRequest, RegistrationRequest};
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 
@@ -42,7 +42,7 @@ pub fn registration_request_packet(
         .map_err(|e| anyhow!("RegistrationRequest {:?}", e))?;
     let buf = vec![0u8; 12 + bytes.len()];
     let mut net_packet = NetPacket::new(buf)?;
-    net_packet.set_destination(GATEWAY_IP);
+    net_packet.set_destination(CONTROL_VIP);
     net_packet.set_source(SELF_IP);
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Service);
@@ -68,7 +68,7 @@ pub fn device_auth_request_packet(
         .map_err(|e| anyhow!("DeviceAuthRequest {:?}", e))?;
     let buf = vec![0u8; 12 + bytes.len()];
     let mut net_packet = NetPacket::new(buf)?;
-    net_packet.set_destination(GATEWAY_IP);
+    net_packet.set_destination(CONTROL_VIP);
     net_packet.set_source(SELF_IP);
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Service);

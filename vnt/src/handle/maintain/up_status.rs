@@ -1,5 +1,5 @@
 use crate::channel::context::ChannelContext;
-use crate::handle::CurrentDeviceInfo;
+use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
 use crate::nat::NatTest;
 use crate::proto::message::{ClientStatusInfo, PunchNatType, RouteItem};
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
@@ -119,7 +119,7 @@ fn send_up_status_packet(
     net_packet.set_transport_protocol_into(service_packet::Protocol::ClientStatusInfo);
     net_packet.set_initial_ttl(MAX_TTL);
     net_packet.set_source(device_info.virtual_ip);
-    net_packet.set_destination(device_info.virtual_gateway);
+    net_packet.set_destination(CONTROL_VIP);
     net_packet.set_payload(&buf)?;
     context.send_default(&net_packet, device_info.control_server)?;
     Ok(())

@@ -20,7 +20,9 @@ use crate::handle::handshaker::Handshake;
 use crate::handle::maintain::trigger_up_status_with_nat_ready;
 use crate::handle::maintain::PunchSender;
 use crate::handle::recv_data::PacketHandler;
-use crate::handle::{registrar, BaseConfigInfo, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::{
+    registrar, BaseConfigInfo, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo, CONTROL_VIP,
+};
 use crate::nat::NatTest;
 use crate::proto::message::{
     DeviceAuthAck, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult,
@@ -243,7 +245,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     ) -> anyhow::Result<()> {
         let mut packet = NetPacket::new(vec![0u8; 12 + payload.len()])?;
         packet.set_source(current_device.virtual_ip);
-        packet.set_destination(current_device.virtual_gateway);
+        packet.set_destination(CONTROL_VIP);
         packet.set_default_version();
         packet.set_initial_ttl(MAX_TTL);
         packet.set_protocol(Protocol::Service);
@@ -591,9 +593,10 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
             }
             service_packet::Protocol::GatewayConnectAck => {
-                let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("GatewayConnectAck {:?}", e))
-                })?;
+                let ack =
+                    GatewayConnectAck::parse_from_bytes(net_packet.payload()).map_err(|e| {
+                        io::Error::new(io::ErrorKind::Other, format!("GatewayConnectAck {:?}", e))
+                    })?;
                 crate::handle::gateway_relay::handle_connect_ack(
                     route_key.addr,
                     ack.session_id,
@@ -782,7 +785,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
                     let mut poll_device = NetPacket::new([0; 12])?;
                     poll_device.set_source(current_device.virtual_ip);
-                    poll_device.set_destination(current_device.virtual_gateway);
+                    poll_device.set_destination(CONTROL_VIP);
                     poll_device.set_default_version();
                     poll_device.set_initial_ttl(MAX_TTL);
                     poll_device.set_protocol(Protocol::Service);

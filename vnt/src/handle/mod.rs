@@ -13,7 +13,7 @@ pub mod registrar;
 pub mod tun_tap;
 
 const SELF_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 2);
-const GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
+const CONTROL_VIP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
 
 pub fn now_time() -> u64 {
     let now = std::time::SystemTime::now();
@@ -207,8 +207,12 @@ impl CurrentDeviceInfo {
         self.virtual_gateway
     }
     #[inline]
-    pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
-        &self.virtual_gateway == ip || ip == &GATEWAY_IP
+    pub fn is_gateway_vip(&self, ip: &Ipv4Addr) -> bool {
+        &self.virtual_gateway == ip
+    }
+    #[inline]
+    pub fn is_control_vip(&self, ip: &Ipv4Addr) -> bool {
+        ip == &CONTROL_VIP
     }
     #[inline]
     pub fn not_in_network(&self, ip: Ipv4Addr) -> bool {
