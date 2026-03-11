@@ -101,7 +101,7 @@ fn broadcast(
             overflow = true;
             break;
         }
-        if let Some(route) = sender.route_table.route_one_p2p(&peer_ip) {
+        if let Some(route) = sender.route_table.get_one_p2p_route(&peer_ip) {
             if sender.send_by_key(&net_packet, route.route_key()).is_ok() {
                 p2p_ips.push(peer_ip);
                 continue;
@@ -225,17 +225,12 @@ pub(crate) fn handle(
     if is_broadcast {
         // 广播 发送到直连目标
         client_cipher.encrypt_ipv4(&mut net_packet)?;
-        broadcast(
-            context,
-            &mut net_packet,
-            &current_device,
-            device_map,
-        )?;
+        broadcast(context, &mut net_packet, &current_device, device_map)?;
         return Ok(());
     }
 
     client_cipher.encrypt_ipv4(&mut net_packet)?;
-    if let Some(route) = context.route_table.route_one_p2p(&dest_ip) {
+    if let Some(route) = context.route_table.get_one_p2p_route(&dest_ip) {
         context.send_by_key(&net_packet, route.route_key())?;
     } else {
         crate::handle::gateway_relay::send_relay(context, &net_packet)?;

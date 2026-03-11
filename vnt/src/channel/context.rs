@@ -1,19 +1,19 @@
-use fnv::FnvHashMap;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::ops::Deref;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{io, thread};
 
 use crossbeam_utils::atomic::AtomicCell;
+use fnv::FnvHashMap;
 use parking_lot::RwLock;
 use rand::Rng;
 
 use crate::channel::punch::NatType;
+use crate::channel::route_table::RouteTable;
 use crate::channel::sender::{AcceptSocketSender, PacketSender};
 use crate::channel::socket::LocalInterface;
-use crate::channel::{ConnectProtocol, Route, RouteKey, UseChannelType, DEFAULT_RT};
+use crate::channel::{ConnectProtocol, RouteKey, UseChannelType};
 use crate::protocol::NetPacket;
 use crate::util::limit::TrafficMeterMultiAddress;
 
@@ -276,7 +276,7 @@ impl ContextInner {
     pub fn send_by_id<B: AsRef<[u8]>>(&self, buf: &NetPacket<B>, id: &Ipv4Addr) -> io::Result<()> {
         let mut c = 0;
         loop {
-            let route = self.route_table.get_route_by_id(c, id)?;
+            let route = self.route_table.get_route(c, id)?;
             return if let Err(e) = self.send_by_key(buf, route.route_key()) {
                 //降低发送速率
                 if e.kind() == io::ErrorKind::WouldBlock {
@@ -326,235 +326,5 @@ impl ContextInner {
     }
     pub fn remove_route(&self, ip: &Ipv4Addr, route_key: RouteKey) {
         self.route_table.remove_route(ip, route_key)
-    }
-}
-
-pub struct RouteTable {
-    pub(crate) route_table:
-        RwLock<FnvHashMap<Ipv4Addr, (AtomicUsize, Vec<(Route, AtomicCell<Instant>)>)>>,
-    latency_first: bool,
-    channel_num: usize,
-    use_channel_type: UseChannelType,
-}
-
-impl RouteTable {
-    fn new(use_channel_type: UseChannelType, latency_first: bool, channel_num: usize) -> Self {
-        Self {
-            route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
-            use_channel_type,
-            latency_first,
-            channel_num,
-        }
-    }
-}
-
-impl RouteTable {
-    fn get_route_by_id(&self, index: usize, id: &Ipv4Addr) -> io::Result<Route> {
-        if let Some((_count, v)) = self.route_table.read().get(id) {
-            if self.latency_first {
-                if let Some((route, _)) = v.first() {
-                    return Ok(*route);
-                }
-            } else {
-                let len = v.len();
-                if len != 0 {
-                    let route = &v[index % len].0;
-                    // 跳过默认rt的路由(一般是刚加入的)，这有助于提升稳定性
-                    if route.rt != DEFAULT_RT {
-                        return Ok(*route);
-                    }
-                    for (route, _) in v {
-                        if route.rt != DEFAULT_RT {
-                            return Ok(*route);
-                        }
-                    }
-                }
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::NotFound, "route not found"))
-    }
-    pub fn add_route_if_absent(&self, id: Ipv4Addr, route: Route) -> bool {
-        self.add_route_(id, route, true)
-    }
-    pub fn add_route(&self, id: Ipv4Addr, route: Route) -> bool {
-        self.add_route_(id, route, false)
-    }
-    fn add_route_(&self, id: Ipv4Addr, route: Route, only_if_absent: bool) -> bool {
-        // 限制通道类型
-        match self.use_channel_type {
-            UseChannelType::P2p => {
-                if !route.is_p2p() {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-        let key = route.route_key();
-        if only_if_absent {
-            if let Some((_, list)) = self.route_table.read().get(&id) {
-                for (x, _) in list {
-                    if x.route_key() == key {
-                        return true;
-                    }
-                }
-            }
-        }
-        let mut route_table = self.route_table.write();
-        let (_, list) = route_table
-            .entry(id)
-            .or_insert_with(|| (AtomicUsize::new(0), Vec::with_capacity(4)));
-        let mut exist = false;
-        for (x, time) in list.iter_mut() {
-            if x.metric < route.metric && !self.latency_first {
-                //非优先延迟的情况下 不能比当前的路径更长
-                return false;
-            }
-            if x.route_key() == key {
-                if only_if_absent {
-                    return true;
-                }
-                x.metric = route.metric;
-                x.rt = route.rt;
-                exist = true;
-                time.store(Instant::now());
-                break;
-            }
-        }
-        if exist {
-            list.sort_by_key(|(k, _)| k.rt);
-        } else {
-            if !self.latency_first {
-                if route.is_p2p() {
-                    //非优先延迟的情况下 添加了直连的则排除非直连的
-                    list.retain(|(k, _)| k.is_p2p());
-                }
-            };
-            list.sort_by_key(|(k, _)| k.rt);
-            list.push((route, AtomicCell::new(Instant::now())));
-        }
-        true
-    }
-    // 直接移除会导致通道不稳定，所以废弃这个方法，后面改用多余通道不发心跳包，从而让通道自动过期
-    // fn truncate_(&self, list: &mut Vec<(Route, AtomicCell<Instant>)>, len: usize) {
-    //     if list.len() <= len {
-    //         return;
-    //     }
-    //     if self.first_latency {
-    //         //找到第一个p2p通道
-    //         if let Some(index) =
-    //             list.iter()
-    //                 .enumerate()
-    //                 .find_map(|(index, (route, _))| if route.is_p2p() { Some(index) } else { None })
-    //         {
-    //             if index >= len {
-    //                 //保留第一个p2p通道
-    //                 let route = list.remove(index);
-    //                 list.truncate(len - 1);
-    //                 list.push(route);
-    //                 return;
-    //             }
-    //         }
-    //     }
-    //     list.truncate(len);
-    // }
-    pub fn route(&self, id: &Ipv4Addr) -> Option<Vec<Route>> {
-        if let Some((_, v)) = self.route_table.read().get(id) {
-            Some(v.iter().map(|(i, _)| *i).collect())
-        } else {
-            None
-        }
-    }
-    pub fn route_one(&self, id: &Ipv4Addr) -> Option<Route> {
-        if let Some((_, v)) = self.route_table.read().get(id) {
-            v.first().map(|(i, _)| *i)
-        } else {
-            None
-        }
-    }
-    pub fn route_one_p2p(&self, id: &Ipv4Addr) -> Option<Route> {
-        if let Some((_, v)) = self.route_table.read().get(id) {
-            for (i, _) in v {
-                if i.is_p2p() {
-                    return Some(*i);
-                }
-            }
-        }
-        None
-    }
-    pub fn route_to_id(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        let table = self.route_table.read();
-        for (k, (_, v)) in table.iter() {
-            for (route, _) in v {
-                if &route.route_key() == route_key && route.is_p2p() {
-                    return Some(*k);
-                }
-            }
-        }
-        None
-    }
-    pub fn no_need_punch(&self, id: &Ipv4Addr) -> bool {
-        if let Some((_, v)) = self.route_table.read().get(id) {
-            //p2p的通道数符合要求
-            return v.iter().filter(|(k, _)| k.is_p2p()).count() >= self.channel_num;
-        }
-        false
-    }
-    pub fn p2p_num(&self, id: &Ipv4Addr) -> usize {
-        if let Some((_, v)) = self.route_table.read().get(id) {
-            v.iter().filter(|(k, _)| k.is_p2p()).count()
-        } else {
-            0
-        }
-    }
-    /// 返回所有路由
-    pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        let table = self.route_table.read();
-        table
-            .iter()
-            .map(|(k, (_, v))| (k.clone(), v.iter().map(|(i, _)| *i).collect()))
-            .collect()
-    }
-    pub fn route_table_p2p(&self) -> Vec<(Ipv4Addr, Route)> {
-        let table = self.route_table.read();
-        let mut list = Vec::with_capacity(8);
-        for (ip, (_, routes)) in table.iter() {
-            for (route, _) in routes.iter() {
-                if route.is_p2p() {
-                    list.push((*ip, *route));
-                    break;
-                }
-            }
-        }
-        list
-    }
-    pub fn route_table_one(&self) -> Vec<(Ipv4Addr, Route)> {
-        let mut list = Vec::with_capacity(8);
-        let table = self.route_table.read();
-        for (k, (_, v)) in table.iter() {
-            if let Some((route, _)) = v.first() {
-                list.push((*k, *route));
-            }
-        }
-        list
-    }
-    pub fn remove_route(&self, id: &Ipv4Addr, route_key: RouteKey) {
-        let mut write_guard = self.route_table.write();
-        if let Some((_, routes)) = write_guard.get_mut(id) {
-            routes.retain(|(x, _)| x.route_key() != route_key);
-            if routes.is_empty() {
-                write_guard.remove(id);
-            }
-        }
-    }
-    /// 更新路由入栈包的时刻，长时间没有收到数据的路由将会被剔除
-    pub fn update_read_time(&self, id: &Ipv4Addr, route_key: &RouteKey) {
-        if let Some((_, routes)) = self.route_table.read().get(id) {
-            for (route, time) in routes {
-                if &route.route_key() == route_key {
-                    time.store(Instant::now());
-                    break;
-                }
-            }
-        }
     }
 }

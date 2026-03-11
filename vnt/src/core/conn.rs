@@ -428,7 +428,11 @@ impl VntInner {
         device_list.into_values().collect()
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
-        self.context.lock().as_ref()?.route_table.route_one(ip)
+        self.context
+            .lock()
+            .as_ref()?
+            .route_table
+            .get_first_route(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
         self.current_device.load().is_gateway_vip(ip)
@@ -438,7 +442,7 @@ impl VntInner {
             .lock()
             .as_ref()?
             .route_table
-            .route_to_id(route_key)
+            .get_one_p2p_ip(route_key)
     }
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         if let Some(context) = self.context.lock().as_ref() {

@@ -29,7 +29,7 @@ impl Idle {
         if read_guard.is_empty() {
             return IdleType::None;
         }
-        for (ip, (_, routes)) in read_guard.iter() {
+        for (ip, routes) in read_guard.iter() {
             for (route, time) in routes {
                 let last_read = time.load().elapsed();
                 if last_read >= self.read_idle {

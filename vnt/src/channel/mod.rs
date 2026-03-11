@@ -22,6 +22,7 @@ pub mod notify;
 pub mod punch;
 #[cfg(feature = "quic")]
 pub mod quic_channel;
+pub mod route_table;
 pub mod sender;
 pub mod socket;
 pub mod tcp_channel;

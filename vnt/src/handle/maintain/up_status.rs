@@ -87,7 +87,7 @@ fn send_up_status_packet(
     if device_info.status.offline() {
         return Ok(());
     }
-    let routes = context.route_table.route_table_p2p();
+    let routes = context.route_table.route_table_one_p2p();
     let mut message = ClientStatusInfo::new();
     message.source = device_info.virtual_ip.into();
     for (ip, _) in routes {

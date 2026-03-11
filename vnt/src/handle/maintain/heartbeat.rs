@@ -115,7 +115,11 @@ fn heartbeat0(
         if !route_maintenance::should_probe_peer(current_device, peer) {
             continue;
         }
-        if context.route_table.route_one(&peer.virtual_ip).is_none() {
+        if context
+            .route_table
+            .get_first_route(&peer.virtual_ip)
+            .is_none()
+        {
             // 路由为空时尝试走 gateway relay。
             let net_packet = match heartbeat_packet_client(client_cipher, src_ip, peer.virtual_ip) {
                 Ok(net_packet) => net_packet,
