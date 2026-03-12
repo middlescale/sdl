@@ -14,6 +14,7 @@ use crate::channel::route_table::RouteTable;
 use crate::channel::sender::{AcceptSocketSender, PacketSender};
 use crate::channel::socket::LocalInterface;
 use crate::channel::{ConnectProtocol, RouteKey, UseChannelType};
+use crate::core::Config;
 use crate::protocol::NetPacket;
 use crate::util::limit::TrafficMeterMultiAddress;
 
@@ -26,19 +27,14 @@ pub struct ChannelContext {
 impl ChannelContext {
     pub fn new(
         main_udp_socket: Vec<UdpSocket>,
-        v4_len: usize,
-        use_channel_type: UseChannelType,
-        latency_first: bool,
-        protocol: ConnectProtocol,
-        packet_loss_rate: Option<f64>,
-        packet_delay: u32,
+        channel_num: usize,
+        config: &Config,
         up_traffic_meter: Option<TrafficMeterMultiAddress>,
         down_traffic_meter: Option<TrafficMeterMultiAddress>,
-        default_interface: LocalInterface,
     ) -> Self {
-        let channel_num = v4_len;
         assert_ne!(channel_num, 0, "not channel");
-        let packet_loss_rate = packet_loss_rate
+        let packet_loss_rate = config
+            .packet_loss_rate
             .map(|v| {
                 let v = (v * PACKET_LOSS_RATE_DENOMINATOR as f64) as u32;
                 if v > PACKET_LOSS_RATE_DENOMINATOR {
@@ -50,16 +46,20 @@ impl ChannelContext {
             .unwrap_or(0);
         let inner = ContextInner {
             main_udp_socket,
-            v4_len,
+            channel_num,
             sub_udp_socket: RwLock::new(Vec::new()),
             packet_map: RwLock::new(FnvHashMap::default()),
-            route_table: RouteTable::new(use_channel_type, latency_first, channel_num),
-            protocol,
+            route_table: RouteTable::new(
+                config.use_channel_type,
+                config.latency_first,
+                channel_num,
+            ),
+            protocol: config.protocol,
             packet_loss_rate,
-            packet_delay,
+            packet_delay: config.packet_delay,
             up_traffic_meter,
             down_traffic_meter,
-            default_interface,
+            default_interface: config.local_interface.clone(),
             default_route_key: AtomicCell::default(),
         };
         Self {
@@ -83,7 +83,7 @@ const PACKET_LOSS_RATE_DENOMINATOR: u32 = 100_0000;
 pub struct ContextInner {
     // 核心udp socket
     pub(crate) main_udp_socket: Vec<UdpSocket>,
-    v4_len: usize,
+    channel_num: usize,
     // 对称网络增加的udp socket
     sub_udp_socket: RwLock<Vec<UdpSocket>>,
     // tcp数据发送器
@@ -166,7 +166,7 @@ impl ContextInner {
     }
     #[inline]
     pub fn channel_num(&self) -> usize {
-        self.v4_len
+        self.channel_num
     }
     #[inline]
     pub fn main_len(&self) -> usize {
@@ -175,7 +175,7 @@ impl ContextInner {
     /// 获取核心udp监听的端口，用于其他客户端连接
     pub fn main_local_udp_port(&self) -> io::Result<Vec<u16>> {
         let mut ports = Vec::new();
-        for udp in self.main_udp_socket[..self.v4_len].iter() {
+        for udp in self.main_udp_socket[..self.channel_num].iter() {
             ports.push(udp.local_addr()?.port())
         }
         Ok(ports)
@@ -208,7 +208,7 @@ impl ContextInner {
             if addr.is_ipv4() {
                 self.send_main_udp(0, buf.buffer(), addr)?
             } else {
-                self.send_main_udp(self.v4_len, buf.buffer(), addr)?
+                self.send_main_udp(self.channel_num, buf.buffer(), addr)?
             }
         } else {
             if let Some(key) = self.default_route_key.load() {

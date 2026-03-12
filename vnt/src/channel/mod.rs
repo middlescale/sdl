@@ -12,6 +12,7 @@ use crate::channel::socket::{bind_udp, LocalInterface};
 use crate::channel::udp_channel::udp_listen;
 #[cfg(feature = "ws")]
 use crate::channel::ws_channel::ws_connect_accept;
+use crate::core::Config;
 use crate::util::limit::TrafficMeterMultiAddress;
 use crate::util::StopManager;
 
@@ -206,17 +207,22 @@ impl RouteKey {
 }
 
 pub(crate) fn init_context(
-    ports: Vec<u16>,
-    use_channel_type: UseChannelType,
-    latency_first: bool,
-    protocol: ConnectProtocol,
-    packet_loss_rate: Option<f64>,
-    packet_delay: u32,
-    default_interface: LocalInterface,
+    config: &Config,
     up_traffic_meter: Option<TrafficMeterMultiAddress>,
     down_traffic_meter: Option<TrafficMeterMultiAddress>,
 ) -> anyhow::Result<(ChannelContext, std::net::TcpListener)> {
+    let mut ports = config.ports.as_ref().map_or(vec![0, 0], |v| {
+        if v.is_empty() {
+            vec![0, 0]
+        } else {
+            v.clone()
+        }
+    });
+    if config.use_channel_type.is_only_relay() {
+        ports.truncate(1);
+    }
     assert!(!ports.is_empty(), "not channel");
+    let default_interface = config.local_interface.clone();
     let mut main_udp_socket_v4 = Vec::with_capacity(ports.len());
     let mut main_udp_socket_v6 = Vec::with_capacity(ports.len());
     //检查系统是否支持ipv6
@@ -241,20 +247,15 @@ pub(crate) fn init_context(
     }
     let mut main_udp_socket =
         Vec::with_capacity(main_udp_socket_v4.len() + main_udp_socket_v6.len());
-    let v4_len = main_udp_socket_v4.len();
+    let v4_ports_count = main_udp_socket_v4.len();
     main_udp_socket.append(&mut main_udp_socket_v4);
     main_udp_socket.append(&mut main_udp_socket_v6);
     let context = ChannelContext::new(
         main_udp_socket,
-        v4_len,
-        use_channel_type,
-        latency_first,
-        protocol,
-        packet_loss_rate,
-        packet_delay,
+        v4_ports_count,
+        config,
         up_traffic_meter,
         down_traffic_meter,
-        default_interface,
     );
 
     let port = context.main_local_udp_port()?[0];
