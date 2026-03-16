@@ -1,40 +1,14 @@
-use anyhow::Context;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::str::FromStr;
-use tokio::sync::mpsc::channel;
-
-use crate::channel::context::ChannelContext;
-use crate::channel::handler::RecvChannelHandler;
-#[cfg(feature = "quic")]
-use crate::channel::quic_channel::quic_connect_accept;
-use crate::channel::sender::{AcceptSocketSender, ConnectUtil};
-use crate::channel::socket::{bind_udp, LocalInterface};
-use crate::channel::udp_channel::udp_listen;
-#[cfg(feature = "ws")]
-use crate::channel::ws_channel::ws_connect_accept;
-use crate::core::Config;
-use crate::util::limit::TrafficMeterMultiAddress;
-use crate::util::StopManager;
 
 pub mod context;
 pub mod handler;
-pub mod idle;
 pub mod notify;
 pub mod punch;
-#[cfg(feature = "quic")]
-pub mod quic_channel;
-pub mod route_table;
+pub mod punch_workers;
 pub mod sender;
-pub mod socket;
-pub mod tcp_channel;
-pub mod udp_channel;
-#[cfg(feature = "ws")]
-pub mod ws_channel;
 
 pub const BUFFER_SIZE: usize = 1024 * 64;
-// 这里留个坑，tcp是支持_TCP_MAX_PACKET_SIZE长度的，
-// 但是缓存只用BUFFER_SIZE，会导致多余的数据接收不了
-const TCP_MAX_PACKET_SIZE: usize = (1 << 24) - 1;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum UseChannelType {
@@ -127,7 +101,7 @@ pub struct RouteSortKey {
     pub rt: i64,
 }
 
-const DEFAULT_RT: i64 = 9999;
+pub(crate) const DEFAULT_RT: i64 = 9999;
 
 impl Route {
     pub fn new(
@@ -204,176 +178,4 @@ impl RouteKey {
     pub fn index(&self) -> usize {
         self.index
     }
-}
-
-pub(crate) fn init_context(
-    config: &Config,
-    up_traffic_meter: Option<TrafficMeterMultiAddress>,
-    down_traffic_meter: Option<TrafficMeterMultiAddress>,
-) -> anyhow::Result<(ChannelContext, std::net::TcpListener)> {
-    let mut ports = config.ports.as_ref().map_or(vec![0, 0], |v| {
-        if v.is_empty() {
-            vec![0, 0]
-        } else {
-            v.clone()
-        }
-    });
-    if config.use_channel_type.is_only_relay() {
-        ports.truncate(1);
-    }
-    assert!(!ports.is_empty(), "not channel");
-    let default_interface = config.local_interface.clone();
-    let mut main_udp_socket_v4 = Vec::with_capacity(ports.len());
-    let mut main_udp_socket_v6 = Vec::with_capacity(ports.len());
-    //检查系统是否支持ipv6
-    let use_ipv6 = match socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None) {
-        Ok(_) => true,
-        Err(e) => {
-            log::warn!("{:?}", e);
-            false
-        }
-    };
-    for port in &ports {
-        let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-        if use_ipv6 {
-            let (main_channel_v4, main_channel_v6) = bind_udp_v4_and_v6(*port, &default_interface)?;
-            main_udp_socket_v4.push(main_channel_v4);
-            main_udp_socket_v6.push(main_channel_v6);
-        } else {
-            let socket = bind_udp(addr_v4, &default_interface)?;
-            let main_channel_v4: UdpSocket = socket.into();
-            main_udp_socket_v4.push(main_channel_v4);
-        }
-    }
-    let mut main_udp_socket =
-        Vec::with_capacity(main_udp_socket_v4.len() + main_udp_socket_v6.len());
-    let v4_ports_count = main_udp_socket_v4.len();
-    main_udp_socket.append(&mut main_udp_socket_v4);
-    main_udp_socket.append(&mut main_udp_socket_v6);
-    let context = ChannelContext::new(
-        main_udp_socket,
-        v4_ports_count,
-        config,
-        up_traffic_meter,
-        down_traffic_meter,
-    );
-
-    let port = context.main_local_udp_port()?[0];
-    //监听v6+v4双栈，tcp通道使用异步io
-    let (socket, address) = if use_ipv6 {
-        let address: SocketAddr = format!("[::]:{}", port).parse().unwrap();
-        let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
-        socket
-            .set_only_v6(false)
-            .with_context(|| format!("set_only_v6 failed: {}", &address))?;
-        (socket, address)
-    } else {
-        let address: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
-        (socket, address)
-    };
-    socket
-        .set_reuse_address(true)
-        .context("set_reuse_address")?;
-    #[cfg(unix)]
-    if let Err(e) = socket.set_reuse_port(true) {
-        log::warn!("set_reuse_port {:?}", e)
-    }
-    if let Err(e) = socket.bind(&address.into()) {
-        if ports[0] == 0 {
-            //端口可能冲突，则使用任意端口
-            log::warn!("监听tcp端口失败 {:?},重试一次", address);
-            let address: SocketAddr = if use_ipv6 {
-                format!("[::]:{}", 0).parse().unwrap()
-            } else {
-                format!("0.0.0.0:{}", port).parse().unwrap()
-            };
-            socket
-                .bind(&address.into())
-                .with_context(|| format!("bind failed: {}", &address))?;
-        } else {
-            //手动指定的ip,直接报错
-            Err(anyhow::anyhow!("{:?},bind failed: {}", e, address))?;
-        }
-    }
-    socket.listen(128)?;
-    socket.set_nonblocking(true)?;
-    socket.set_nodelay(true)?;
-    Ok((context, socket.into()))
-}
-fn bind_udp_v4_and_v6(
-    port: u16,
-    default_interface: &LocalInterface,
-) -> anyhow::Result<(UdpSocket, UdpSocket)> {
-    let mut count = 0;
-    loop {
-        let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-        let socket = bind_udp(addr_v4, default_interface)?;
-        if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
-            log::warn!("set_recv_buffer_size {:?}", e);
-        }
-        let main_channel_v4: UdpSocket = socket.into();
-        let addr = main_channel_v4.local_addr()?;
-        let addr_v6: SocketAddr = format!("[::]:{}", addr.port()).parse().unwrap();
-        let socket = if port == 0 {
-            match bind_udp(addr_v6, default_interface) {
-                Ok(socket) => socket,
-                Err(e) => {
-                    if count > 10 {
-                        return Err(e);
-                    }
-                    if let Some(e) = e.downcast_ref::<std::io::Error>() {
-                        if e.kind() == std::io::ErrorKind::AddrInUse {
-                            count += 1;
-                            continue;
-                        }
-                    }
-                    Err(e)?
-                }
-            }
-        } else {
-            bind_udp(addr_v6, default_interface)?
-        };
-        if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
-            log::warn!("set_recv_buffer_size {:?}", e);
-        }
-        let main_channel_v6: UdpSocket = socket.into();
-        return Ok((main_channel_v4, main_channel_v6));
-    }
-}
-
-pub(crate) fn init_channel<H>(
-    _tcp_listener: std::net::TcpListener,
-    context: ChannelContext,
-    stop_manager: StopManager,
-    recv_handler: H,
-) -> anyhow::Result<(
-    AcceptSocketSender<Option<Vec<mio::net::UdpSocket>>>,
-    ConnectUtil,
-)>
-where
-    H: RecvChannelHandler,
-{
-    let (tcp_connect_s, tcp_connect_r) = channel(16);
-    let (ws_connect_s, _ws_connect_r) = channel(16);
-    let (quic_connect_s, quic_connect_r) = channel(16);
-    #[cfg(not(feature = "quic"))]
-    let _ = &quic_connect_r;
-    let connect_util = ConnectUtil::new(tcp_connect_s, ws_connect_s, quic_connect_s);
-    // udp监听，udp_socket_sender 用于NAT类型切换
-    let udp_socket_sender =
-        udp_listen(stop_manager.clone(), recv_handler.clone(), context.clone())?;
-    // vnt client no longer supports TCP channel connections.
-    drop(tcp_connect_r);
-    #[cfg(feature = "ws")]
-    ws_connect_accept(
-        _ws_connect_r,
-        recv_handler.clone(),
-        context.clone(),
-        stop_manager.clone(),
-    )?;
-    #[cfg(feature = "quic")]
-    quic_connect_accept(quic_connect_r, recv_handler, context.clone(), stop_manager)?;
-
-    Ok((udp_socket_sender, connect_util))
 }

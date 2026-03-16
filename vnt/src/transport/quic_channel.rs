@@ -12,6 +12,9 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
+use crate::channel::context::ChannelContext;
+use crate::channel::handler::RecvChannelHandler;
+use crate::channel::sender::PacketSender;
 use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
 use crate::protocol::NetPacket;
 use crate::util::StopManager;
@@ -123,6 +126,39 @@ impl QuicChannel {
     }
 }
 
+pub fn quic_connect_accept<H>(
+    receiver: Receiver<(Vec<u8>, String, SocketAddr)>,
+    recv_handler: H,
+    context: ChannelContext,
+    stop_manager: StopManager,
+) -> anyhow::Result<()>
+where
+    H: RecvChannelHandler,
+{
+    let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
+    let worker = stop_manager.add_listener("quicChannel".into(), move || {
+        let _ = stop_sender.send(());
+    })?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .context("quic tokio runtime build failed")?;
+    thread::Builder::new()
+        .name("quicChannel".into())
+        .spawn(move || {
+            runtime
+                .spawn(async move { connect_quic_handle(receiver, recv_handler, context).await });
+            runtime.block_on(async {
+                let _ = stop_receiver.await;
+            });
+            runtime.shutdown_background();
+            worker.stop_all();
+        })
+        .context("quic thread build failed")?;
+    Ok(())
+}
+
 async fn run_quic_worker(
     mut receiver: Receiver<QuicCommand>,
     server_addr: Arc<AtomicCell<SocketAddr>>,
@@ -227,6 +263,67 @@ async fn run_quic_worker(
     }
 }
 
+async fn connect_quic_handle<H>(
+    mut receiver: Receiver<(Vec<u8>, String, SocketAddr)>,
+    recv_handler: H,
+    context: ChannelContext,
+) where
+    H: RecvChannelHandler,
+{
+    while let Some((data, server_name, addr)) = receiver.recv().await {
+        let recv_handler = recv_handler.clone();
+        let context = context.clone();
+        tokio::spawn(async move {
+            if let Err(e) = connect_quic(data, server_name, addr, recv_handler, context).await {
+                log::warn!("quic链接终止:{:?}", e);
+            }
+        });
+    }
+}
+
+async fn connect_quic<H>(
+    data: Vec<u8>,
+    server_name: String,
+    addr: SocketAddr,
+    recv_handler: H,
+    context: ChannelContext,
+) -> anyhow::Result<()>
+where
+    H: RecvChannelHandler,
+{
+    let _ = server_name;
+    let connection = connect(addr, b"vnt-control").await?;
+    let QuicClientConnection {
+        endpoint,
+        route_key,
+        mut send,
+        mut recv,
+        ..
+    } = connection;
+    send.write_all(&frame_quic_packet(&data)).await?;
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
+    context
+        .packet_map
+        .write()
+        .insert(route_key, PacketSender::new(sender));
+    tokio::spawn(async move {
+        while let Some(data) = receiver.recv().await {
+            if let Err(e) = send.write_all(&frame_quic_packet(&data)).await {
+                log::warn!("quic发送失败 {:?}", e);
+                break;
+            }
+        }
+        let _ = send.finish();
+    });
+    if let Err(e) = quic_read(&mut recv, recv_handler, &context, route_key).await {
+        log::warn!("quic读取失败 {:?}", e);
+    }
+    context.packet_map.write().remove(&route_key);
+    endpoint.close(0u32.into(), &[]);
+    Ok(())
+}
+
 pub(crate) struct QuicClientConnection {
     pub addr: SocketAddr,
     pub route_key: RouteKey,
@@ -299,26 +396,34 @@ where
             return Ok(());
         };
         pending.extend_from_slice(&buf[..len]);
-        loop {
-            if pending.len() < 4 {
-                break;
-            }
-            let frame_len =
-                u32::from_be_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
-            if frame_len == 0 || frame_len > BUFFER_SIZE * 16 {
-                anyhow::bail!("invalid quic frame length: {}", frame_len);
-            }
-            if pending.len() < 4 + frame_len {
-                break;
-            }
-            let packet = pending[4..4 + frame_len].to_vec();
-            pending.drain(..4 + frame_len);
-            if packet.len() < 12 {
-                continue;
-            }
-            on_packet(packet);
-        }
+        consume_pending_frames(&mut pending, &mut on_packet)?;
     }
+}
+
+fn consume_pending_frames<F>(pending: &mut Vec<u8>, on_packet: &mut F) -> anyhow::Result<()>
+where
+    F: FnMut(Vec<u8>),
+{
+    loop {
+        if pending.len() < 4 {
+            break;
+        }
+        let frame_len =
+            u32::from_be_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
+        if frame_len == 0 || frame_len > BUFFER_SIZE * 16 {
+            anyhow::bail!("invalid quic frame length: {}", frame_len);
+        }
+        if pending.len() < 4 + frame_len {
+            break;
+        }
+        let packet = pending[4..4 + frame_len].to_vec();
+        pending.drain(..4 + frame_len);
+        if packet.len() < 12 {
+            continue;
+        }
+        on_packet(packet);
+    }
+    Ok(())
 }
 
 pub(crate) fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
@@ -326,4 +431,91 @@ pub(crate) fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
     framed.extend_from_slice(&(data.len() as u32).to_be_bytes());
     framed.extend_from_slice(data);
     framed
+}
+
+async fn quic_read<H>(
+    recv: &mut quinn::RecvStream,
+    recv_handler: H,
+    context: &ChannelContext,
+    route_key: RouteKey,
+) -> anyhow::Result<()>
+where
+    H: RecvChannelHandler,
+{
+    let mut extend = [0; BUFFER_SIZE];
+    read_framed_packets_with(recv, |mut packet| {
+        recv_handler.handle(&mut packet, &mut extend, route_key, context);
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{consume_pending_frames, frame_quic_packet};
+
+    #[test]
+    fn frame_quic_packet_prefixes_big_endian_length() {
+        let framed = frame_quic_packet(b"hello");
+        assert_eq!(&framed[..4], &(5u32.to_be_bytes()));
+        assert_eq!(&framed[4..], b"hello");
+    }
+
+    #[test]
+    fn consume_pending_frames_drains_multiple_complete_packets() {
+        let packet_a = vec![1u8; 12];
+        let packet_b = vec![2u8; 20];
+        let mut pending = frame_quic_packet(&packet_a);
+        pending.extend_from_slice(&frame_quic_packet(&packet_b));
+
+        let mut packets = Vec::new();
+        consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();
+
+        assert!(pending.is_empty());
+        assert_eq!(packets, vec![packet_a, packet_b]);
+    }
+
+    #[test]
+    fn consume_pending_frames_keeps_partial_frame_buffered() {
+        let packet = vec![7u8; 16];
+        let framed = frame_quic_packet(&packet);
+        let mut pending = framed[..10].to_vec();
+
+        let mut packets = Vec::new();
+        consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();
+
+        assert!(packets.is_empty());
+        assert_eq!(pending, framed[..10].to_vec());
+
+        pending.extend_from_slice(&framed[10..]);
+        consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();
+
+        assert!(pending.is_empty());
+        assert_eq!(packets, vec![packet]);
+    }
+
+    #[test]
+    fn consume_pending_frames_skips_too_short_packets() {
+        let short_packet = vec![9u8; 11];
+        let valid_packet = vec![8u8; 12];
+        let mut pending = frame_quic_packet(&short_packet);
+        pending.extend_from_slice(&frame_quic_packet(&valid_packet));
+
+        let mut packets = Vec::new();
+        consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();
+
+        assert!(pending.is_empty());
+        assert_eq!(packets, vec![valid_packet]);
+    }
+
+    #[test]
+    fn consume_pending_frames_rejects_invalid_lengths() {
+        let mut pending = 0u32.to_be_bytes().to_vec();
+        let err = consume_pending_frames(&mut pending, &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("invalid quic frame length"));
+
+        let oversize = ((crate::channel::BUFFER_SIZE * 16 + 1) as u32).to_be_bytes();
+        let mut pending = oversize.to_vec();
+        let err = consume_pending_frames(&mut pending, &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("invalid quic frame length"));
+    }
 }

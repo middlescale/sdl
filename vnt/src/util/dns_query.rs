@@ -1,4 +1,4 @@
-use crate::channel::socket::LocalInterface;
+use crate::transport::socket::LocalInterface;
 use anyhow::Context;
 use dns_parser::{Builder, Packet, QueryClass, QueryType, RData, ResponseCode};
 use http_req::request::{RedirectPolicy, Request};
@@ -399,7 +399,7 @@ fn bind_udp(
     } else {
         "[::]:0".parse().unwrap()
     };
-    let socket = crate::channel::socket::bind_udp(addr, default_interface)?;
+    let socket = crate::transport::socket::bind_udp(addr, default_interface)?;
     socket.set_nonblocking(false)?;
     socket.set_read_timeout(Some(Duration::from_millis(800)))?;
     Ok(socket.into())

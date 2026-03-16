@@ -11,7 +11,6 @@ use crate::cipher::Cipher;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{control_packet, NetPacket, Protocol};
-use crate::util::Scheduler;
 
 struct PunchSenders {
     sender_self: SyncSender<(Ipv4Addr, NatInfo)>,
@@ -102,19 +101,13 @@ impl PunchCoordinator {
     }
 }
 
-pub fn punch(
-    scheduler: &Scheduler,
-    _context: crate::channel::context::ChannelContext,
-    _nat_test: crate::nat::NatTest,
-    _device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, crate::handle::PeerDeviceInfo>)>>,
+pub fn spawn_punch_workers(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     client_cipher: Cipher,
-    _control_session: crate::control::ControlSession,
     coordinator: PunchCoordinator,
     punch: Punch,
 ) {
-    let _ = scheduler;
-    log::info!("control-driven punch enabled: periodic PunchRequest is disabled");
+    log::info!("control-driven punch enabled: starting punch workers");
     let Some(receivers) = coordinator.take_receivers() else {
         log::warn!("punch workers already started");
         return;
@@ -138,7 +131,6 @@ pub fn punch(
     f(receivers.receiver_cone_self);
 }
 
-/// 接收打洞消息，配合对端打洞
 fn punch_start(
     receiver: Receiver<(Ipv4Addr, NatInfo)>,
     mut punch: Punch,

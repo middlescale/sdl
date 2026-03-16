@@ -13,12 +13,12 @@ use packet::icmp::icmp::HeaderOther;
 use packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::channel::context::ChannelContext;
-use crate::channel::socket::{LocalInterface, VntSocketTrait};
 use crate::cipher::Cipher;
 use crate::handle::CurrentDeviceInfo;
 use crate::ip_proxy::ProxyHandler;
 use crate::protocol;
 use crate::protocol::{NetPacket, MAX_TTL};
+use crate::transport::socket::{LocalInterface, VntSocketTrait};
 #[derive(Clone)]
 pub struct IcmpProxy {
     icmp_socket: Arc<std::net::UdpSocket>,

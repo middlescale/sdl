@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::sync::mpsc::{SyncSender, TrySendError};
 use std::sync::Arc;
 
@@ -152,48 +152,6 @@ impl PacketSender {
                 io::ErrorKind::ConnectionRefused,
                 "通道关闭，发生丢包",
             )),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct ConnectUtil {
-    connect_tcp: Sender<(Vec<u8>, Option<u16>, SocketAddr)>,
-    connect_ws: Sender<(Vec<u8>, String)>,
-    connect_quic: Sender<(Vec<u8>, String, SocketAddr)>,
-}
-
-impl ConnectUtil {
-    pub fn new(
-        connect_tcp: Sender<(Vec<u8>, Option<u16>, SocketAddr)>,
-        connect_ws: Sender<(Vec<u8>, String)>,
-        connect_quic: Sender<(Vec<u8>, String, SocketAddr)>,
-    ) -> Self {
-        Self {
-            connect_tcp,
-            connect_ws,
-            connect_quic,
-        }
-    }
-    pub fn try_connect_tcp(&self, buf: Vec<u8>, addr: SocketAddr) {
-        if self.connect_tcp.try_send((buf, None, addr)).is_err() {
-            log::warn!("try_connect_tcp failed {}", addr);
-        }
-    }
-    pub fn try_connect_tcp_punch(&self, buf: Vec<u8>, addr: SocketAddr) {
-        // 打洞的连接可以绑定随机端口
-        if self.connect_tcp.try_send((buf, Some(0), addr)).is_err() {
-            log::warn!("try_connect_tcp failed {}", addr);
-        }
-    }
-    pub fn try_connect_ws(&self, buf: Vec<u8>, addr: String) {
-        if self.connect_ws.try_send((buf, addr)).is_err() {
-            log::warn!("try_connect_ws failed");
-        }
-    }
-    pub fn try_connect_quic(&self, buf: Vec<u8>, host: String, addr: SocketAddr) {
-        if self.connect_quic.try_send((buf, host, addr)).is_err() {
-            log::warn!("try_connect_quic failed {}", addr);
         }
     }
 }

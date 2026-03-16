@@ -8,8 +8,8 @@ use std::{collections::HashMap, io, net::SocketAddr};
 use parking_lot::Mutex;
 use tokio::net::UdpSocket;
 
-use crate::channel::socket::{bind_udp, LocalInterface};
 use crate::ip_proxy::ProxyHandler;
+use crate::transport::socket::{bind_udp, LocalInterface};
 use packet::ip::ipv4::packet::IpV4Packet;
 use packet::udp::udp::UdpPacket;
 

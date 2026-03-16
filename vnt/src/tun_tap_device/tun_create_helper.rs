@@ -3,9 +3,9 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 
-use crate::channel::context::ChannelContext;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
@@ -29,7 +29,6 @@ impl DeviceAdapter {
         let r = self.tun.lock().replace(device);
         assert!(r.is_none());
     }
-    /// 要保证先remove 再insert
     pub fn remove(&self) {
         drop(self.tun.lock().take());
     }
@@ -60,7 +59,7 @@ pub struct TunDeviceHelper {
 #[derive(Clone)]
 struct TunDeviceHelperInner {
     stop_manager: StopManager,
-    context: ChannelContext,
+    data_channel: DataChannel,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
@@ -74,7 +73,7 @@ struct TunDeviceHelperInner {
 impl TunDeviceHelper {
     pub fn new(
         stop_manager: StopManager,
-        context: ChannelContext,
+        data_channel: DataChannel,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
@@ -86,7 +85,7 @@ impl TunDeviceHelper {
     ) -> Self {
         let inner = TunDeviceHelperInner {
             stop_manager,
-            context,
+            data_channel,
             current_device,
             gateway_sessions,
             ip_route,
@@ -103,20 +102,17 @@ impl TunDeviceHelper {
         }
     }
     pub fn stop(&self) {
-        //先停止旧的，再启动新的，改变旧网卡的IP太麻烦
         if let Some(device_stop) = self.device_stop.lock().take() {
             self.device_adapter.remove();
             loop {
                 device_stop.stop();
                 std::thread::sleep(std::time::Duration::from_millis(300));
-                //确保停止了
                 if device_stop.is_stopped() {
                     break;
                 }
             }
         }
     }
-    /// 要保证先stop 再start
     pub fn start(&self, device: Arc<SyncDevice>) -> io::Result<()> {
         self.device_adapter.insert(device.clone());
         let device_stop = DeviceStop::default();
@@ -125,7 +121,7 @@ impl TunDeviceHelper {
         let inner = self.inner.lock().clone();
         crate::handle::tun_tap::tun_handler::start(
             inner.stop_manager,
-            inner.context,
+            inner.data_channel,
             device,
             inner.current_device,
             inner.gateway_sessions,

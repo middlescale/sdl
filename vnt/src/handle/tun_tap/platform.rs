@@ -1,7 +1,7 @@
-use crate::channel::context::ChannelContext;
 use crate::channel::BUFFER_SIZE;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
@@ -19,7 +19,7 @@ use tun_rs::SyncDevice;
 
 pub(crate) fn start_simple(
     stop_manager: StopManager,
-    context: &ChannelContext,
+    data_channel: &DataChannel,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
@@ -52,7 +52,7 @@ pub(crate) fn start_simple(
     }
 
     if let Err(e) = start_simple0(
-        context,
+        data_channel,
         device,
         &event,
         current_device,
@@ -74,7 +74,7 @@ pub(crate) fn start_simple(
 }
 
 fn start_simple0(
-    context: &ChannelContext,
+    data_channel: &DataChannel,
     device: Arc<SyncDevice>,
     event: &InterruptEvent,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -98,10 +98,9 @@ fn start_simple0(
                 return Err(e.into());
             }
         };
-        // buf是重复利用的，需要重置头部
         buf[..12].fill(0);
         match crate::handle::tun_tap::tun_handler::handle(
-            context,
+            data_channel,
             &mut buf,
             len,
             &mut extend,
@@ -122,98 +121,4 @@ fn start_simple0(
         }
     }
     Ok(())
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn start_simple(
-    stop_manager: StopManager,
-    context: &ChannelContext,
-    device: Arc<SyncDevice>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
-    #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
-    client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    compressor: Compressor,
-    device_stop: DeviceStop,
-) -> anyhow::Result<()> {
-    let worker = {
-        let device = device.clone();
-        stop_manager.add_listener("tun_device".into(), move || {
-            if let Err(e) = device.shutdown() {
-                log::warn!("{:?}", e);
-            }
-        })?
-    };
-    let worker_cell = Arc::new(AtomicCell::new(Some(worker)));
-
-    {
-        let worker_cell = worker_cell.clone();
-        device_stop.set_stop_fn(move || {
-            if let Some(worker) = worker_cell.take() {
-                worker.stop_self()
-            }
-        });
-    }
-    if let Err(e) = start_simple0(
-        context,
-        device,
-        current_device,
-        gateway_sessions,
-        ip_route,
-        #[cfg(feature = "ip_proxy")]
-        ip_proxy_map,
-        client_cipher,
-        device_map,
-        compressor,
-    ) {
-        log::error!("{:?}", e);
-    }
-    device_stop.stopped();
-    if let Some(worker) = worker_cell.take() {
-        worker.stop_all();
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn start_simple0(
-    context: &ChannelContext,
-    device: Arc<SyncDevice>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
-    #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
-    client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    compressor: Compressor,
-) -> anyhow::Result<()> {
-    let mut buf = [0; BUFFER_SIZE];
-    let mut extend = [0; BUFFER_SIZE];
-    loop {
-        let len = device.recv(&mut buf[12..])? + 12;
-        // buf是重复利用的，需要重置头部
-        buf[..12].fill(0);
-        match crate::handle::tun_tap::tun_handler::handle(
-            context,
-            &mut buf,
-            len,
-            &mut extend,
-            &device,
-            current_device.load(),
-            &gateway_sessions,
-            &ip_route,
-            #[cfg(feature = "ip_proxy")]
-            &ip_proxy_map,
-            &client_cipher,
-            &device_map,
-            &compressor,
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                log::warn!("tun/tap {:?}", e)
-            }
-        }
-    }
 }

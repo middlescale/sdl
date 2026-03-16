@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
 use crate::channel::punch::NatType;
-use crate::channel::socket::{bind_udp, LocalInterface};
+use crate::transport::socket::{bind_udp, LocalInterface};
 use rand::RngCore;
 use std::net::UdpSocket;
 use stun_format::Attr;

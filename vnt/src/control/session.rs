@@ -8,15 +8,13 @@ use crossbeam_utils::atomic::AtomicCell;
 use protobuf::Message;
 use std::sync::Arc;
 
-use crate::channel::context::ChannelContext;
-use crate::core::RuntimeConfig;
+use crate::core::{RuntimeConfig, VntRuntime};
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::handle::callback::{ConnectInfo, ErrorType};
 use crate::handle::handshaker::Handshake;
 use crate::handle::registrar;
 use crate::handle::PeerDeviceInfo;
 use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
-use crate::nat::NatTest;
 use crate::proto::message::{
     ClientStatusInfo, PunchNatType, RefreshGatewayGrantRequest, RouteItem,
 };
@@ -279,71 +277,57 @@ impl ControlSession {
         )
     }
 
-    pub fn start_status_reporter(
-        &self,
-        scheduler: &Scheduler,
-        context: ChannelContext,
-        nat_test: NatTest,
-    ) {
+    pub fn start_status_reporter(&self, scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
         let control_session = self.clone();
         let _ = scheduler.timeout(Duration::from_secs(60), move |x| {
-            control_session.status_report_tick(x, context, nat_test)
+            control_session.status_report_tick(x, runtime)
         });
     }
 
-    pub fn trigger_status_report(&self, context: &ChannelContext, nat_test: &NatTest) {
-        if let Err(e) = self.send_status_report_packet(context, nat_test) {
+    pub fn trigger_status_report(&self, runtime: &VntRuntime) {
+        if let Err(e) = self.send_status_report_packet(runtime) {
             log::warn!("{:?}", e)
         }
     }
 
-    pub fn trigger_status_report_with_nat_ready(&self, context: ChannelContext, nat_test: NatTest) {
+    pub fn trigger_status_report_with_nat_ready(&self, runtime: Arc<VntRuntime>) {
         let control_session = self.clone();
         thread::Builder::new()
             .name("upStatusEvent".into())
             .spawn(move || {
-                let nat_info = nat_test.nat_info();
+                let nat_info = runtime.nat_test.nat_info();
                 if !has_public_endpoints(&nat_info.public_ips, &nat_info.public_ports) {
-                    if let Ok((data, addr)) = nat_test.send_data() {
-                        let _ = context.send_main_udp(0, &data, addr);
+                    if let Ok((data, addr)) = runtime.nat_test.send_data() {
+                        let _ = runtime.udp_channel.send_main(0, &data, addr);
                     }
                     thread::sleep(Duration::from_secs(2));
                 }
-                if let Err(e) = control_session.send_status_report_packet(&context, &nat_test) {
+                if let Err(e) = control_session.send_status_report_packet(runtime.as_ref()) {
                     log::warn!("{:?}", e)
                 }
             })
             .expect("upStatusEvent");
     }
 
-    fn status_report_tick(
-        &self,
-        scheduler: &Scheduler,
-        context: ChannelContext,
-        nat_test: NatTest,
-    ) {
-        if let Err(e) = self.send_status_report_packet(&context, &nat_test) {
+    fn status_report_tick(&self, scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
+        if let Err(e) = self.send_status_report_packet(runtime.as_ref()) {
             log::warn!("{:?}", e)
         }
         let control_session = self.clone();
         let rs = scheduler.timeout(Duration::from_secs(10 * 60), move |x| {
-            control_session.status_report_tick(x, context, nat_test)
+            control_session.status_report_tick(x, runtime)
         });
         if !rs {
             log::info!("定时任务停止");
         }
     }
 
-    fn send_status_report_packet(
-        &self,
-        context: &ChannelContext,
-        nat_test: &NatTest,
-    ) -> io::Result<()> {
+    fn send_status_report_packet(&self, runtime: &VntRuntime) -> io::Result<()> {
         let device_info = self.current_device();
         if device_info.status.offline() {
             return Ok(());
         }
-        let routes = context.route_manager().snapshot_direct_routes();
+        let routes = runtime.route_manager().snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
         for (ip, _) in routes {
@@ -351,14 +335,15 @@ impl ControlSession {
             item.next_ip = ip.into();
             message.p2p_list.push(item);
         }
-        message.up_stream = context.up_traffic_meter.as_ref().map_or(0, |v| v.total());
-        message.down_stream = context.down_traffic_meter.as_ref().map_or(0, |v| v.total());
-        message.nat_type = protobuf::EnumOrUnknown::new(if context.is_cone() {
-            PunchNatType::Cone
-        } else {
-            PunchNatType::Symmetric
-        });
-        let nat_info = nat_test.nat_info();
+        message.up_stream = runtime.up_traffic_meter.as_ref().map_or(0, |v| v.total());
+        message.down_stream = runtime.down_traffic_meter.as_ref().map_or(0, |v| v.total());
+        message.nat_type =
+            protobuf::EnumOrUnknown::new(if runtime.nat_test.nat_info().nat_type.is_cone() {
+                PunchNatType::Cone
+            } else {
+                PunchNatType::Symmetric
+            });
+        let nat_info = runtime.nat_test.nat_info();
         message.public_ip_list = nat_info
             .public_ips
             .iter()

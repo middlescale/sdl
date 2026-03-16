@@ -429,10 +429,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.set_device_info_list(response.device_info_list, response.epoch as _);
                     self.runtime
                         .control_session
-                        .trigger_status_report_with_nat_ready(
-                            context.clone(),
-                            self.runtime.nat_test.clone(),
-                        );
+                        .trigger_status_report_with_nat_ready(self.runtime.clone());
                     if old.status.offline() {
                         self.callback.success();
                     }

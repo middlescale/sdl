@@ -11,7 +11,7 @@ use rand::prelude::SliceRandom;
 use rand::Rng;
 
 use crate::channel::punch::{NatInfo, NatType, PunchModel};
-use crate::channel::socket::LocalInterface;
+use crate::transport::socket::LocalInterface;
 #[cfg(feature = "upnp")]
 use crate::util::UPnP;
 

@@ -7,8 +7,8 @@ use std::{collections::HashMap, io, net::SocketAddr};
 use parking_lot::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::channel::socket::{create_tcp, LocalInterface};
 use crate::ip_proxy::ProxyHandler;
+use crate::transport::socket::{create_tcp, LocalInterface};
 use packet::ip::ipv4::packet::IpV4Packet;
 use packet::tcp::tcp::TcpPacket;
 

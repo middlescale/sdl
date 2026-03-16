@@ -10,9 +10,9 @@ use std::sync::Arc;
 use std::{io, thread};
 use tun_rs::SyncDevice;
 
-use crate::channel::context::ChannelContext;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
@@ -44,7 +44,7 @@ fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> a
 
 pub fn start(
     stop_manager: StopManager,
-    context: ChannelContext,
+    data_channel: DataChannel,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
@@ -60,7 +60,7 @@ pub fn start(
         .spawn(move || {
             if let Err(e) = crate::handle::tun_tap::start_simple(
                 stop_manager,
-                &context,
+                &data_channel,
                 device,
                 current_device,
                 gateway_sessions,
@@ -80,7 +80,7 @@ pub fn start(
 }
 
 fn broadcast(
-    sender: &ChannelContext,
+    sender: &DataChannel,
     gateway_sessions: &GatewaySessions,
     net_packet: &mut NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
@@ -105,8 +105,8 @@ fn broadcast(
             overflow = true;
             break;
         }
-        if let Some(route) = sender.route_manager().direct_route(&peer_ip) {
-            if sender.send_by_key(&net_packet, route.route_key()).is_ok() {
+        if let Some(route) = sender.direct_route(&peer_ip) {
+            if sender.send_p2p_route(&net_packet, route).is_ok() {
                 p2p_ips.push(peer_ip);
                 continue;
             }
@@ -150,7 +150,7 @@ fn broadcast(
 /// |12字节开头|ip报文|至少1024字节结尾|
 ///
 pub(crate) fn handle(
-    context: &ChannelContext,
+    data_channel: &DataChannel,
     buf: &mut [u8],
     data_len: usize, //数据总长度=12+ip包长度
     extend: &mut [u8],
@@ -231,7 +231,7 @@ pub(crate) fn handle(
         // 广播 发送到直连目标
         client_cipher.encrypt_ipv4(&mut net_packet)?;
         broadcast(
-            context,
+            data_channel,
             gateway_sessions,
             &mut net_packet,
             &current_device,
@@ -241,10 +241,6 @@ pub(crate) fn handle(
     }
 
     client_cipher.encrypt_ipv4(&mut net_packet)?;
-    if let Some(route) = context.route_manager().direct_route(&dest_ip) {
-        context.send_by_key(&net_packet, route.route_key())?;
-    } else {
-        gateway_sessions.send_relay(&net_packet)?;
-    }
+    data_channel.send_to_peer(&net_packet, &dest_ip)?;
     Ok(())
 }

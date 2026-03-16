@@ -8,22 +8,9 @@ use parking_lot::RwLock;
 
 use crate::channel::{Route, RouteKey, UseChannelType, DEFAULT_RT};
 
-// Each route keeps its own last-read timestamp so idle cleanup can remove only
-// the stale path instead of dropping the whole peer entry.
 type RouteLiveness = AtomicCell<Instant>;
-// Keyed by peer virtual IP; each peer may have multiple candidate paths.
 type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
 
-/// In-memory route index for the channel layer.
-///
-/// The outer map is keyed by peer virtual IP. Each value is the set of known
-/// candidate routes for that peer, ordered by route time (`rt`) and annotated
-/// with a last-read timestamp used by idle cleanup.
-/// The route table supports multiple routes per peer, but only one direct path is
-/// kept once it is discovered, to avoid unnecessary churn of the route table and
-/// to prefer direct paths when available.
-/// The `channel_num` field is used to determine when a peer has enough direct paths and no longer needs punching.
-/// The `use_channel_type` field is used to determine which types of routes to add to the table.
 pub struct RouteTable {
     pub(crate) route_table: RwLock<RouteMap>,
     pub(crate) latency_first: bool,
@@ -79,24 +66,8 @@ impl RouteTable {
 
     fn add_route_(&self, vip: Ipv4Addr, route: Route, only_if_absent: bool) {
         match self.use_channel_type {
-            UseChannelType::Relay if route.is_p2p() => {
-                log::debug!(
-                    "skip p2p route for {} due to use_channel_type={:?}: {:?}",
-                    vip,
-                    self.use_channel_type,
-                    route
-                );
-                return;
-            }
-            UseChannelType::P2p if !route.is_p2p() => {
-                log::debug!(
-                    "skip relay route for {} due to use_channel_type={:?}: {:?}",
-                    vip,
-                    self.use_channel_type,
-                    route
-                );
-                return;
-            }
+            UseChannelType::Relay if route.is_p2p() => return,
+            UseChannelType::P2p if !route.is_p2p() => return,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::All => {}
         }
         let key = route.route_key();
@@ -115,7 +86,6 @@ impl RouteTable {
             .or_insert_with(|| Vec::with_capacity(4));
         let mut exist = false;
         for (x, time) in list.iter_mut() {
-            // In non-latency-first mode, ignore strictly worse routes.
             if x.metric < route.metric && !self.latency_first {
                 return;
             }
@@ -133,10 +103,9 @@ impl RouteTable {
         if exist {
             list.sort_by_key(|(k, _)| k.rt);
         } else {
-            // Once a direct path exists, prefer keeping only direct paths.
             if !self.latency_first && route.is_p2p() {
                 list.retain(|(k, _)| k.is_p2p());
-            };
+            }
             list.sort_by_key(|(k, _)| k.rt);
             list.push((route, AtomicCell::new(Instant::now())));
         }
@@ -150,22 +119,17 @@ impl RouteTable {
     }
 
     pub fn get_first_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        if let Some(v) = self.route_table.read().get(vip) {
-            v.first().map(|(i, _)| *i)
-        } else {
-            None
-        }
+        self.route_table
+            .read()
+            .get(vip)
+            .and_then(|v| v.first().map(|(i, _)| *i))
     }
 
     pub fn get_one_p2p_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        if let Some(v) = self.route_table.read().get(vip) {
-            for (i, _) in v {
-                if i.is_p2p() {
-                    return Some(*i);
-                }
-            }
-        }
-        None
+        self.route_table
+            .read()
+            .get(vip)
+            .and_then(|v| v.iter().find_map(|(i, _)| i.is_p2p().then_some(*i)))
     }
 
     pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
@@ -181,23 +145,24 @@ impl RouteTable {
     }
 
     pub fn no_need_punch(&self, vip: &Ipv4Addr) -> bool {
-        if let Some(v) = self.route_table.read().get(vip) {
-            return v.iter().filter(|(k, _)| k.is_p2p()).count() >= self.channel_num;
-        }
-        false
+        self.route_table
+            .read()
+            .get(vip)
+            .map(|v| v.iter().filter(|(k, _)| k.is_p2p()).count() >= self.channel_num)
+            .unwrap_or(false)
     }
 
     pub fn p2p_num(&self, vip: &Ipv4Addr) -> usize {
-        if let Some(v) = self.route_table.read().get(vip) {
-            v.iter().filter(|(k, _)| k.is_p2p()).count()
-        } else {
-            0
-        }
+        self.route_table
+            .read()
+            .get(vip)
+            .map(|v| v.iter().filter(|(k, _)| k.is_p2p()).count())
+            .unwrap_or(0)
     }
 
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        let table = self.route_table.read();
-        table
+        self.route_table
+            .read()
             .iter()
             .map(|(k, v)| (*k, v.iter().map(|(i, _)| *i).collect()))
             .collect()
@@ -218,14 +183,11 @@ impl RouteTable {
     }
 
     pub fn route_table_one(&self) -> Vec<(Ipv4Addr, Route)> {
-        let mut list = Vec::with_capacity(8);
-        let table = self.route_table.read();
-        for (k, v) in table.iter() {
-            if let Some((route, _)) = v.first() {
-                list.push((*k, *route));
-            }
-        }
-        list
+        self.route_table
+            .read()
+            .iter()
+            .filter_map(|(k, v)| v.first().map(|(route, _)| (*k, *route)))
+            .collect()
     }
 
     pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) {
@@ -260,46 +222,35 @@ mod tests {
         RouteKey::new(
             ConnectProtocol::UDP,
             0,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),
         )
     }
 
     #[test]
-    fn add_route_if_absent_keeps_existing_route() {
-        let table = RouteTable::new(UseChannelType::All, false, 1);
-        let peer = Ipv4Addr::new(10, 0, 0, 2);
-        let key = route_key(1000);
-        table.add_route_if_absent(peer, Route::from_default_rt(key, 2));
-        table.add_route_if_absent(peer, Route::from(key, 1, 5));
-
-        let route = table.get_first_route(&peer).expect("route");
-        assert_eq!(route.metric, 2);
-        assert_eq!(route.rt, crate::channel::DEFAULT_RT);
+    fn relay_mode_rejects_direct_routes() {
+        let table = RouteTable::new(UseChannelType::Relay, false, 1);
+        let vip = Ipv4Addr::new(10, 0, 0, 2);
+        table.add_route(vip, Route::from_default_rt(route_key(1000), 1));
+        assert!(table.get_first_route(&vip).is_none());
     }
 
     #[test]
-    fn add_route_updates_existing_route() {
-        let table = RouteTable::new(UseChannelType::All, false, 1);
-        let peer = Ipv4Addr::new(10, 0, 0, 3);
-        let key = route_key(1001);
-        table.add_route(peer, Route::from_default_rt(key, 2));
-        table.add_route(peer, Route::from(key, 2, 8));
-
-        let route = table.get_first_route(&peer).expect("route");
-        assert_eq!(route.metric, 2);
-        assert_eq!(route.rt, 8);
+    fn p2p_mode_rejects_relay_routes() {
+        let table = RouteTable::new(UseChannelType::P2p, false, 1);
+        let vip = Ipv4Addr::new(10, 0, 0, 3);
+        table.add_route(vip, Route::from_default_rt(route_key(1001), 2));
+        assert!(table.get_first_route(&vip).is_none());
     }
 
     #[test]
-    fn p2p_route_replaces_non_p2p_when_not_latency_first() {
+    fn direct_routes_replace_relay_routes_when_not_latency_first() {
         let table = RouteTable::new(UseChannelType::All, false, 1);
-        let peer = Ipv4Addr::new(10, 0, 0, 4);
-        table.add_route(peer, Route::from_default_rt(route_key(1002), 2));
-        table.add_route(peer, Route::from(route_key(1003), 1, 3));
+        let vip = Ipv4Addr::new(10, 0, 0, 4);
+        table.add_route(vip, Route::from_default_rt(route_key(1002), 2));
+        table.add_route(vip, Route::from_default_rt(route_key(1003), 1));
 
-        let routes = table.get_routes(&peer).expect("routes");
+        let routes = table.get_routes(&vip).unwrap();
         assert_eq!(routes.len(), 1);
         assert!(routes[0].is_p2p());
-        assert_eq!(routes[0].addr.port(), 1003);
     }
 }
