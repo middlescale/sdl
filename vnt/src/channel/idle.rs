@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::channel::context::ChannelContext;
 use crate::channel::Route;
+use crate::data_plane::route_manager::RouteIdle;
 
 pub struct Idle {
     read_idle: Duration,
@@ -24,22 +25,10 @@ pub enum IdleType {
 impl Idle {
     /// 获取空闲路由
     pub fn next_idle(&self) -> IdleType {
-        let mut max = Duration::from_secs(0);
-        let read_guard = self.context.route_table.route_table.read();
-        if read_guard.is_empty() {
-            return IdleType::None;
+        match self.context.route_manager().next_idle(self.read_idle) {
+            RouteIdle::Timeout(ip, route) => IdleType::Timeout(ip, route),
+            RouteIdle::Sleep(duration) => IdleType::Sleep(duration),
+            RouteIdle::None => IdleType::None,
         }
-        for (ip, routes) in read_guard.iter() {
-            for (route, time) in routes {
-                let last_read = time.load().elapsed();
-                if last_read >= self.read_idle {
-                    return IdleType::Timeout(*ip, *route);
-                } else if max < last_read {
-                    max = last_read;
-                }
-            }
-        }
-        let sleep_time = self.read_idle.checked_sub(max).unwrap_or_default();
-        return IdleType::Sleep(sleep_time);
     }
 }

@@ -11,10 +11,6 @@ mod punch;
 pub use punch::*;
 
 mod idle;
-pub use idle::idle_gateway;
 pub use idle::idle_route;
 
 mod route_maintenance;
-
-mod up_status;
-pub use up_status::*;

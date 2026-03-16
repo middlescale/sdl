@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::channel::context::ChannelContext;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
@@ -61,6 +62,7 @@ struct TunDeviceHelperInner {
     stop_manager: StopManager,
     context: ChannelContext,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")]
     ip_proxy_map: Option<IpProxyMap>,
@@ -74,6 +76,7 @@ impl TunDeviceHelper {
         stop_manager: StopManager,
         context: ChannelContext,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+        gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
         #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
         client_cipher: Cipher,
@@ -85,6 +88,7 @@ impl TunDeviceHelper {
             stop_manager,
             context,
             current_device,
+            gateway_sessions,
             ip_route,
             #[cfg(feature = "ip_proxy")]
             ip_proxy_map,
@@ -124,6 +128,7 @@ impl TunDeviceHelper {
             inner.context,
             device,
             inner.current_device,
+            inner.gateway_sessions,
             inner.ip_route,
             #[cfg(feature = "ip_proxy")]
             inner.ip_proxy_map,

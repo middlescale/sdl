@@ -325,7 +325,7 @@ impl Punch {
         punch_tcp: bool,
         count: usize,
     ) -> io::Result<()> {
-        if self.context.route_table.no_need_punch(&id) {
+        if self.context.route_manager().has_enough_direct_paths(&id) {
             log::info!("已打洞成功,无需打洞:{:?}", id);
             return Ok(());
         }

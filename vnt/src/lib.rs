@@ -2,7 +2,9 @@ pub const VNT_VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 pub mod channel;
 pub mod cipher;
+pub mod control;
 pub mod core;
+pub mod data_plane;
 mod external_route;
 pub mod handle;
 #[cfg(feature = "ip_proxy")]
@@ -12,6 +14,7 @@ pub mod nat;
 mod port_mapping;
 mod proto;
 pub mod protocol;
+pub mod transport;
 mod tun_tap_device;
 pub use tun_tap_device::*;
 pub mod util;

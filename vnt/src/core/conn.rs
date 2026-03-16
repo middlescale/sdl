@@ -8,19 +8,22 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::channel::context::ChannelContext;
+use crate::channel::handler::RecvChannelHandler;
 use crate::channel::idle::Idle;
 use crate::channel::punch::{NatInfo, Punch};
 use crate::channel::sender::IpPacketSender;
 use crate::channel::{init_channel, init_context, Route, RouteKey};
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
-use crate::core::Config;
+use crate::control::ControlSession;
+use crate::core::{Config, RuntimeConfig, VntRuntime};
+use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route_state::RouteState;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
-use crate::handle::handshaker::Handshake;
-use crate::handle::maintain::PunchReceiver;
 use crate::handle::recv_data::RecvDataHandler;
-use crate::handle::{maintain, BaseConfigInfo, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::{maintain, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::NatTest;
+use crate::transport::quic_channel::QuicChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
@@ -125,7 +128,7 @@ impl VntInner {
         let default_interface = config.local_interface.clone();
 
         //基础信息
-        let config_info = BaseConfigInfo {
+        let runtime_config = RuntimeConfig {
             name: config.name.clone(),
             token: config.token.clone(),
             ip: config.ip,
@@ -183,6 +186,11 @@ impl VntInner {
         let scheduler = Scheduler::new(stop_manager.clone())?;
         let external_route = ExternalRoute::new(config.in_ips.clone());
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
+        let control_session = ControlSession::new(
+            QuicChannel::new(config.server_address),
+            runtime_config.clone(),
+            current_device.clone(),
+        );
 
         #[cfg(feature = "ip_proxy")]
         #[cfg(feature = "integrated_tun")]
@@ -196,17 +204,17 @@ impl VntInner {
         } else {
             None
         };
-        let (punch_sender, punch_receiver) = maintain::punch_channel();
-        let gateway_ticket_expire_unix_ms = Arc::new(AtomicCell::new(0_i64));
+        let punch_coordinator = maintain::PunchCoordinator::new();
+        let gateway_sessions = GatewaySessions::new(current_device.clone());
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
-        let handshake = Handshake::new();
         #[cfg(feature = "integrated_tun")]
         let tun_device_helper = {
             TunDeviceHelper::new(
                 stop_manager.clone(),
                 context.clone(),
                 current_device.clone(),
+                gateway_sessions.clone(),
                 external_route.clone(),
                 #[cfg(feature = "ip_proxy")]
                 proxy_map.clone(),
@@ -217,26 +225,34 @@ impl VntInner {
             )
         };
 
-        let handler = RecvDataHandler::new(
-            client_cipher.clone(),
-            current_device.clone(),
-            device,
-            device_map.clone(),
-            config_info.clone(),
-            nat_test.clone(),
-            callback.clone(),
-            punch_sender,
-            peer_nat_info_map.clone(),
-            external_route.clone(),
+        let runtime_context = Arc::new(VntRuntime {
+            config: runtime_config.clone(),
+            current_device: current_device.clone(),
+            nat_test: nat_test.clone(),
+            device_map: device_map.clone(),
+            peer_nat_info_map: peer_nat_info_map.clone(),
+            external_route: external_route.clone(),
             out_external_route,
+            client_cipher: client_cipher.clone(),
+            control_session: control_session.clone(),
+            gateway_sessions: gateway_sessions.clone(),
+            punch_coordinator: punch_coordinator.clone(),
             #[cfg(feature = "ip_proxy")]
             #[cfg(feature = "integrated_tun")]
-            proxy_map.clone(),
-            handshake.clone(),
-            gateway_ticket_expire_unix_ms.clone(),
+            ip_proxy_map: proxy_map.clone(),
             #[cfg(feature = "integrated_tun")]
-            tun_device_helper,
-        );
+            tun_device_helper: tun_device_helper.clone(),
+        });
+        let handler = RecvDataHandler::new(runtime_context.clone(), device, callback.clone());
+        let control_handler = handler.clone();
+        {
+            let context = context.clone();
+            let handler = handler.clone();
+            gateway_sessions.start(stop_manager.clone(), move |mut packet, route_key| {
+                let mut extend = [0u8; crate::channel::BUFFER_SIZE];
+                handler.handle(&mut packet, &mut extend, route_key, &context);
+            })?;
+        }
 
         //初始化网络数据通道
         let (udp_socket_sender, connect_util) =
@@ -253,47 +269,35 @@ impl VntInner {
         // #[cfg(not(target_os = "android"))]
         // tun_helper.start(device)?;
 
-        maintain::idle_gateway(
-            &scheduler,
-            context.clone(),
-            current_device.clone(),
-            config_info.clone(),
-            connect_util.clone(),
+        runtime_context.control_session.start(
+            stop_manager.clone(),
+            runtime_context.device_map.clone(),
+            runtime_context.gateway_sessions.clone(),
             callback.clone(),
-            0,
-            handshake,
-        );
+            {
+                let context = context.clone();
+                let handler = control_handler;
+                move |mut packet, route_key| {
+                    let mut extend = [0u8; crate::channel::BUFFER_SIZE];
+                    handler.handle(&mut packet, &mut extend, route_key, &context);
+                }
+            },
+        )?;
         {
             let context = context.clone();
-            let nat_test = nat_test.clone();
-            let device_map = device_map.clone();
-            let config_info = config_info.clone();
-            let current_device = current_device.clone();
+            let runtime_context = runtime_context.clone();
             if !config.use_channel_type.is_only_relay() {
                 // 定时nat探测
                 maintain::retrieve_nat_type(
                     &scheduler,
                     context.clone(),
-                    nat_test.clone(),
+                    runtime_context.nat_test.clone(),
                     udp_socket_sender,
                 );
             }
-            let client_cipher = client_cipher.clone();
             //延迟启动
             scheduler.timeout(Duration::from_secs(3), move |scheduler| {
-                start(
-                    scheduler,
-                    context,
-                    nat_test,
-                    device_map,
-                    current_device,
-                    client_cipher,
-                    punch_receiver,
-                    config_info,
-                    gateway_ticket_expire_unix_ms,
-                    punch,
-                    callback,
-                );
+                start(scheduler, context, runtime_context, punch, callback);
             });
         }
         let compressor = config.compressor;
@@ -305,7 +309,7 @@ impl VntInner {
             device_map,
             context: Arc::new(Mutex::new(Some(context))),
             peer_nat_info_map,
-            client_secret_hash: config_info.client_secret_hash,
+            client_secret_hash: runtime_config.client_secret_hash,
             compressor,
             client_cipher,
             external_route,
@@ -318,26 +322,12 @@ impl VntInner {
 pub fn start<Call: VntCallback>(
     scheduler: &Scheduler,
     context: ChannelContext,
-    nat_test: NatTest,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    client_cipher: Cipher,
-    punch_receiver: PunchReceiver,
-    config_info: BaseConfigInfo,
-    gateway_ticket_expire_unix_ms: Arc<AtomicCell<i64>>,
+    runtime_context: Arc<VntRuntime>,
     punch: Punch,
     callback: Call,
 ) {
     // 定时心跳
-    maintain::heartbeat(
-        &scheduler,
-        context.clone(),
-        current_device.clone(),
-        device_map.clone(),
-        client_cipher.clone(),
-        config_info.clone(),
-        gateway_ticket_expire_unix_ms.clone(),
-    );
+    maintain::heartbeat(&scheduler, context.clone(), runtime_context.clone());
     // 路由空闲检测逻辑
     let idle = Idle::new(Duration::from_secs(10), context.clone());
     // 定时空闲检查
@@ -345,7 +335,7 @@ pub fn start<Call: VntCallback>(
         &scheduler,
         idle,
         context.clone(),
-        current_device.clone(),
+        runtime_context.current_device.clone(),
         callback,
     );
     // 默认禁用客户端中继探测（client-relay）
@@ -355,27 +345,26 @@ pub fn start<Call: VntCallback>(
         maintain::addr_request(
             &scheduler,
             context.clone(),
-            current_device.clone(),
-            nat_test.clone(),
-            config_info.clone(),
+            runtime_context.current_device.clone(),
+            runtime_context.nat_test.clone(),
         );
         // 定时打洞
         maintain::punch(
             &scheduler,
             context.clone(),
-            nat_test.clone(),
-            device_map.clone(),
-            current_device.clone(),
-            client_cipher.clone(),
-            punch_receiver,
+            runtime_context.nat_test.clone(),
+            runtime_context.device_map.clone(),
+            runtime_context.current_device.clone(),
+            runtime_context.client_cipher.clone(),
+            runtime_context.control_session.clone(),
+            runtime_context.punch_coordinator.clone(),
             punch,
         );
     }
-    maintain::up_status(
+    runtime_context.control_session.start_status_reporter(
         scheduler,
         context.clone(),
-        current_device.clone(),
-        nat_test.clone(),
+        runtime_context.nat_test.clone(),
     )
 }
 
@@ -411,11 +400,7 @@ impl VntInner {
         device_list.into_values().collect()
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
-        self.context
-            .lock()
-            .as_ref()?
-            .route_table
-            .get_first_route(ip)
+        self.context.lock().as_ref()?.route_manager().best_route(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
         self.current_device.load().is_gateway_vip(ip)
@@ -424,12 +409,22 @@ impl VntInner {
         self.context
             .lock()
             .as_ref()?
-            .route_table
-            .get_one_p2p_ip(route_key)
+            .route_manager()
+            .peer_for_direct_route(route_key)
     }
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         if let Some(context) = self.context.lock().as_ref() {
-            context.route_table.route_table()
+            context.route_manager().snapshot_routes()
+        } else {
+            vec![]
+        }
+    }
+    pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
+        let current_device = self.current_device.load();
+        if let Some(context) = self.context.lock().as_ref() {
+            context
+                .route_manager()
+                .snapshot_route_states(current_device.virtual_gateway)
         } else {
             vec![]
         }

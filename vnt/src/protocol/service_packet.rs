@@ -26,6 +26,8 @@ pub enum Protocol {
     GatewayReportAck,
     GatewayConnectHello,
     GatewayConnectAck,
+    RefreshGatewayGrantRequest,
+    RefreshGatewayGrantResponse,
     Unknown(u8),
 }
 
@@ -52,6 +54,8 @@ impl From<u8> for Protocol {
             18 => Self::GatewayReportAck,
             19 => Self::GatewayConnectHello,
             20 => Self::GatewayConnectAck,
+            21 => Self::RefreshGatewayGrantRequest,
+            22 => Self::RefreshGatewayGrantResponse,
             val => Self::Unknown(val),
         }
     }
@@ -80,6 +84,8 @@ impl Into<u8> for Protocol {
             Self::GatewayReportAck => 18,
             Self::GatewayConnectHello => 19,
             Self::GatewayConnectAck => 20,
+            Self::RefreshGatewayGrantRequest => 21,
+            Self::RefreshGatewayGrantResponse => 22,
             Self::Unknown(val) => val,
         }
     }
@@ -101,6 +107,8 @@ mod tests {
             (16u8, Protocol::DeviceAuthAck),
             (17u8, Protocol::GatewayReportRequest),
             (18u8, Protocol::GatewayReportAck),
+            (21u8, Protocol::RefreshGatewayGrantRequest),
+            (22u8, Protocol::RefreshGatewayGrantResponse),
         ];
         for (raw, expect) in cases {
             assert_eq!(Protocol::from(raw), expect);

@@ -2,6 +2,7 @@ use crate::channel::context::ChannelContext;
 use crate::channel::BUFFER_SIZE;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
@@ -21,6 +22,7 @@ pub(crate) fn start_simple(
     context: &ChannelContext,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
@@ -54,6 +56,7 @@ pub(crate) fn start_simple(
         device,
         &event,
         current_device,
+        gateway_sessions,
         ip_route,
         #[cfg(feature = "ip_proxy")]
         ip_proxy_map,
@@ -75,6 +78,7 @@ fn start_simple0(
     device: Arc<SyncDevice>,
     event: &InterruptEvent,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
@@ -103,6 +107,7 @@ fn start_simple0(
             &mut extend,
             &device,
             current_device.load(),
+            &gateway_sessions,
             &ip_route,
             #[cfg(feature = "ip_proxy")]
             &ip_proxy_map,
@@ -125,6 +130,7 @@ pub(crate) fn start_simple(
     context: &ChannelContext,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
@@ -154,6 +160,7 @@ pub(crate) fn start_simple(
         context,
         device,
         current_device,
+        gateway_sessions,
         ip_route,
         #[cfg(feature = "ip_proxy")]
         ip_proxy_map,
@@ -175,6 +182,7 @@ fn start_simple0(
     context: &ChannelContext,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
@@ -194,6 +202,7 @@ fn start_simple0(
             &mut extend,
             &device,
             current_device.load(),
+            &gateway_sessions,
             &ip_route,
             #[cfg(feature = "ip_proxy")]
             &ip_proxy_map,

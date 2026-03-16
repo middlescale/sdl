@@ -1,10 +1,8 @@
-use crate::channel::socket::LocalInterface;
 use crossbeam_utils::atomic::AtomicCell;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub mod callback;
 mod extension;
-pub mod gateway_relay;
 pub mod handshaker;
 pub mod maintain;
 pub mod recv_data;
@@ -13,7 +11,7 @@ pub mod registrar;
 pub mod tun_tap;
 
 const SELF_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 2);
-const CONTROL_VIP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
+pub(crate) const CONTROL_VIP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
 
 pub fn now_time() -> u64 {
     let now = std::time::SystemTime::now();
@@ -52,32 +50,6 @@ impl PeerDeviceInfo {
             wireguard,
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct BaseConfigInfo {
-    pub name: String,
-    pub token: String,
-    pub ip: Option<Ipv4Addr>,
-    pub client_secret_hash: Option<[u8; 16]>,
-    pub server_secret: bool,
-    pub device_id: String,
-    pub device_pub_key: Vec<u8>,
-    pub device_pub_key_alg: String,
-    pub server_addr: String,
-    pub name_servers: Vec<String>,
-    pub mtu: u32,
-    #[cfg(feature = "integrated_tun")]
-    #[cfg(target_os = "windows")]
-    pub tap: bool,
-    #[cfg(feature = "integrated_tun")]
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    pub device_name: Option<String>,
-    pub default_interface: LocalInterface,
-    pub auth_user_id: Option<String>,
-    pub auth_group: Option<String>,
-    pub auth_ticket: Option<String>,
-    pub auth_only: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

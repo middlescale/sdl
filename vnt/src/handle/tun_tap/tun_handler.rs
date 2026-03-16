@@ -13,6 +13,7 @@ use tun_rs::SyncDevice;
 use crate::channel::context::ChannelContext;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
+use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
@@ -46,6 +47,7 @@ pub fn start(
     context: ChannelContext,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
@@ -61,6 +63,7 @@ pub fn start(
                 &context,
                 device,
                 current_device,
+                gateway_sessions,
                 ip_route,
                 #[cfg(feature = "ip_proxy")]
                 ip_proxy_map,
@@ -78,6 +81,7 @@ pub fn start(
 
 fn broadcast(
     sender: &ChannelContext,
+    gateway_sessions: &GatewaySessions,
     net_packet: &mut NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
     device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
@@ -101,7 +105,7 @@ fn broadcast(
             overflow = true;
             break;
         }
-        if let Some(route) = sender.route_table.get_one_p2p_route(&peer_ip) {
+        if let Some(route) = sender.route_manager().direct_route(&peer_ip) {
             if sender.send_by_key(&net_packet, route.route_key()).is_ok() {
                 p2p_ips.push(peer_ip);
                 continue;
@@ -119,7 +123,7 @@ fn broadcast(
     }
     if p2p_ips.is_empty() {
         //都没有p2p则直接由服务器转发
-        crate::handle::gateway_relay::send_relay(sender, &net_packet)?;
+        gateway_sessions.send_relay(&net_packet)?;
         return Ok(());
     }
 
@@ -137,7 +141,7 @@ fn broadcast(
     let mut broadcast = BroadcastPacket::unchecked(server_packet.payload_mut());
     broadcast.set_address(&p2p_ips)?;
     broadcast.set_data(net_packet.buffer())?;
-    crate::handle::gateway_relay::send_relay(sender, &server_packet)?;
+    gateway_sessions.send_relay(&server_packet)?;
     Ok(())
 }
 
@@ -152,6 +156,7 @@ pub(crate) fn handle(
     extend: &mut [u8],
     device_writer: &SyncDevice,
     current_device: CurrentDeviceInfo,
+    gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
     #[cfg(feature = "ip_proxy")] proxy_map: &Option<IpProxyMap>,
     client_cipher: &Cipher,
@@ -179,7 +184,7 @@ pub(crate) fn handle(
     net_packet.set_source(src_ip);
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
-        crate::handle::gateway_relay::send_relay(context, &net_packet)?;
+        gateway_sessions.send_relay(&net_packet)?;
         return Ok(());
     }
     if !dest_ip.is_multicast() && !dest_ip.is_broadcast() && current_device.broadcast_ip != dest_ip
@@ -225,15 +230,21 @@ pub(crate) fn handle(
     if is_broadcast {
         // 广播 发送到直连目标
         client_cipher.encrypt_ipv4(&mut net_packet)?;
-        broadcast(context, &mut net_packet, &current_device, device_map)?;
+        broadcast(
+            context,
+            gateway_sessions,
+            &mut net_packet,
+            &current_device,
+            device_map,
+        )?;
         return Ok(());
     }
 
     client_cipher.encrypt_ipv4(&mut net_packet)?;
-    if let Some(route) = context.route_table.get_one_p2p_route(&dest_ip) {
+    if let Some(route) = context.route_manager().direct_route(&dest_ip) {
         context.send_by_key(&net_packet, route.route_key())?;
     } else {
-        crate::handle::gateway_relay::send_relay(context, &net_packet)?;
+        gateway_sessions.send_relay(&net_packet)?;
     }
     Ok(())
 }

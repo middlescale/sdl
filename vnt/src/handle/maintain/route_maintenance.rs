@@ -5,7 +5,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use crate::channel::context::ChannelContext;
 use crate::channel::idle::{Idle, IdleType};
 use crate::handle::callback::{ErrorType, VntCallback};
-use crate::handle::{change_status, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::{change_status, ConnectStatus, CurrentDeviceInfo};
 use crate::ErrorInfo;
 
 pub fn next_cleanup_delay<Call: VntCallback>(
@@ -28,11 +28,4 @@ pub fn next_cleanup_delay<Call: VntCallback>(
         IdleType::Sleep(duration) => duration,
         IdleType::None => Duration::from_millis(3000),
     }
-}
-
-pub fn should_probe_peer(current_device: &CurrentDeviceInfo, peer: &PeerDeviceInfo) -> bool {
-    peer.status.is_online()
-        && !peer.wireguard
-        && !current_device.is_gateway_vip(&peer.virtual_ip)
-        && current_device.status.online()
 }

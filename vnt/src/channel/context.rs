@@ -15,6 +15,7 @@ use crate::channel::sender::{AcceptSocketSender, PacketSender};
 use crate::channel::socket::LocalInterface;
 use crate::channel::{ConnectProtocol, RouteKey, UseChannelType};
 use crate::core::Config;
+use crate::data_plane::route_manager::RouteManager;
 use crate::protocol::NetPacket;
 use crate::util::limit::TrafficMeterMultiAddress;
 
@@ -103,8 +104,11 @@ pub struct ContextInner {
 }
 
 impl ContextInner {
+    pub fn route_manager(&self) -> RouteManager<'_> {
+        RouteManager::new(&self.route_table)
+    }
     pub fn use_channel_type(&self) -> UseChannelType {
-        self.route_table.use_channel_type
+        self.route_manager().use_channel_type()
     }
     pub fn default_interface(&self) -> &LocalInterface {
         &self.default_interface
@@ -123,7 +127,7 @@ impl ContextInner {
         route_key.protocol().is_udp() && route_key.index < self.main_udp_socket.len()
     }
     pub fn latency_first(&self) -> bool {
-        self.route_table.latency_first
+        self.route_manager().latency_first()
     }
     /// 切换NAT类型，不同的nat打洞模式会有不同
     pub fn switch(
@@ -265,7 +269,7 @@ impl ContextInner {
             if e.kind() != io::ErrorKind::NotFound {
                 log::warn!("{}:{:?}", id, e);
             }
-            if !self.route_table.use_channel_type.is_only_p2p() && send_default {
+            if !self.route_manager().use_channel_type().is_only_p2p() && send_default {
                 //符合条件再发到服务器转发
                 self.send_default(buf, server_addr)?;
             }
@@ -276,7 +280,7 @@ impl ContextInner {
     pub fn send_by_id<B: AsRef<[u8]>>(&self, buf: &NetPacket<B>, id: &Ipv4Addr) -> io::Result<()> {
         let mut c = 0;
         loop {
-            let route = self.route_table.get_route(c, id)?;
+            let route = self.route_manager().select_route(c, id)?;
             return if let Err(e) = self.send_by_key(buf, route.route_key()) {
                 //降低发送速率
                 if e.kind() == io::ErrorKind::WouldBlock {
@@ -325,6 +329,6 @@ impl ContextInner {
         Ok(())
     }
     pub fn remove_route(&self, ip: &Ipv4Addr, route_key: RouteKey) {
-        self.route_table.remove_route(ip, route_key)
+        self.route_manager().remove_path(ip, route_key)
     }
 }

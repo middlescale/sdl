@@ -6,10 +6,12 @@ use crate::compression::Compressor;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use conn::Vnt;
+pub use runtime_context::{RuntimeConfig, VntRuntime};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 mod conn;
+mod runtime_context;
 
 pub const PUB_STUN: [&str; 4] = [
     "stun.miwifi.com",

@@ -1,9 +1,7 @@
 use anyhow::anyhow;
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 use protobuf::Message;
 
 use packet::icmp::{icmp, Kind};
@@ -13,15 +11,12 @@ use packet::ip::ipv4::packet::IpV4Packet;
 use crate::channel::context::ChannelContext;
 use crate::channel::punch::NatInfo;
 use crate::channel::{Route, RouteKey};
-use crate::cipher::Cipher;
-use crate::external_route::AllowExternalRoute;
+use crate::core::VntRuntime;
 use crate::handle::extension::handle_extension_tail;
-use crate::handle::maintain::PunchSender;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
 #[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::{IpProxyMap, ProxyHandler};
-use crate::nat::NatTest;
+use crate::ip_proxy::ProxyHandler;
 use crate::proto::message::{PunchInfo, PunchNatType};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::ControlPacket;
@@ -34,39 +29,12 @@ use crate::tun_tap_device::vnt_device::DeviceWrite;
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
     device: Device,
-    client_cipher: Cipher,
-    punch_sender: PunchSender,
-    peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-    nat_test: NatTest,
-    route: AllowExternalRoute,
-    #[cfg(feature = "ip_proxy")]
-    #[cfg(feature = "integrated_tun")]
-    ip_proxy_map: Option<IpProxyMap>,
+    runtime: Arc<VntRuntime>,
 }
 
 impl<Device: DeviceWrite> ClientPacketHandler<Device> {
-    pub fn new(
-        device: Device,
-        client_cipher: Cipher,
-        punch_sender: PunchSender,
-        peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-        nat_test: NatTest,
-        route: AllowExternalRoute,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(feature = "ip_proxy")]
-        ip_proxy_map: Option<IpProxyMap>,
-    ) -> Self {
-        Self {
-            device,
-            client_cipher,
-            punch_sender,
-            peer_nat_info_map,
-            nat_test,
-            route,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(feature = "ip_proxy")]
-            ip_proxy_map,
-        }
+    pub fn new(runtime: Arc<VntRuntime>, device: Device) -> Self {
+        Self { device, runtime }
     }
 }
 
@@ -79,10 +47,10 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        self.client_cipher.decrypt_ipv4(&mut net_packet)?;
+        self.runtime.client_cipher.decrypt_ipv4(&mut net_packet)?;
         context
-            .route_table
-            .update_read_time(&net_packet.source(), &route_key);
+            .route_manager()
+            .touch_path(&net_packet.source(), &route_key);
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -139,7 +107,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 net_packet.set_source(destination);
                                 net_packet.set_destination(source);
                                 //不管加不加密，和接收到的数据长度都一致
-                                self.client_cipher.encrypt_ipv4(&mut net_packet)?;
+                                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
                                 context.send_by_key(&net_packet, route_key)?;
                                 return Ok(());
                             }
@@ -155,7 +123,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         || real_dest == current_device.broadcast_ip
                         || real_dest.is_unspecified())
                 {
-                    if !self.route.allow(&real_dest) {
+                    if !self.runtime.out_external_route.allow(&real_dest) {
                         //拦截不符合的目标
                         return Ok(());
                     }
@@ -167,7 +135,11 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             }
                             let destination_port =
                                 u16::from_be_bytes(payload[2..4].try_into().unwrap());
-                            if self.nat_test.is_local_tcp(real_dest, destination_port) {
+                            if self
+                                .runtime
+                                .nat_test
+                                .is_local_tcp(real_dest, destination_port)
+                            {
                                 return Ok(());
                             }
                         }
@@ -178,7 +150,11 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             }
                             let destination_port =
                                 u16::from_be_bytes(payload[2..4].try_into().unwrap());
-                            if self.nat_test.is_local_udp(real_dest, destination_port) {
+                            if self
+                                .runtime
+                                .nat_test
+                                .is_local_udp(real_dest, destination_port)
+                            {
                                 return Ok(());
                             }
                         }
@@ -186,7 +162,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     }
                     #[cfg(feature = "ip_proxy")]
                     #[cfg(feature = "integrated_tun")]
-                    if let Some(ip_proxy_map) = &self.ip_proxy_map {
+                    if let Some(ip_proxy_map) = &self.runtime.ip_proxy_map {
                         if ip_proxy_map.recv_handle(&mut ipv4, source, destination)? {
                             return Ok(());
                         }
@@ -216,12 +192,12 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PingPacket(_) => {
                 let route = Route::from_default_rt(route_key, metric);
-                context.route_table.add_route_if_absent(source, route);
+                context.route_manager().add_path_if_absent(source, route);
                 net_packet.set_transport_protocol(control_packet::Protocol::Pong.into());
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
-                self.client_cipher.encrypt_ipv4(&mut net_packet)?;
+                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
                 context.send_by_key(&net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
@@ -231,7 +207,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, metric, rt);
-                context.route_table.add_route(source, route);
+                context.route_manager().add_path(source, route);
             }
             ControlPacket::PunchRequest => {
                 log::info!("PunchRequest={:?},source={}", route_key, source);
@@ -240,6 +216,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 //忽略掉来源于自己的包
                 if self
+                    .runtime
                     .nat_test
                     .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
                 {
@@ -251,7 +228,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
-                self.client_cipher.encrypt_ipv4(&mut net_packet)?;
+                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
                 context.send_by_key(&net_packet, route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
@@ -263,13 +240,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 if self
+                    .runtime
                     .nat_test
                     .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
                 {
                     return Ok(());
                 }
                 let route = Route::from_default_rt(route_key, metric);
-                context.route_table.add_route_if_absent(source, route);
+                context.route_manager().add_path_if_absent(source, route);
             }
             ControlPacket::AddrRequest => match route_key.addr.ip() {
                 std::net::IpAddr::V4(ipv4) => {
@@ -283,7 +261,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
-                    self.client_cipher.encrypt_ipv4(&mut packet)?;
+                    self.runtime.client_cipher.encrypt_ipv4(&mut packet)?;
                     context.send_by_key(&packet, route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
@@ -310,7 +288,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 let public_ips = punch_info
                     .public_ip_list
                     .iter()
-                    .map(|v| Ipv4Addr::from(v.to_be_bytes()))
+                    .map(|v: &u32| Ipv4Addr::from(v.to_be_bytes()))
                     .collect();
                 let local_ipv4 = Some(Ipv4Addr::from(punch_info.local_ip.to_be_bytes()));
                 let tcp_port = punch_info.tcp_port as u16;
@@ -343,12 +321,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 );
                 {
                     let peer_nat_info = peer_nat_info.clone();
-                    self.peer_nat_info_map.write().insert(source, peer_nat_info);
+                    self.runtime
+                        .peer_nat_info_map
+                        .write()
+                        .insert(source, peer_nat_info);
                 }
                 if !punch_info.reply {
                     let mut punch_reply = PunchInfo::new();
                     punch_reply.reply = true;
-                    let nat_info = self.nat_test.nat_info();
+                    let nat_info = self.runtime.nat_test.nat_info();
                     punch_reply.public_ip_list = nat_info
                         .public_ips
                         .iter()
@@ -384,12 +365,18 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     punch_packet.set_source(current_device.virtual_ip());
                     punch_packet.set_destination(source);
                     punch_packet.set_payload(&bytes)?;
-                    self.client_cipher.encrypt_ipv4(&mut punch_packet)?;
-                    if self.punch_sender.send(true, source, peer_nat_info) {
+                    self.runtime.client_cipher.encrypt_ipv4(&mut punch_packet)?;
+                    if self
+                        .runtime
+                        .punch_coordinator
+                        .submit_from_peer(source, peer_nat_info)
+                    {
                         context.send_by_key(&punch_packet, route_key)?;
                     }
                 } else {
-                    self.punch_sender.send(false, source, peer_nat_info);
+                    self.runtime
+                        .punch_coordinator
+                        .submit_local(source, peer_nat_info);
                 }
             }
             other_turn_packet::Protocol::Unknown(e) => {

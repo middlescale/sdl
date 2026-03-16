@@ -1,27 +1,15 @@
-use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::{Mutex, RwLock};
-
 use crate::channel::context::ChannelContext;
 use crate::channel::handler::RecvChannelHandler;
-use crate::channel::punch::NatInfo;
 use crate::channel::RouteKey;
-use crate::cipher::Cipher;
-use crate::external_route::{AllowExternalRoute, ExternalRoute};
+use crate::core::VntRuntime;
 use crate::handle::callback::VntCallback;
-use crate::handle::handshaker::Handshake;
-use crate::handle::maintain::PunchSender;
 use crate::handle::recv_data::client::ClientPacketHandler;
 use crate::handle::recv_data::server::ServerPacketHandler;
 use crate::handle::recv_data::turn::TurnPacketHandler;
-use crate::handle::{BaseConfigInfo, CurrentDeviceInfo, PeerDeviceInfo, SELF_IP};
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::IpProxyMap;
-use crate::nat::NatTest;
+use crate::handle::{CurrentDeviceInfo, SELF_IP};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 
@@ -31,11 +19,10 @@ mod turn;
 
 #[derive(Clone)]
 pub struct RecvDataHandler<Call, Device> {
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    runtime: Arc<VntRuntime>,
     turn: TurnPacketHandler,
     client: ClientPacketHandler<Device>,
     server: ServerPacketHandler<Call, Device>,
-    nat_test: NatTest,
 }
 
 impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHandler<Call, Device> {
@@ -52,6 +39,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHand
         //判断stun响应包
         if route_key.protocol().is_udp() {
             if let Ok(rs) = self
+                .runtime
                 .nat_test
                 .recv_data(route_key.index(), route_key.addr, buf)
             {
@@ -72,58 +60,15 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHand
 }
 
 impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
-    pub fn new(
-        client_cipher: Cipher,
-        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        device: Device,
-        device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-        config_info: BaseConfigInfo,
-        nat_test: NatTest,
-        callback: Call,
-        punch_sender: PunchSender,
-        peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-        external_route: ExternalRoute,
-        route: AllowExternalRoute,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(feature = "ip_proxy")]
-        ip_proxy_map: Option<IpProxyMap>,
-        handshake: Handshake,
-        gateway_ticket_expire_unix_ms: Arc<AtomicCell<i64>>,
-        #[cfg(feature = "integrated_tun")]
-        tun_device_helper: crate::tun_tap_device::tun_create_helper::TunDeviceHelper,
-    ) -> Self {
-        let server = ServerPacketHandler::new(
-            current_device.clone(),
-            device.clone(),
-            device_map,
-            config_info,
-            nat_test.clone(),
-            callback,
-            external_route.clone(),
-            handshake,
-            punch_sender.clone(),
-            gateway_ticket_expire_unix_ms,
-            #[cfg(feature = "integrated_tun")]
-            tun_device_helper,
-        );
-        let client = ClientPacketHandler::new(
-            device.clone(),
-            client_cipher,
-            punch_sender,
-            peer_nat_info_map,
-            nat_test.clone(),
-            route,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(feature = "ip_proxy")]
-            ip_proxy_map,
-        );
+    pub fn new(runtime: Arc<VntRuntime>, device: Device, callback: Call) -> Self {
+        let server = ServerPacketHandler::new(runtime.clone(), device.clone(), callback);
+        let client = ClientPacketHandler::new(runtime.clone(), device.clone());
         let turn = TurnPacketHandler::new();
         Self {
-            current_device,
+            runtime,
             turn,
             client,
             server,
-            nat_test,
         }
     }
     fn handle0(
@@ -140,7 +85,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             log::warn!("丢弃过时包:{:?} {}", net_packet.head(), route_key.addr);
             return Ok(());
         }
-        let current_device = self.current_device.load();
+        let current_device = self.runtime.current_device.load();
         let dest = net_packet.destination();
         if dest == current_device.virtual_ip
             || dest.is_broadcast()

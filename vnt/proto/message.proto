@@ -48,12 +48,47 @@ message GatewayAccessGrant {
     repeated string gateway_addrs = 1;
     string gateway_server_name = 2;
     bytes gateway_ca_pem = 3;
-    string ticket = 4;
+    bytes ticket = 4;
     int64 ticket_expire_unix_ms = 5;
     uint64 session_id = 6;
     uint64 policy_rev = 7;
     reserved 8, 9;
     repeated string gateway_capabilities = 10;
+    uint32 lease_secs = 11;
+    uint32 grace_secs = 12;
+    string gateway_group_id = 13;
+}
+message RefreshGatewayGrantRequest {
+    fixed32 virtual_ip = 1;
+    string device_id = 2;
+    uint64 last_session_id = 3;
+    uint64 last_policy_rev = 4;
+    bool force_reissue = 5;
+}
+message RefreshGatewayGrantResponse {
+    bool has_update = 1;
+    GatewayAccessGrant gateway_access_grant = 2;
+    string reason = 3;
+}
+message GatewayTicketClaims {
+    string ticket_id = 1;
+    string device_id = 2;
+    fixed32 virtual_ip = 3;
+    uint64 session_id = 4;
+    uint64 policy_revision = 5;
+    repeated string gateway_ids = 6;
+    string gateway_group_id = 7;
+    int64 issued_at_unix_ms = 8;
+    int64 not_before_unix_ms = 9;
+    int64 expire_unix_ms = 10;
+    uint32 lease_cap_secs = 11;
+    uint32 grace_cap_secs = 12;
+}
+message SignedGatewayTicket {
+    string alg = 1;
+    string key_id = 2;
+    bytes claims = 3;
+    bytes signature = 4;
 }
 message GatewayReportRequest {
     string gateway_id = 1;
@@ -72,12 +107,13 @@ message GatewayConnectHello {
     string device_id = 1;
     fixed32 virtual_ip = 2;
     uint64 session_id = 3;
-    string ticket = 4;
+    bytes ticket = 4;
     bytes nonce = 5;
     int64 client_time_unix_ms = 6;
     bytes device_pub_key = 7;
     string device_pub_key_alg = 8;
     bytes device_signature = 9;
+    bool reauth = 10;
 }
 message GatewayConnectAck {
     bool ok = 1;
@@ -85,6 +121,9 @@ message GatewayConnectAck {
     uint64 session_id = 3;
     uint32 negotiated_mtu = 4;
     uint32 keepalive_secs = 5;
+    int64 lease_expire_unix_ms = 6;
+    int64 grace_expire_unix_ms = 7;
+    bool reauth_required = 8;
 }
 message DeviceAuthRequest {
     string user_id = 1;

@@ -5,7 +5,7 @@ use crossbeam_utils::atomic::AtomicCell;
 
 use crate::channel::context::ChannelContext;
 use crate::channel::punch::NatType;
-use crate::handle::{BaseConfigInfo, CurrentDeviceInfo};
+use crate::handle::CurrentDeviceInfo;
 use crate::nat::NatTest;
 use crate::util::Scheduler;
 
@@ -14,7 +14,6 @@ pub fn addr_request(
     context: ChannelContext,
     current_device_info: Arc<AtomicCell<CurrentDeviceInfo>>,
     nat_test: NatTest,
-    _config: BaseConfigInfo,
 ) {
     pub_address_request(scheduler, context, current_device_info.clone(), nat_test, 0);
 }

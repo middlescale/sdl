@@ -1,17 +1,13 @@
 use anyhow::Context;
-use quinn::crypto::rustls::QuicClientConfig;
-use quinn::{ClientConfig, Endpoint};
-use rustls::RootCertStore;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
 use crate::channel::context::ChannelContext;
 use crate::channel::handler::RecvChannelHandler;
 use crate::channel::sender::PacketSender;
-use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
+use crate::channel::{RouteKey, BUFFER_SIZE};
+use crate::transport::quic_channel::{connect, frame_quic_packet, read_framed_packets_with};
 use crate::util::StopManager;
 
 pub fn quic_connect_accept<H>(
@@ -58,9 +54,7 @@ async fn connect_quic_handle<H>(
         let recv_handler = recv_handler.clone();
         let context = context.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                connect_quic(data, server_name, addr, recv_handler, context).await
-            {
+            if let Err(e) = connect_quic(data, server_name, addr, recv_handler, context).await {
                 log::warn!("quic链接终止:{:?}", e);
             }
         });
@@ -77,42 +71,18 @@ async fn connect_quic<H>(
 where
     H: RecvChannelHandler,
 {
-    let mut roots = RootCertStore::empty();
-    let certs = rustls_native_certs::load_native_certs();
-    for cert in certs.certs {
-        if let Err(e) = roots.add(cert) {
-            log::warn!("跳过系统证书 {:?}", e);
-        }
-    }
-    if roots.is_empty() {
-        return Err(anyhow::anyhow!(
-            "no valid system root certificates for quic"
-        ));
-    }
-
-    let mut client_crypto = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    client_crypto.alpn_protocols = vec![b"vnt-control".to_vec()];
-    let quic_crypto = QuicClientConfig::try_from(client_crypto)?;
-    let client_config = ClientConfig::new(Arc::new(quic_crypto));
-
-    let bind_addr: SocketAddr = if addr.is_ipv4() {
-        "0.0.0.0:0".parse().unwrap()
-    } else {
-        "[::]:0".parse().unwrap()
-    };
-    let mut endpoint = Endpoint::client(bind_addr)?;
-    endpoint.set_default_client_config(client_config);
-
-    let server_name = parse_server_name(&server_name, addr);
-    let connecting = endpoint.connect(addr, &server_name)?;
-    let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
-    let (mut send, mut recv) = conn.open_bi().await?;
+    let _ = server_name;
+    let connection = connect(addr, b"vnt-control").await?;
+    let crate::transport::quic_channel::QuicClientConnection {
+        endpoint,
+        route_key,
+        mut send,
+        mut recv,
+        ..
+    } = connection;
     send.write_all(&frame_quic_packet(&data)).await?;
 
     let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, 0, addr);
     context
         .packet_map
         .write()
@@ -134,29 +104,6 @@ where
     Ok(())
 }
 
-fn parse_server_name(server_name: &str, addr: SocketAddr) -> String {
-    let mut val = server_name.to_lowercase();
-    if let Some(v) = val.strip_prefix("quic://") {
-        val = v.to_string();
-    }
-    if let Some(v) = val.strip_prefix("udp://") {
-        val = v.to_string();
-    }
-    if let Some(v) = val.strip_prefix("tcp://") {
-        val = v.to_string();
-    }
-    let host = if let Some(v) = val.strip_prefix('[') {
-        v.split(']').next().unwrap_or_default().to_string()
-    } else {
-        val.split(':').next().unwrap_or_default().to_string()
-    };
-    if host.is_empty() {
-        addr.ip().to_string()
-    } else {
-        host
-    }
-}
-
 async fn quic_read<H>(
     recv: &mut quinn::RecvStream,
     recv_handler: H,
@@ -166,40 +113,9 @@ async fn quic_read<H>(
 where
     H: RecvChannelHandler,
 {
-    let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
-    let mut pending = Vec::with_capacity(BUFFER_SIZE * 2);
-    loop {
-        let len = recv.read(&mut buf).await?;
-        let Some(len) = len else {
-            return Ok(());
-        };
-        pending.extend_from_slice(&buf[..len]);
-        loop {
-            if pending.len() < 4 {
-                break;
-            }
-            let frame_len =
-                u32::from_be_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
-            if frame_len == 0 || frame_len > BUFFER_SIZE * 16 {
-                return Err(anyhow::anyhow!("invalid quic frame length: {}", frame_len));
-            }
-            if pending.len() < 4 + frame_len {
-                break;
-            }
-            let mut packet = pending[4..4 + frame_len].to_vec();
-            pending.drain(..4 + frame_len);
-            if packet.len() < 12 {
-                continue;
-            }
-            recv_handler.handle(&mut packet, &mut extend, route_key, context);
-        }
-    }
-}
-
-fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
-    let mut framed = Vec::with_capacity(4 + data.len());
-    framed.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    framed.extend_from_slice(data);
-    framed
+    read_framed_packets_with(recv, |mut packet| {
+        recv_handler.handle(&mut packet, &mut extend, route_key, context);
+    })
+    .await
 }
