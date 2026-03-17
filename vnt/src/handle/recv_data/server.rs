@@ -11,12 +11,12 @@ use packet::ip::ipv4::packet::IpV4Packet;
 use parking_lot::Mutex;
 use protobuf::Message;
 
-use crate::channel::punch::{NatInfo, NatType, PunchModel};
-use crate::channel::{Route, RouteKey};
 use crate::core::VntRuntime;
+use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, VntCallback};
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
     DeviceAuthAck, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult,
     PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
@@ -292,9 +292,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         .add_path_if_absent(virtual_gateway, route);
                     let public_ip = response.public_ip.into();
                     let public_port = response.public_port as u16;
-                    self.runtime
-                        .nat_test
-                        .update_addr(route_key.index(), public_ip, public_port);
+                    self.runtime.nat_test.update_addr(public_ip, public_port);
                     if route_key.protocol().is_tcp() {
                         log::info!("更新公网tcp端口 {public_port}");
                         self.runtime.nat_test.update_tcp_port(public_port);
@@ -733,11 +731,9 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             }
             ControlPacket::AddrResponse(addr_packet) => {
                 //更新本地公网ipv4
-                self.runtime.nat_test.update_addr(
-                    route_key.index(),
-                    addr_packet.ipv4(),
-                    addr_packet.port(),
-                );
+                self.runtime
+                    .nat_test
+                    .update_addr(addr_packet.ipv4(), addr_packet.port());
             }
             _ => {}
         }
@@ -826,7 +822,7 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
 #[cfg(test)]
 mod tests {
     use super::{build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result};
-    use crate::channel::punch::PunchModel;
+    use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
     use std::net::{Ipv4Addr, Ipv6Addr};
 

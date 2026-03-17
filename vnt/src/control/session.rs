@@ -79,7 +79,7 @@ impl ControlSession {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, crate::channel::RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, crate::data_plane::route::RouteKey) + Send + Sync + 'static,
     {
         self.channel.start(stop_manager.clone(), on_packet)?;
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
@@ -302,7 +302,7 @@ impl ControlSession {
                 let nat_info = runtime.nat_test.nat_info();
                 if !has_public_endpoints(&nat_info.public_ips, &nat_info.public_ports) {
                     if let Ok((data, addr)) = runtime.nat_test.send_data() {
-                        let _ = runtime.udp_channel.send_main(0, &data, addr);
+                        let _ = runtime.udp_channel.send_to(&data, addr);
                     }
                     thread::sleep(Duration::from_secs(2));
                 }

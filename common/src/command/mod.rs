@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io;
-use vnt::channel::ConnectProtocol;
 use vnt::core::Vnt;
+use vnt::transport::connect_protocol::ConnectProtocol;
 
 use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
 use crate::console_out;

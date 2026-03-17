@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::thread;
 
-use crate::channel::RouteKey;
 use crate::core::VntRuntime;
+use crate::data_plane::route::RouteKey;
 use crate::handle::callback::VntCallback;
 use crate::handle::recv_data::client::ClientPacketHandler;
 use crate::handle::recv_data::server::ServerPacketHandler;
@@ -30,11 +30,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
         //判断stun响应包
         if route_key.protocol().is_udp() {
-            if let Ok(rs) = self
-                .runtime
-                .nat_test
-                .recv_data(route_key.index(), route_key.addr, buf)
-            {
+            if let Ok(rs) = self.runtime.nat_test.recv_data(route_key.addr, buf) {
                 if rs {
                     return;
                 }

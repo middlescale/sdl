@@ -11,11 +11,11 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use sys_locale::get_locale;
-use vnt::channel::punch::PunchModel;
-use vnt::channel::UseChannelType;
 use vnt::cipher::CipherModel;
 use vnt::compression::Compressor;
 use vnt::core::Config;
+use vnt::data_plane::use_channel_type::UseChannelType;
+use vnt::nat::punch::PunchModel;
 
 pub fn app_home() -> io::Result<PathBuf> {
     let root_path = match std::env::current_exe() {

@@ -7,20 +7,20 @@ use std::time::Duration;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-use crate::channel::punch::{NatInfo, Punch};
-use crate::channel::punch_workers::{spawn_punch_workers, PunchCoordinator};
-use crate::channel::{Route, RouteKey};
 use crate::cipher::Cipher;
 use crate::control::ControlSession;
 use crate::core::{Config, RuntimeConfig, VntRuntime};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::recv_data::RecvDataHandler;
 use crate::handle::{maintain, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::nat::punch::{NatInfo, Punch};
+use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
 use crate::transport::quic_channel::QuicChannel;
 use crate::transport::udp_channel::UdpChannel;
@@ -149,12 +149,10 @@ impl VntInner {
         )?;
         //通道上下文
         let udp_channel = UdpChannel::bind(&config)?;
-        let channel_num = udp_channel.channel_num();
         let local_ipv6 = nat::local_ipv6();
-        let udp_ports = udp_channel.main_local_udp_port()?;
+        let udp_ports = vec![udp_channel.local_udp_port()?];
         //nat检测工具
         let nat_test = NatTest::new(
-            channel_num,
             config.stun_server.clone(),
             local_ipv4,
             local_ipv6,
@@ -180,7 +178,6 @@ impl VntInner {
         let route_table = Arc::new(RouteTable::new(
             config.use_channel_type,
             config.latency_first,
-            channel_num,
         ));
         let route_manager = RouteManager::new(
             route_table.clone(),
@@ -230,7 +227,7 @@ impl VntInner {
         {
             let handler = handler.clone();
             gateway_sessions.start(stop_manager.clone(), move |mut packet, route_key| {
-                let mut extend = [0u8; crate::channel::BUFFER_SIZE];
+                let mut extend = [0u8; crate::protocol::BUFFER_SIZE];
                 handler.handle(&mut packet, &mut extend, route_key);
             })?;
         }
@@ -266,7 +263,7 @@ impl VntInner {
             {
                 let handler = control_handler;
                 move |mut packet, route_key| {
-                    let mut extend = [0u8; crate::channel::BUFFER_SIZE];
+                    let mut extend = [0u8; crate::protocol::BUFFER_SIZE];
                     handler.handle(&mut packet, &mut extend, route_key);
                 }
             },

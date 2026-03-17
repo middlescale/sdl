@@ -2,8 +2,9 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
-use crate::channel::{Route, RouteKey, UseChannelType};
 use crate::core::VntRuntime;
+use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::use_channel_type::UseChannelType;
 
 #[derive(Clone)]
 pub struct DataChannel {
@@ -96,12 +97,13 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     use super::{select_data_path, DataPath};
-    use crate::channel::{ConnectProtocol, Route, UseChannelType};
+    use crate::data_plane::route::Route;
+    use crate::data_plane::use_channel_type::UseChannelType;
+    use crate::transport::connect_protocol::ConnectProtocol;
 
     fn sample_route() -> Route {
         Route::new(
             ConnectProtocol::UDP,
-            0,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
             1,
             10,

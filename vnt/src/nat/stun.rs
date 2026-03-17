@@ -3,7 +3,7 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
-use crate::channel::punch::NatType;
+use crate::nat::punch::NatType;
 use crate::transport::socket::{bind_udp, LocalInterface};
 use rand::RngCore;
 use std::net::UdpSocket;

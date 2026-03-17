@@ -1,12 +1,12 @@
 use fnv::FnvHashMap;
-use std::io;
 use std::net::Ipv4Addr;
 use std::time::Instant;
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::RwLock;
 
-use crate::channel::{Route, RouteKey, UseChannelType, DEFAULT_RT};
+use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::use_channel_type::UseChannelType;
 
 type RouteLiveness = AtomicCell<Instant>;
 type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
@@ -14,46 +14,16 @@ type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
 pub struct RouteTable {
     pub(crate) route_table: RwLock<RouteMap>,
     pub(crate) latency_first: bool,
-    pub(crate) channel_num: usize,
     pub(crate) use_channel_type: UseChannelType,
 }
 
 impl RouteTable {
-    pub(crate) fn new(
-        use_channel_type: UseChannelType,
-        latency_first: bool,
-        channel_num: usize,
-    ) -> Self {
+    pub(crate) fn new(use_channel_type: UseChannelType, latency_first: bool) -> Self {
         Self {
             route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
             use_channel_type,
             latency_first,
-            channel_num,
         }
-    }
-
-    pub(crate) fn get_route(&self, index: usize, vip: &Ipv4Addr) -> io::Result<Route> {
-        if let Some(v) = self.route_table.read().get(vip) {
-            if self.latency_first {
-                if let Some((route, _)) = v.first() {
-                    return Ok(*route);
-                }
-            } else {
-                let len = v.len();
-                if len != 0 {
-                    let route = &v[index % len].0;
-                    if route.rt != DEFAULT_RT {
-                        return Ok(*route);
-                    }
-                    for (route, _) in v {
-                        if route.rt != DEFAULT_RT {
-                            return Ok(*route);
-                        }
-                    }
-                }
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::NotFound, "route not found"))
     }
 
     pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -148,7 +118,7 @@ impl RouteTable {
         self.route_table
             .read()
             .get(vip)
-            .map(|v| v.iter().filter(|(k, _)| k.is_p2p()).count() >= self.channel_num)
+            .map(|v| v.iter().any(|(k, _)| k.is_p2p()))
             .unwrap_or(false)
     }
 
@@ -215,20 +185,21 @@ impl RouteTable {
 #[cfg(test)]
 mod tests {
     use super::RouteTable;
-    use crate::channel::{ConnectProtocol, Route, RouteKey, UseChannelType};
+    use crate::data_plane::route::{Route, RouteKey};
+    use crate::data_plane::use_channel_type::UseChannelType;
+    use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     fn route_key(port: u16) -> RouteKey {
         RouteKey::new(
             ConnectProtocol::UDP,
-            0,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),
         )
     }
 
     #[test]
     fn relay_mode_rejects_direct_routes() {
-        let table = RouteTable::new(UseChannelType::Relay, false, 1);
+        let table = RouteTable::new(UseChannelType::Relay, false);
         let vip = Ipv4Addr::new(10, 0, 0, 2);
         table.add_route(vip, Route::from_default_rt(route_key(1000), 1));
         assert!(table.get_first_route(&vip).is_none());
@@ -236,7 +207,7 @@ mod tests {
 
     #[test]
     fn p2p_mode_rejects_relay_routes() {
-        let table = RouteTable::new(UseChannelType::P2p, false, 1);
+        let table = RouteTable::new(UseChannelType::P2p, false);
         let vip = Ipv4Addr::new(10, 0, 0, 3);
         table.add_route(vip, Route::from_default_rt(route_key(1001), 2));
         assert!(table.get_first_route(&vip).is_none());
@@ -244,7 +215,7 @@ mod tests {
 
     #[test]
     fn direct_routes_replace_relay_routes_when_not_latency_first() {
-        let table = RouteTable::new(UseChannelType::All, false, 1);
+        let table = RouteTable::new(UseChannelType::All, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
         table.add_route(vip, Route::from_default_rt(route_key(1002), 2));
         table.add_route(vip, Route::from_default_rt(route_key(1003), 1));

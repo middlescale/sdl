@@ -1,12 +1,14 @@
 use mio::net::UdpSocket as MioUdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 
-use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
 use crate::core::Config;
+use crate::data_plane::route::RouteKey;
+use crate::protocol::BUFFER_SIZE;
+use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::limit::TrafficMeterMultiChannel;
 use crate::util::StopManager;
 
@@ -14,60 +16,30 @@ const NOTIFY: Token = Token(0);
 
 #[derive(Clone)]
 pub struct UdpChannel {
-    main_udp_socket: Arc<Vec<UdpSocket>>,
-    channel_num: usize,
+    socket: Arc<UdpSocket>,
+    dual_stack: bool,
     up_traffic_meter: Option<TrafficMeterMultiChannel>,
     down_traffic_meter: Option<TrafficMeterMultiChannel>,
 }
 
 impl UdpChannel {
     pub fn bind(config: &Config) -> anyhow::Result<Self> {
-        let mut ports = config.ports.as_ref().map_or(vec![0, 0], |v| {
-            if v.is_empty() {
-                vec![0, 0]
-            } else {
-                v.clone()
-            }
-        });
-        if config.use_channel_type.is_only_relay() {
-            ports.truncate(1);
-        }
-        assert!(!ports.is_empty(), "not channel");
-
+        let port = config
+            .ports
+            .as_ref()
+            .and_then(|ports| ports.first().copied())
+            .unwrap_or(0);
         let default_interface = config.local_interface.clone();
-        let use_ipv6 = match socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)
-        {
-            Ok(_) => true,
+        let (socket, dual_stack) = match bind_dual_stack_udp(port, &default_interface) {
+            Ok(socket) => (socket, true),
             Err(e) => {
-                log::warn!("{:?}", e);
-                false
+                log::warn!("bind dual-stack udp failed: {:?}", e);
+                (bind_ipv4_udp(port, &default_interface)?, false)
             }
         };
-
-        let mut main_udp_socket_v4 = Vec::with_capacity(ports.len());
-        let mut main_udp_socket_v6 = Vec::with_capacity(ports.len());
-        for port in &ports {
-            let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-            if use_ipv6 {
-                let (main_channel_v4, main_channel_v6) =
-                    bind_udp_v4_and_v6(*port, &default_interface)?;
-                main_udp_socket_v4.push(main_channel_v4);
-                main_udp_socket_v6.push(main_channel_v6);
-            } else {
-                let socket = crate::transport::socket::bind_udp(addr_v4, &default_interface)?;
-                let main_channel_v4: UdpSocket = socket.into();
-                main_udp_socket_v4.push(main_channel_v4);
-            }
-        }
-
-        let mut main_udp_socket =
-            Vec::with_capacity(main_udp_socket_v4.len() + main_udp_socket_v6.len());
-        let channel_num = main_udp_socket_v4.len();
-        main_udp_socket.append(&mut main_udp_socket_v4);
-        main_udp_socket.append(&mut main_udp_socket_v6);
         Ok(Self {
-            main_udp_socket: Arc::new(main_udp_socket),
-            channel_num,
+            socket: Arc::new(socket),
+            dual_stack,
             up_traffic_meter: config
                 .enable_traffic
                 .then(TrafficMeterMultiChannel::default),
@@ -77,24 +49,12 @@ impl UdpChannel {
         })
     }
 
-    pub fn channel_num(&self) -> usize {
-        self.channel_num
+    pub fn local_udp_port(&self) -> io::Result<u16> {
+        Ok(self.socket.local_addr()?.port())
     }
 
-    pub fn main_len(&self) -> usize {
-        self.main_udp_socket.len()
-    }
-
-    pub fn has_ipv6(&self) -> bool {
-        self.main_len() > self.channel_num
-    }
-
-    pub fn main_local_udp_port(&self) -> io::Result<Vec<u16>> {
-        let mut ports = Vec::with_capacity(self.channel_num);
-        for udp in self.main_udp_socket[..self.channel_num].iter() {
-            ports.push(udp.local_addr()?.port());
-        }
-        Ok(ports)
+    pub fn supports_ipv6(&self) -> bool {
+        self.dual_stack
     }
 
     pub fn up_traffic_total(&self) -> u64 {
@@ -127,29 +87,11 @@ impl UdpChannel {
             .map(|v| v.get_all_history())
     }
 
-    pub fn send_main(&self, index: usize, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        if let Some(udp) = self.main_udp_socket.get(index) {
-            udp.send_to(buf, addr)?;
-            self.record_up_traffic(index, buf.len());
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "udp main channel overflow",
-            ))
-        }
-    }
-
-    pub fn try_send_all(&self, buf: &[u8], addr: SocketAddr) {
-        self.try_send_all_main(buf, addr);
-    }
-
-    pub fn try_send_all_main(&self, buf: &[u8], addr: SocketAddr) {
-        for index in 0..self.channel_num {
-            if let Err(e) = self.send_main(index, buf, addr) {
-                log::warn!("{:?},addr={:?}", e, addr);
-            }
-        }
+    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        let addr = self.normalize_send_addr(addr);
+        self.socket.send_to(buf, addr)?;
+        self.record_up_traffic(buf.len());
+        Ok(())
     }
 
     pub fn send_by_key(&self, buf: &[u8], route_key: RouteKey) -> io::Result<()> {
@@ -159,7 +101,7 @@ impl UdpChannel {
                 format!("not udp route: {:?}", route_key.protocol()),
             ));
         }
-        self.send_main(route_key.index(), buf, route_key.addr)
+        self.send_to(buf, route_key.addr)
     }
 
     pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
@@ -169,58 +111,68 @@ impl UdpChannel {
         main_udp_listen(self.clone(), stop_manager, recv_handler)
     }
 
-    fn record_up_traffic(&self, index: usize, len: usize) {
-        if let Some(up_traffic_meter) = &self.up_traffic_meter {
-            up_traffic_meter.add_traffic(index, len);
+    fn normalize_send_addr(&self, addr: SocketAddr) -> SocketAddr {
+        if self.dual_stack {
+            if let SocketAddr::V4(addr_v4) = addr {
+                return SocketAddr::V6(SocketAddrV6::new(
+                    addr_v4.ip().to_ipv6_mapped(),
+                    addr_v4.port(),
+                    0,
+                    0,
+                ));
+            }
+        }
+        addr
+    }
+
+    fn normalize_recv_addr(&self, addr: SocketAddr) -> SocketAddr {
+        match addr {
+            SocketAddr::V6(addr_v6) => {
+                if let Some(ipv4) = addr_v6.ip().to_ipv4_mapped() {
+                    SocketAddr::new(IpAddr::V4(ipv4), addr_v6.port())
+                } else {
+                    SocketAddr::V6(addr_v6)
+                }
+            }
+            SocketAddr::V4(_) => addr,
         }
     }
 
-    fn record_down_traffic(&self, index: usize, len: usize) {
+    fn record_up_traffic(&self, len: usize) {
+        if let Some(up_traffic_meter) = &self.up_traffic_meter {
+            up_traffic_meter.add_traffic(0, len);
+        }
+    }
+
+    fn record_down_traffic(&self, len: usize) {
         if let Some(down_traffic_meter) = &self.down_traffic_meter {
-            down_traffic_meter.add_traffic(index, len);
+            down_traffic_meter.add_traffic(0, len);
         }
     }
 }
 
-fn bind_udp_v4_and_v6(
+fn bind_dual_stack_udp(
     port: u16,
     default_interface: &crate::transport::socket::LocalInterface,
-) -> anyhow::Result<(UdpSocket, UdpSocket)> {
-    let mut count = 0;
-    loop {
-        let addr_v4: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-        let socket = crate::transport::socket::bind_udp(addr_v4, default_interface)?;
-        if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
-            log::warn!("set_recv_buffer_size {:?}", e);
-        }
-        let main_channel_v4: UdpSocket = socket.into();
-        let addr = main_channel_v4.local_addr()?;
-        let addr_v6: SocketAddr = format!("[::]:{}", addr.port()).parse().unwrap();
-        let socket = if port == 0 {
-            match crate::transport::socket::bind_udp(addr_v6, default_interface) {
-                Ok(socket) => socket,
-                Err(e) => {
-                    if count > 10 {
-                        return Err(e);
-                    }
-                    if let Some(e) = e.downcast_ref::<std::io::Error>() {
-                        if e.kind() == std::io::ErrorKind::AddrInUse {
-                            count += 1;
-                            continue;
-                        }
-                    }
-                    Err(e)?
-                }
-            }
-        } else {
-            crate::transport::socket::bind_udp(addr_v6, default_interface)?
-        };
-        if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
-            log::warn!("set_recv_buffer_size {:?}", e);
-        }
-        let main_channel_v6: UdpSocket = socket.into();
-        return Ok((main_channel_v4, main_channel_v6));
+) -> anyhow::Result<UdpSocket> {
+    let addr_v6: SocketAddr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
+    let socket = crate::transport::socket::bind_udp_ops(addr_v6, false, default_interface)?;
+    if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
+        log::warn!("set_recv_buffer_size {:?}", e);
     }
+    Ok(socket.into())
+}
+
+fn bind_ipv4_udp(
+    port: u16,
+    default_interface: &crate::transport::socket::LocalInterface,
+) -> anyhow::Result<UdpSocket> {
+    let addr_v4: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let socket = crate::transport::socket::bind_udp(addr_v4, default_interface)?;
+    if let Err(e) = socket.set_recv_buffer_size(2 * 1024 * 1024) {
+        log::warn!("set_recv_buffer_size {:?}", e);
+    }
+    Ok(socket.into())
 }
 
 fn main_udp_listen<H>(
@@ -256,17 +208,13 @@ where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
-    let mut udps = Vec::with_capacity(udp_channel.main_len());
-    for (index, udp) in udp_channel.main_udp_socket.iter().enumerate() {
-        let udp_socket = udp.try_clone()?;
-        udp_socket.set_nonblocking(true)?;
-        let mut mio_udp = MioUdpSocket::from_std(udp_socket);
-        poll.registry()
-            .register(&mut mio_udp, Token(index + 1), Interest::READABLE)?;
-        udps.push(mio_udp);
-    }
+    let udp_socket = udp_channel.socket.try_clone()?;
+    udp_socket.set_nonblocking(true)?;
+    let mut udp = MioUdpSocket::from_std(udp_socket);
+    poll.registry()
+        .register(&mut udp, Token(1), Interest::READABLE)?;
 
-    let mut events = Events::with_capacity(udps.len() + 1);
+    let mut events = Events::with_capacity(2);
     let mut extend = [0; BUFFER_SIZE];
     loop {
         if let Err(e) = poll.poll(&mut events, None) {
@@ -274,34 +222,145 @@ where
             continue;
         }
         for event in events.iter() {
-            let index = match event.token() {
+            match event.token() {
                 NOTIFY => return Ok(()),
-                Token(index) => index - 1,
-            };
-            let udp = if let Some(udp) = udps.get(index) {
-                udp
-            } else {
-                log::error!("invalid udp token {:?}", event.token());
-                continue;
-            };
+                Token(1) => {}
+                token => {
+                    log::error!("invalid udp token {:?}", token);
+                    continue;
+                }
+            }
             loop {
                 match udp.recv_from(&mut buf) {
                     Ok((len, addr)) => {
-                        udp_channel.record_down_traffic(index, len);
+                        udp_channel.record_down_traffic(len);
                         recv_handler(
                             &mut buf[..len],
                             &mut extend,
-                            RouteKey::new(ConnectProtocol::UDP, index, addr),
+                            RouteKey::new(
+                                ConnectProtocol::UDP,
+                                udp_channel.normalize_recv_addr(addr),
+                            ),
                         )
                     }
                     Err(e) => {
                         if e.kind() == io::ErrorKind::WouldBlock {
                             break;
                         }
-                        log::error!("main_udp_listen_{}={:?}", index, e);
+                        log::error!("main_udp_listen={:?}", e);
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UdpChannel;
+    use crate::data_plane::route::RouteKey;
+    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::util::limit::TrafficMeterMultiChannel;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn test_channel(socket: UdpSocket, dual_stack: bool, enable_traffic: bool) -> UdpChannel {
+        UdpChannel {
+            socket: Arc::new(socket),
+            dual_stack,
+            up_traffic_meter: enable_traffic.then(TrafficMeterMultiChannel::default),
+            down_traffic_meter: enable_traffic.then(TrafficMeterMultiChannel::default),
+        }
+    }
+
+    #[test]
+    fn normalize_send_addr_maps_ipv4_when_dual_stack() {
+        let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000));
+
+        let normalized = channel.normalize_send_addr(addr);
+
+        assert_eq!(
+            normalized,
+            SocketAddr::V6(SocketAddrV6::new(
+                Ipv4Addr::LOCALHOST.to_ipv6_mapped(),
+                3000,
+                0,
+                0,
+            ))
+        );
+    }
+
+    #[test]
+    fn normalize_recv_addr_restores_ipv4_from_mapped_ipv6() {
+        let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
+        let mapped = SocketAddr::V6(SocketAddrV6::new(
+            Ipv4Addr::new(192, 0, 2, 10).to_ipv6_mapped(),
+            4000,
+            0,
+            0,
+        ));
+
+        let normalized = channel.normalize_recv_addr(mapped);
+
+        assert_eq!(
+            normalized,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 4000))
+        );
+    }
+
+    #[test]
+    fn send_to_uses_single_socket_and_records_up_traffic() {
+        let sender = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, true);
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+
+        let payload = b"hello-udp";
+        sender
+            .send_to(payload, receiver.local_addr().unwrap())
+            .unwrap();
+
+        let mut buf = [0_u8; 64];
+        let (len, from) = receiver.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..len], payload);
+        assert_eq!(from, sender.socket.local_addr().unwrap());
+        assert_eq!(sender.up_traffic_total(), payload.len() as u64);
+        assert_eq!(
+            sender.up_traffic_all(),
+            Some((
+                payload.len() as u64,
+                std::collections::HashMap::from([(0_usize, payload.len() as u64)]),
+            ))
+        );
+    }
+
+    #[test]
+    fn send_by_key_rejects_non_udp_route() {
+        let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, false);
+        let route_key = RouteKey::new(
+            ConnectProtocol::QUIC,
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 3000, 0, 0)),
+        );
+
+        let err = channel.send_by_key(b"nope", route_key).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn record_down_traffic_uses_single_channel_slot() {
+        let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, true);
+
+        channel.record_down_traffic(7);
+        channel.record_down_traffic(5);
+
+        assert_eq!(channel.down_traffic_total(), 12);
+        assert_eq!(
+            channel.down_traffic_all(),
+            Some((12, std::collections::HashMap::from([(0_usize, 12_u64)])))
+        );
     }
 }

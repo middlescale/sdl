@@ -6,9 +6,9 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 
-use crate::channel::punch::{NatInfo, NatType, Punch};
 use crate::cipher::Cipher;
 use crate::handle::CurrentDeviceInfo;
+use crate::nat::punch::{NatInfo, NatType, Punch};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{control_packet, NetPacket, Protocol};
 

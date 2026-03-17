@@ -1,4 +1,3 @@
-use crate::channel::BUFFER_SIZE;
 use crate::cipher::Cipher;
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
@@ -6,6 +5,7 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
+use crate::protocol::BUFFER_SIZE;
 use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;

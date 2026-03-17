@@ -5,11 +5,11 @@ use std::str::FromStr;
 use crate::args_parse;
 use crate::config::get_device_id;
 use serde::{Deserialize, Serialize};
-use vnt::channel::punch::PunchModel;
-use vnt::channel::UseChannelType;
 use vnt::cipher::CipherModel;
 use vnt::compression::Compressor;
 use vnt::core::Config;
+use vnt::data_plane::use_channel_type::UseChannelType;
+use vnt::nat::punch::PunchModel;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]

@@ -187,13 +187,13 @@ impl NatInfo {
             punch_model,
         }
     }
-    pub fn update_addr(&mut self, index: usize, ip: Ipv4Addr, port: u16) -> bool {
+    pub fn update_addr(&mut self, ip: Ipv4Addr, port: u16) -> bool {
         let mut updated = false;
         if port != 0 {
-            if let Some(public_port) = self.public_ports.get_mut(index) {
+            if let Some(public_port) = self.public_ports.get_mut(0) {
                 if *public_port != port {
                     updated = true;
-                    log::info!("端口变化={}:{} index={}", ip, port, index)
+                    log::info!("端口变化={}:{}", ip, port)
                 }
                 *public_port = port;
             }
@@ -216,32 +216,18 @@ impl NatInfo {
     pub fn ipv6(&self) -> Option<Ipv6Addr> {
         self.ipv6
     }
-    pub fn local_udp_ipv4addr(&self, index: usize) -> Option<SocketAddr> {
-        let len = self.udp_ports.len();
-        if len == 0 {
-            return None;
-        }
+    pub fn local_udp_ipv4addr(&self) -> Option<SocketAddr> {
+        let port = *self.udp_ports.first()?;
         if let Some(local_ipv4) = self.local_ipv4 {
-            Some(SocketAddr::V4(SocketAddrV4::new(
-                local_ipv4,
-                self.udp_ports[index % len],
-            )))
+            Some(SocketAddr::V4(SocketAddrV4::new(local_ipv4, port)))
         } else {
             None
         }
     }
-    pub fn local_udp_ipv6addr(&self, index: usize) -> Option<SocketAddr> {
-        let len = self.udp_ports.len();
-        if len == 0 {
-            return None;
-        }
+    pub fn local_udp_ipv6addr(&self) -> Option<SocketAddr> {
+        let port = *self.udp_ports.first()?;
         if let Some(ipv6) = self.ipv6 {
-            Some(SocketAddr::V6(SocketAddrV6::new(
-                ipv6,
-                self.udp_ports[index % len],
-                0,
-                0,
-            )))
+            Some(SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0)))
         } else {
             None
         }
@@ -309,43 +295,34 @@ impl Punch {
         if !self.punch_model.use_udp() || !nat_info.punch_model.use_udp() {
             return Ok(());
         }
-        let channel_num = self.udp_channel.channel_num();
-        let main_len = self.udp_channel.main_len();
-
         if self.punch_model.use_ipv6() && nat_info.punch_model.use_ipv6() {
-            for index in channel_num..main_len {
-                if let Some(ipv6_addr) = nat_info.local_udp_ipv6addr(index) {
-                    if !self.nat_test.is_local_address(false, ipv6_addr) {
-                        let rs = self.udp_channel.send_main(index, buf, ipv6_addr);
-                        log::info!("发送到ipv6地址:{:?},rs={:?} {}", ipv6_addr, rs, id);
-                    }
+            if let Some(ipv6_addr) = nat_info.local_udp_ipv6addr() {
+                if !self.nat_test.is_local_address(false, ipv6_addr) {
+                    let rs = self.udp_channel.send_to(buf, ipv6_addr);
+                    log::info!("发送到ipv6地址:{:?},rs={:?} {}", ipv6_addr, rs, id);
                 }
             }
         }
         if !self.punch_model.use_ipv4() || !nat_info.punch_model.use_ipv4() {
             return Ok(());
         }
-        for index in 0..channel_num {
-            if let Some(ipv4_addr) = nat_info.local_udp_ipv4addr(index) {
-                if !self.nat_test.is_local_address(false, ipv4_addr) {
-                    let _ = self.udp_channel.send_main(index, buf, ipv4_addr);
-                }
+        if let Some(ipv4_addr) = nat_info.local_udp_ipv4addr() {
+            if !self.nat_test.is_local_address(false, ipv4_addr) {
+                let _ = self.udp_channel.send_to(buf, ipv4_addr);
             }
         }
         // 可能是开放了端口的，需要打洞
-        for index in 0..channel_num {
-            for port in &nat_info.udp_ports {
-                if *port == 0 {
+        for port in &nat_info.udp_ports {
+            if *port == 0 {
+                continue;
+            }
+            for ip in &nat_info.public_ips {
+                if ip.is_unspecified() {
                     continue;
                 }
-                for ip in &nat_info.public_ips {
-                    if ip.is_unspecified() {
-                        continue;
-                    }
-                    let addr = SocketAddrV4::new(*ip, *port);
-                    let _ = self.udp_channel.send_main(index, buf, addr.into());
-                    thread::sleep(Duration::from_millis(3));
-                }
+                let addr = SocketAddrV4::new(*ip, *port);
+                let _ = self.udp_channel.send_to(buf, addr.into());
+                thread::sleep(Duration::from_millis(3));
             }
         }
 
@@ -402,24 +379,23 @@ impl Punch {
             }
             NatType::Cone => {
                 let is_cone = self.nat_test.nat_info().nat_type.is_cone();
-                'a: for index in 0..nat_info.public_ports.len().min(channel_num) {
+                for port in nat_info
+                    .public_ports
+                    .iter()
+                    .copied()
+                    .filter(|port| *port != 0)
+                {
                     for ip in &nat_info.public_ips {
-                        let port = nat_info.public_ports[index];
-                        if port == 0 || ip.is_unspecified() {
+                        if ip.is_unspecified() {
                             continue;
                         }
                         let addr = SocketAddr::V4(SocketAddrV4::new(*ip, port));
-                        if is_cone {
-                            self.udp_channel.send_main(index, buf, addr)?;
-                        } else {
-                            //只有一方是对称，则对称方要使用全部端口发送数据，符合上述计算的概率
-                            self.udp_channel.try_send_all(buf, addr);
-                        }
+                        self.udp_channel.send_to(buf, addr)?;
                         thread::sleep(Duration::from_millis(2));
                     }
                     if !is_cone {
-                        //对称网络数据只发一遍
-                        break 'a;
+                        // 单端口模型下，对称侧只需要从当前绑定端口发送一遍
+                        break;
                     }
                 }
             }
@@ -442,7 +418,7 @@ impl Punch {
                     return Ok(index);
                 }
                 let addr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                self.udp_channel.send_main(0, buf, addr)?;
+                self.udp_channel.send_to(buf, addr)?;
                 thread::sleep(Duration::from_millis(3));
             }
         }

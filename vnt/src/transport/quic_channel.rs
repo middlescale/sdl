@@ -12,8 +12,10 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
+use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
+use crate::protocol::BUFFER_SIZE;
+use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
 pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, RouteKey) + Send + Sync + 'static>;
@@ -265,7 +267,7 @@ pub(crate) async fn connect(addr: SocketAddr, alpn: &[u8]) -> anyhow::Result<Qui
     let server_name = addr.ip().to_string();
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, 0, addr);
+    let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
     let (send, recv) = conn.open_bi().await?;
     Ok(QuicClientConnection {
         addr,
@@ -400,7 +402,7 @@ mod tests {
         let err = consume_pending_frames(&mut pending, &mut |_| {}).unwrap_err();
         assert!(err.to_string().contains("invalid quic frame length"));
 
-        let oversize = ((crate::channel::BUFFER_SIZE * 16 + 1) as u32).to_be_bytes();
+        let oversize = ((crate::protocol::BUFFER_SIZE * 16 + 1) as u32).to_be_bytes();
         let mut pending = oversize.to_vec();
         let err = consume_pending_frames(&mut pending, &mut |_| {}).unwrap_err();
         assert!(err.to_string().contains("invalid quic frame length"));

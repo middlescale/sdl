@@ -1,6 +1,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::channel::{ConnectProtocol, Route, RouteKey};
+use crate::data_plane::route::{Route, RouteKey};
+use crate::transport::connect_protocol::ConnectProtocol;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RouteKind {
@@ -41,13 +42,7 @@ impl RouteState {
     }
 
     pub fn route(&self) -> Route {
-        Route::new(
-            self.transport,
-            self.route_key.index(),
-            self.addr,
-            self.metric,
-            self.rt,
-        )
+        Route::new(self.transport, self.addr, self.metric, self.rt)
     }
 
     pub fn is_p2p(&self) -> bool {

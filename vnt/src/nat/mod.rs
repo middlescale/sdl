@@ -10,12 +10,15 @@ use parking_lot::Mutex;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 
-use crate::channel::punch::{NatInfo, NatType, PunchModel};
 use crate::transport::socket::LocalInterface;
 #[cfg(feature = "upnp")]
 use crate::util::UPnP;
 
+pub mod punch;
+pub mod punch_workers;
 mod stun;
+
+use crate::nat::punch::{NatInfo, NatType, PunchModel};
 
 pub fn local_ipv4_() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
@@ -121,7 +124,6 @@ pub struct NatTest {
 
 impl NatTest {
     pub fn new(
-        _channel_num: usize,
         stun_server: Vec<String>,
         local_ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
@@ -237,9 +239,9 @@ impl NatTest {
         }
         false
     }
-    pub fn update_addr(&self, index: usize, ip: Ipv4Addr, port: u16) -> bool {
+    pub fn update_addr(&self, ip: Ipv4Addr, port: u16) -> bool {
         let mut guard = self.info.lock();
-        guard.update_addr(index, ip, port)
+        guard.update_addr(ip, port)
     }
     pub fn update_tcp_port(&self, port: u16) {
         let mut guard = self.info.lock();
@@ -294,15 +296,10 @@ impl NatTest {
             .with_context(|| format!("stun error {:?}", stun_server))?;
         Ok((stun::send_stun_request(), addr))
     }
-    pub fn recv_data(
-        &self,
-        index: usize,
-        source_addr: SocketAddr,
-        buf: &[u8],
-    ) -> anyhow::Result<bool> {
+    pub fn recv_data(&self, source_addr: SocketAddr, buf: &[u8]) -> anyhow::Result<bool> {
         if buf[0] == 0x01 && buf[1] == 0x01 {
             if let Some(addr) = stun::recv_stun_response(buf) {
-                if let Err(e) = self.recv_data_(index, source_addr, addr) {
+                if let Err(e) = self.recv_data_(source_addr, addr) {
                     log::warn!("{:?}", e);
                 }
             }
@@ -311,12 +308,7 @@ impl NatTest {
             Ok(false)
         }
     }
-    fn recv_data_(
-        &self,
-        index: usize,
-        source_addr: SocketAddr,
-        addr: SocketAddr,
-    ) -> anyhow::Result<()> {
+    fn recv_data_(&self, source_addr: SocketAddr, addr: SocketAddr) -> anyhow::Result<()> {
         if let SocketAddr::V4(addr) = addr {
             let mut check_fail = true;
             let source_ip = match source_addr.ip() {
@@ -343,7 +335,7 @@ impl NatTest {
             }
             if !check_fail {
                 if is_ipv4_global(addr.ip()) {
-                    if self.update_addr(index, *addr.ip(), addr.port()) {
+                    if self.update_addr(*addr.ip(), addr.port()) {
                         log::info!("回应地址{:?},来源stun {:?}", addr, source_addr)
                     }
                 }

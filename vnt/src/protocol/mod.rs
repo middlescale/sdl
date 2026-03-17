@@ -17,6 +17,7 @@ use std::{fmt, io};
   注：e为是否加密标志，s为服务端通信包标志，x扩展标志，u未使用
 */
 pub const HEAD_LEN: usize = 12;
+pub const BUFFER_SIZE: usize = 1024 * 64;
 
 pub mod body;
 pub mod control_packet;

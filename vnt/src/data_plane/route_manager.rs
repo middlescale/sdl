@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::channel::{Route, RouteKey, UseChannelType};
 use crate::cipher::Cipher;
+use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
+use crate::data_plane::use_channel_type::UseChannelType;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol};
@@ -27,7 +28,6 @@ pub struct RouteManager {
 #[derive(Clone)]
 struct RouteSender {
     udp_channel: UdpChannel,
-    channel_num: usize,
 }
 
 pub enum StaleDirectRoute {
@@ -50,10 +50,7 @@ impl RouteManager {
     ) -> anyhow::Result<Self> {
         let manager = Self {
             route_table,
-            sender: Some(RouteSender {
-                channel_num: udp_channel.channel_num(),
-                udp_channel,
-            }),
+            sender: Some(RouteSender { udp_channel }),
         };
         manager.start_heartbeat_loop(
             stop_manager.clone(),
@@ -77,10 +74,6 @@ impl RouteManager {
 
     pub fn latency_first(&self) -> bool {
         self.route_table.latency_first
-    }
-
-    pub fn select_route(&self, index: usize, vip: &Ipv4Addr) -> io::Result<Route> {
-        self.route_table.get_route(index, vip)
     }
 
     pub fn add_path_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -123,11 +116,11 @@ impl RouteManager {
         self.best_route(vip).is_some()
     }
 
-    pub fn heartbeat_targets(&self, channel_num: usize) -> Vec<(Ipv4Addr, Vec<Route>)> {
+    pub fn heartbeat_targets(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.snapshot_routes()
             .into_iter()
             .filter_map(|(peer_ip, routes)| {
-                let routes = self.limit_heartbeat_routes(routes, channel_num);
+                let routes = self.limit_heartbeat_routes(routes);
                 if routes.is_empty() {
                     None
                 } else {
@@ -202,9 +195,8 @@ impl RouteManager {
         let Some(sender) = &self.sender else {
             return;
         };
-        let channel_num = sender.channel_num;
         let src_ip = current_device.virtual_ip;
-        for (dest_ip, routes) in self.heartbeat_targets(channel_num) {
+        for (dest_ip, routes) in self.heartbeat_targets() {
             if current_device.is_gateway_vip(&dest_ip) {
                 continue;
             }
@@ -239,12 +231,8 @@ impl RouteManager {
         }
     }
 
-    fn limit_heartbeat_routes(&self, routes: Vec<Route>, channel_num: usize) -> Vec<Route> {
-        let limit = if self.latency_first() {
-            channel_num + 1
-        } else {
-            channel_num
-        };
+    fn limit_heartbeat_routes(&self, routes: Vec<Route>) -> Vec<Route> {
+        let limit = if self.latency_first() { 2 } else { 1 };
         routes.into_iter().take(limit).collect()
     }
 }
@@ -363,8 +351,10 @@ fn heartbeat_packet_client(
 #[cfg(test)]
 mod tests {
     use super::{RouteManager, StaleDirectRoute};
-    use crate::channel::{ConnectProtocol, Route, UseChannelType};
+    use crate::data_plane::route::Route;
     use crate::data_plane::route_table::RouteTable;
+    use crate::data_plane::use_channel_type::UseChannelType;
+    use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
     use std::thread;
@@ -373,7 +363,6 @@ mod tests {
     fn route(metric: u8, port: u16) -> Route {
         Route::new(
             ConnectProtocol::UDP,
-            0,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
             metric,
             10,
@@ -382,7 +371,7 @@ mod tests {
 
     #[test]
     fn next_stale_direct_route_ignores_stale_relay_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let manager = RouteManager::new_detached(table.clone());
         table.add_route(Ipv4Addr::new(10, 0, 0, 2), route(2, 2000));
         thread::sleep(Duration::from_millis(15));
@@ -395,7 +384,7 @@ mod tests {
 
     #[test]
     fn next_stale_direct_route_times_out_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 3);
         let route = route(1, 2001);
@@ -413,7 +402,7 @@ mod tests {
 
     #[test]
     fn cleanup_stale_direct_routes_only_removes_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let manager = RouteManager::new_detached(table.clone());
         let relay_peer = Ipv4Addr::new(10, 0, 0, 4);
         let p2p_peer = Ipv4Addr::new(10, 0, 0, 5);

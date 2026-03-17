@@ -8,12 +8,12 @@ use packet::icmp::{icmp, Kind};
 use packet::ip::ipv4;
 use packet::ip::ipv4::packet::IpV4Packet;
 
-use crate::channel::punch::NatInfo;
-use crate::channel::{Route, RouteKey};
 use crate::core::VntRuntime;
+use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
+use crate::nat::punch::NatInfo;
 use crate::proto::message::{PunchInfo, PunchNatType};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::ControlPacket;

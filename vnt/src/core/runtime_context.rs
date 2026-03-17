@@ -5,8 +5,6 @@ use std::sync::Arc;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-use crate::channel::punch::NatInfo;
-use crate::channel::punch_workers::PunchCoordinator;
 use crate::cipher::Cipher;
 use crate::control::ControlSession;
 use crate::data_plane::data_channel::DataChannel;
@@ -14,6 +12,8 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route_manager::RouteManager;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
+use crate::nat::punch::NatInfo;
+use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]

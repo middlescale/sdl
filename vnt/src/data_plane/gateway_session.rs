@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use protobuf::Message;
 use rand::RngCore;
 
-use crate::channel::RouteKey;
+use crate::data_plane::route::RouteKey;
 use crate::handle::{now_time, CurrentDeviceInfo};
 use crate::proto::message::{GatewayAccessGrant, GatewayConnectAck, GatewayConnectHello};
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};

@@ -1,7 +1,8 @@
-use crate::channel::punch::PunchModel;
-use crate::channel::{ConnectProtocol, UseChannelType};
 use crate::cipher::CipherModel;
 use crate::compression::Compressor;
+use crate::data_plane::use_channel_type::UseChannelType;
+use crate::nat::punch::PunchModel;
+use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
