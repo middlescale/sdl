@@ -11,12 +11,11 @@ use std::sync::Arc;
 use crate::core::{RuntimeConfig, VntRuntime};
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::handle::callback::{ConnectInfo, ErrorType};
-use crate::handle::handshaker::Handshake;
 use crate::handle::registrar;
 use crate::handle::PeerDeviceInfo;
 use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
 use crate::proto::message::{
-    ClientStatusInfo, PunchNatType, RefreshGatewayGrantRequest, RouteItem,
+    ClientStatusInfo, HandshakeRequest, PunchNatType, RefreshGatewayGrantRequest, RouteItem,
 };
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
@@ -24,6 +23,11 @@ use crate::transport::quic_channel::QuicChannel;
 use crate::util::{address_choose, dns_query_all, Scheduler, StopManager};
 use crate::{ErrorInfo, VntCallback};
 use parking_lot::Mutex;
+
+const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
+const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
+const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
+const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
 
 #[derive(Clone)]
 pub struct ControlSession {
@@ -57,7 +61,7 @@ impl ControlSession {
     }
 
     pub fn send_handshake(&self) -> io::Result<()> {
-        let request_packet = Handshake::new().handshake_request_packet(false)?;
+        let request_packet = handshake_request_packet(false)?;
         self.send_packet(&request_packet)
     }
 
@@ -358,6 +362,37 @@ impl ControlSession {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
+}
+
+fn handshake_request_packet(secret: bool) -> io::Result<NetPacket<Vec<u8>>> {
+    let mut request = HandshakeRequest::new();
+    request.secret = secret;
+    request.version = crate::VNT_VERSION.to_string();
+    request
+        .capabilities
+        .push(CAPABILITY_UDP_ENDPOINT_REPORT_V1.to_string());
+    request
+        .capabilities
+        .push(CAPABILITY_PUNCH_COORD_V1.to_string());
+    request
+        .capabilities
+        .push(CAPABILITY_GATEWAY_TICKET_V1.to_string());
+    let bytes = request.write_to_bytes().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("handshake_request_packet {:?}", e),
+        )
+    })?;
+    let buf = vec![0u8; HEAD_LEN + bytes.len()];
+    let mut net_packet = NetPacket::new(buf)?;
+    net_packet.set_default_version();
+    net_packet.set_destination(CONTROL_VIP);
+    net_packet.set_source(HANDSHAKE_SOURCE_IP);
+    net_packet.set_protocol(Protocol::Service);
+    net_packet.set_transport_protocol(service_packet::Protocol::HandshakeRequest.into());
+    net_packet.set_initial_ttl(MAX_TTL);
+    net_packet.set_payload(&bytes)?;
+    Ok(net_packet)
 }
 
 fn has_public_endpoints(public_ips: &[std::net::Ipv4Addr], public_ports: &[u16]) -> bool {

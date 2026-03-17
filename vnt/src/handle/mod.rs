@@ -3,7 +3,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub mod callback;
 mod extension;
-pub mod handshaker;
 pub mod maintain;
 pub mod recv_data;
 pub mod registrar;
