@@ -52,7 +52,6 @@ features说明
 | aes_gcm           | 支持aes_gcm加密                    | 是    |
 | sm4_cbc           | 支持sm4_cbc加密                    | 是    |
 | chacha20_poly1305 | 支持chacha20和chacha20_poly1305加密 | 是    |
-| ip_proxy          | 内置ip代理                         | 是    |
 | port_mapping      | 端口映射                           | 是    |
 | log               | 日志                             | 是    |
 | command           | list、route等命令                  | 是    |

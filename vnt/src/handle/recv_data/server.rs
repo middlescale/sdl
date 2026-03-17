@@ -11,7 +11,6 @@ use packet::ip::ipv4::packet::IpV4Packet;
 use parking_lot::Mutex;
 use protobuf::Message;
 
-use crate::channel::context::ChannelContext;
 use crate::channel::punch::{NatInfo, NatType, PunchModel};
 use crate::channel::{Route, RouteKey};
 use crate::core::VntRuntime;
@@ -65,7 +64,6 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
         route_key: RouteKey,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         if !current_device.is_server_addr(route_key.addr)
@@ -81,10 +79,10 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 current_device.control_server
             );
         }
-        context
+        self.runtime
             .route_manager()
             .touch_path(&net_packet.source(), &route_key);
-        self.reconcile_punch_sessions(context, current_device)?;
+        self.reconcile_punch_sessions(current_device)?;
         if net_packet.protocol() == Protocol::Error
             && net_packet.transport_protocol()
                 == crate::protocol::error_packet::Protocol::NoKey.into()
@@ -100,10 +98,10 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {
                 if self.runtime.config.auth_only {
-                    self.send_device_auth(context, route_key)?;
+                    self.send_device_auth(route_key)?;
                 } else {
                     //没有加密，则发送注册请求
-                    self.register(current_device, context, route_key)?;
+                    self.register(current_device, route_key)?;
                 }
             }
 
@@ -111,13 +109,13 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         }
         match net_packet.protocol() {
             Protocol::Service => {
-                self.service(context, current_device, net_packet, route_key)?;
+                self.service(current_device, net_packet, route_key)?;
             }
             Protocol::Error => {
-                self.error(context, current_device, net_packet, route_key)?;
+                self.error(current_device, net_packet, route_key)?;
             }
             Protocol::Control => {
-                self.control(context, current_device, net_packet, route_key)?;
+                self.control(current_device, net_packet, route_key)?;
             }
             Protocol::IpTurn => {
                 match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
@@ -175,18 +173,14 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
     }
 
-    fn reconcile_punch_sessions(
-        &self,
-        context: &ChannelContext,
-        current_device: &CurrentDeviceInfo,
-    ) -> anyhow::Result<()> {
+    fn reconcile_punch_sessions(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
         let now_ms = crate::handle::now_time() as i64;
         let mut succeeded = Vec::new();
         let mut expired = Vec::new();
         {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, session| {
-                if context.route_manager().direct_path_count(peer_ip) > 0 {
+                if self.runtime.route_manager().direct_path_count(peer_ip) > 0 {
                     succeeded.push(*session);
                     return false;
                 }
@@ -200,7 +194,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         for session in succeeded {
             self.send_punch_result(
-                context,
                 current_device,
                 session.session_id,
                 session.source,
@@ -212,7 +205,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         for session in expired {
             self.send_punch_result(
-                context,
                 current_device,
                 session.session_id,
                 session.source,
@@ -227,12 +219,10 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
 
     fn send_service_packet(
         &self,
-        context: &ChannelContext,
         _current_device: &CurrentDeviceInfo,
         transport: service_packet::Protocol,
         payload: &[u8],
     ) -> anyhow::Result<()> {
-        let _ = context;
         self.runtime
             .control_session
             .send_service_payload(transport, payload)?;
@@ -241,7 +231,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
 
     fn send_punch_result(
         &self,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         session_id: u64,
         source: u32,
@@ -255,7 +244,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .write_to_bytes()
             .map_err(|e| anyhow!("PunchResult {:?}", e))?;
         self.send_service_packet(
-            context,
             current_device,
             service_packet::Protocol::PunchResult,
             &bytes,
@@ -264,7 +252,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
 
     fn service(
         &self,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
@@ -300,7 +287,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grant(response.gateway_access_grant.as_ref(), virtual_ip);
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);
-                    context
+                    self.runtime
                         .route_manager()
                         .add_path_if_absent(virtual_gateway, route);
                     let public_ip = response.public_ip.into();
@@ -444,10 +431,10 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::SecretHandshakeResponse => {
                 log::info!("SecretHandshakeResponse");
                 if self.runtime.config.auth_only {
-                    self.send_device_auth(context, route_key)?;
+                    self.send_device_auth(route_key)?;
                 } else {
                     //加密握手结束，发送注册数据
-                    self.register(current_device, context, route_key)?;
+                    self.register(current_device, route_key)?;
                 }
             }
             service_packet::Protocol::DeviceAuthAck => {
@@ -474,7 +461,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.callback.success();
                     self.callback.stop();
                 } else {
-                    self.register(current_device, context, route_key)?;
+                    self.register(current_device, route_key)?;
                 }
             }
             service_packet::Protocol::PunchStart => {
@@ -517,7 +504,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 };
                 if let Some(prev) = replaced {
                     self.send_punch_result(
-                        context,
                         current_device,
                         prev.session_id,
                         prev.source,
@@ -543,7 +529,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     io::Error::new(io::ErrorKind::Other, format!("PunchAck {:?}", e))
                 })?;
                 self.send_service_packet(
-                    context,
                     current_device,
                     service_packet::Protocol::PunchAck,
                     &bytes,
@@ -551,7 +536,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 if !accepted {
                     self.punch_active_sessions.lock().remove(&peer_ip);
                     self.send_punch_result(
-                        context,
                         current_device,
                         punch_start.session_id,
                         u32::from(current_device.virtual_ip),
@@ -631,32 +615,24 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     fn register(
         &self,
         current_device: &CurrentDeviceInfo,
-        context: &ChannelContext,
         _route_key: RouteKey,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
             log::info!("已连接的不需要注册，{:?}", self.runtime.config);
             return Ok(());
         }
-        let _ = context;
         log::info!("发送注册请求，{:?}", self.runtime.config);
         self.runtime
             .control_session
             .send_registration_request(false, false)?;
         Ok(())
     }
-    fn send_device_auth(
-        &self,
-        context: &ChannelContext,
-        _route_key: RouteKey,
-    ) -> anyhow::Result<()> {
-        let _ = context;
+    fn send_device_auth(&self, _route_key: RouteKey) -> anyhow::Result<()> {
         self.runtime.control_session.send_device_auth_request()?;
         Ok(())
     }
     fn error(
         &self,
-        context: &ChannelContext,
         _current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
@@ -693,7 +669,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         Err(latest) => current_device = latest,
                     }
                 }
-                let _ = context;
                 self.runtime.control_session.send_handshake()?;
                 // self.register(current_device, context, route_key)?;
             }
@@ -722,7 +697,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     }
     fn control(
         &self,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
@@ -746,7 +720,9 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 };
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, learned_metric, rt);
-                context.route_manager().add_path(net_packet.source(), route);
+                self.runtime
+                    .route_manager()
+                    .add_path(net_packet.source(), route);
                 let epoch = self.runtime.device_map.lock().0;
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表

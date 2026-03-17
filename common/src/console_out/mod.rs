@@ -266,7 +266,7 @@ pub fn console_chart_a(chart_a: ChartA) {
     println!("-----------------------------------------------------------------");
     let up_keys: HashSet<_> = chart_a.up_map.keys().cloned().collect();
     let down_keys: HashSet<_> = chart_a.down_map.keys().cloned().collect();
-    let mut keys: Vec<Ipv4Addr> = up_keys.union(&down_keys).cloned().collect();
+    let mut keys: Vec<usize> = up_keys.union(&down_keys).cloned().collect();
     // 排序
     keys.sort();
 
@@ -282,7 +282,7 @@ pub fn console_chart_a(chart_a: ChartA) {
             let bar = "█".repeat(((value as f64 / max_value as f64) * max_height as f64) as usize);
             println!(
                 "{:<10} | {} upload {}",
-                key,
+                format!("ch-{}", key),
                 bar,
                 style(convert(value)).green()
             );
@@ -291,7 +291,7 @@ pub fn console_chart_a(chart_a: ChartA) {
             let bar = "█".repeat(((value as f64 / max_value as f64) * max_height as f64) as usize);
             println!(
                 "{:<10} | {} download {}",
-                key,
+                format!("ch-{}", key),
                 bar,
                 style(convert(value)).green()
             );
@@ -305,14 +305,14 @@ pub fn console_chart_b(chart_b: ChartB) {
         println!("Traffic statistics not enabled");
         return;
     }
-    let ip = if let Some(ip) = chart_b.ip {
-        ip
+    let channel = if let Some(channel) = chart_b.channel {
+        channel
     } else {
-        println!("Ip: None");
+        println!("Channel: None");
         return;
     };
     println!("----------------------------  upload  ----------------------------");
-    println!("IP: {}", ip);
+    println!("Channel: {}", channel);
     println!("Upload total: {}", style(convert(chart_b.up_total)).green());
     println!(
         "Max: {}",
@@ -328,7 +328,7 @@ pub fn console_chart_b(chart_b: ChartB) {
     );
     console_chart_b_list(chart_b.up_list);
     println!("---------------------------- download ----------------------------");
-    println!("IP: {}", ip);
+    println!("Channel: {}", channel);
     println!(
         "Download total: {}",
         style(convert(chart_b.down_total)).green()

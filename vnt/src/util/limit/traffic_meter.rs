@@ -64,6 +64,62 @@ impl TrafficMeterMultiAddress {
 }
 
 #[derive(Clone)]
+pub struct TrafficMeterMultiChannel {
+    history_capacity: usize,
+    inner: Arc<Mutex<(u64, HashMap<usize, TrafficMeter>)>>,
+}
+
+impl Default for TrafficMeterMultiChannel {
+    fn default() -> Self {
+        TrafficMeterMultiChannel::new(100)
+    }
+}
+
+impl TrafficMeterMultiChannel {
+    pub fn new(history_capacity: usize) -> Self {
+        let inner = Arc::new(Mutex::new((0, HashMap::new())));
+        Self {
+            inner,
+            history_capacity,
+        }
+    }
+    pub fn add_traffic(&self, channel: usize, amount: usize) {
+        let mut guard = self.inner.lock();
+        guard.0 += amount as u64;
+        guard
+            .1
+            .entry(channel)
+            .or_insert(TrafficMeter::new(self.history_capacity))
+            .add_traffic(amount)
+    }
+    pub fn total(&self) -> u64 {
+        self.inner.lock().0
+    }
+    pub fn get_all(&self) -> (u64, HashMap<usize, u64>) {
+        let guard = self.inner.lock();
+        (
+            guard.0,
+            guard
+                .1
+                .iter()
+                .map(|(channel, t)| (*channel, t.total()))
+                .collect(),
+        )
+    }
+    pub fn get_all_history(&self) -> (u64, HashMap<usize, (u64, Vec<usize>)>) {
+        let guard = self.inner.lock();
+        (
+            guard.0,
+            guard
+                .1
+                .iter()
+                .map(|(channel, t)| (*channel, (t.total(), t.get_history())))
+                .collect(),
+        )
+    }
+}
+
+#[derive(Clone)]
 pub struct ConcurrentTrafficMeter {
     inner: Arc<Mutex<TrafficMeter>>,
 }
@@ -128,5 +184,42 @@ impl TrafficMeter {
     // 获取流量记录
     pub fn get_history(&self) -> Vec<usize> {
         self.history.iter().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TrafficMeterMultiChannel;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn multi_channel_meter_tracks_total_and_per_channel_usage() {
+        let meter = TrafficMeterMultiChannel::new(4);
+        meter.add_traffic(0, 10);
+        meter.add_traffic(1, 20);
+        meter.add_traffic(0, 5);
+
+        let (total, by_channel) = meter.get_all();
+        assert_eq!(total, 35);
+        assert_eq!(by_channel.get(&0), Some(&15));
+        assert_eq!(by_channel.get(&1), Some(&20));
+    }
+
+    #[test]
+    fn multi_channel_meter_exposes_history_per_channel() {
+        let meter = TrafficMeterMultiChannel::new(4);
+        meter.add_traffic(2, 7);
+        {
+            let mut guard = meter.inner.lock();
+            let channel_meter = guard.1.get_mut(&2).expect("channel meter");
+            channel_meter.start_time = Instant::now() - Duration::from_secs(2);
+        }
+        meter.add_traffic(2, 3);
+
+        let (total, history) = meter.get_all_history();
+        assert_eq!(total, 10);
+        let (channel_total, samples) = history.get(&2).expect("channel history");
+        assert_eq!(*channel_total, 10);
+        assert_eq!(samples, &vec![10]);
     }
 }

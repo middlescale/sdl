@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io;
-use std::net::Ipv4Addr;
 use vnt::channel::ConnectProtocol;
 use vnt::core::Vnt;
 
@@ -311,14 +310,14 @@ pub fn command_chart_b(vnt: &Vnt, input_str: &str) -> ChartB {
     let (_, down_map) = vnt.down_stream_history().unwrap_or_default();
     let up_keys: HashSet<_> = up_map.keys().cloned().collect();
     let down_keys: HashSet<_> = down_map.keys().cloned().collect();
-    let mut keys: Vec<Ipv4Addr> = up_keys.union(&down_keys).cloned().collect();
+    let mut keys: Vec<usize> = up_keys.union(&down_keys).cloned().collect();
     keys.sort();
-    if let Some(ip) = find_matching_ipv4_address(input_str, &keys) {
-        let (up_total, up_list) = up_map.get(&ip).cloned().unwrap_or_default();
-        let (down_total, down_list) = down_map.get(&ip).cloned().unwrap_or_default();
+    if let Some(channel) = find_matching_channel(input_str, &keys) {
+        let (up_total, up_list) = up_map.get(&channel).cloned().unwrap_or_default();
+        let (down_total, down_list) = down_map.get(&channel).cloned().unwrap_or_default();
         ChartB {
             disable_stats,
-            ip: Some(ip),
+            channel: Some(channel),
             up_total,
             up_list,
             down_total,
@@ -342,12 +341,32 @@ fn match_from_end(input_str: &str, ip: &str) -> bool {
     input_chars.next().is_none() // Ensure all input characters matched
 }
 
-fn find_matching_ipv4_address(input_str: &str, ip_addresses: &[Ipv4Addr]) -> Option<Ipv4Addr> {
-    for &ip in ip_addresses {
-        let ip_str = ip.to_string();
-        if match_from_end(input_str, &ip_str) {
-            return Some(ip);
+fn find_matching_channel(input_str: &str, channels: &[usize]) -> Option<usize> {
+    for &channel in channels {
+        let channel_str = channel.to_string();
+        if match_from_end(input_str, &channel_str) {
+            return Some(channel);
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_matching_channel, match_from_end};
+
+    #[test]
+    fn match_from_end_requires_full_suffix_match() {
+        assert!(match_from_end("12", "ch-12"));
+        assert!(!match_from_end("13", "ch-12"));
+        assert!(!match_from_end("123", "12"));
+    }
+
+    #[test]
+    fn find_matching_channel_matches_from_suffix() {
+        let channels = [0, 1, 12, 21];
+        assert_eq!(find_matching_channel("12", &channels), Some(12));
+        assert_eq!(find_matching_channel("1", &channels), Some(1));
+        assert_eq!(find_matching_channel("99", &channels), None);
+    }
 }

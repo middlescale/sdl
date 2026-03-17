@@ -1,17 +1,20 @@
-use crate::channel::context::ChannelContext;
 use crate::channel::RouteKey;
+use crate::core::VntRuntime;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::{NetPacket, Protocol};
 use anyhow::Context;
+use std::sync::Arc;
 
 /// 处理客户端中转包
 #[derive(Clone)]
-pub struct TurnPacketHandler {}
+pub struct TurnPacketHandler {
+    runtime: Arc<VntRuntime>,
+}
 
 impl TurnPacketHandler {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(runtime: Arc<VntRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
@@ -21,7 +24,6 @@ impl PacketHandler for TurnPacketHandler {
         mut net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
         route_key: RouteKey,
-        context: &ChannelContext,
         _current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         // 增加了一跳
@@ -32,15 +34,17 @@ impl PacketHandler for TurnPacketHandler {
                 return Ok(());
             }
             let destination = net_packet.destination();
-            if let Some(route) = context.route_manager().best_route(&destination) {
+            if let Some(route) = self.runtime.route_manager().best_route(&destination) {
                 if route.addr == route_key.addr {
                     //防止环路
                     log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());
                     return Ok(());
                 }
                 if route.metric <= ttl {
-                    return context
-                        .send_by_key(&net_packet, route.route_key())
+                    return self
+                        .runtime
+                        .udp_channel
+                        .send_by_key(net_packet.buffer(), route.route_key())
                         .context("转发失败");
                 }
             }

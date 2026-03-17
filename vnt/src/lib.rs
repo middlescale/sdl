@@ -7,8 +7,6 @@ pub mod core;
 pub mod data_plane;
 mod external_route;
 pub mod handle;
-#[cfg(feature = "ip_proxy")]
-mod ip_proxy;
 pub mod nat;
 #[cfg(feature = "port_mapping")]
 mod port_mapping;

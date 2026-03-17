@@ -17,10 +17,6 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::IpProxyMap;
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::ProxyHandler;
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::ip_turn_packet::BroadcastPacket;
@@ -49,7 +45,6 @@ pub fn start(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
@@ -65,8 +60,6 @@ pub fn start(
                 current_device,
                 gateway_sessions,
                 ip_route,
-                #[cfg(feature = "ip_proxy")]
-                ip_proxy_map,
                 client_cipher,
                 device_map,
                 compressor,
@@ -158,7 +151,6 @@ pub(crate) fn handle(
     current_device: CurrentDeviceInfo,
     gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
-    #[cfg(feature = "ip_proxy")] proxy_map: &Option<IpProxyMap>,
     client_cipher: &Cipher,
     device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
     compressor: &Compressor,
@@ -201,11 +193,6 @@ pub(crate) fn handle(
             } else {
                 return Ok(());
             }
-        }
-        #[cfg(feature = "ip_proxy")]
-        if let Some(proxy_map) = proxy_map {
-            let mut ipv4_packet = IpV4Packet::new(net_packet.payload_mut())?;
-            proxy_map.send_handle(&mut ipv4_packet)?;
         }
     }
 

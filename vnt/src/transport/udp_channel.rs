@@ -5,10 +5,9 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 
-use crate::channel::context::ChannelContext;
-use crate::channel::handler::RecvChannelHandler;
 use crate::channel::{ConnectProtocol, RouteKey, BUFFER_SIZE};
 use crate::core::Config;
+use crate::util::limit::TrafficMeterMultiChannel;
 use crate::util::StopManager;
 
 const NOTIFY: Token = Token(0);
@@ -17,6 +16,8 @@ const NOTIFY: Token = Token(0);
 pub struct UdpChannel {
     main_udp_socket: Arc<Vec<UdpSocket>>,
     channel_num: usize,
+    up_traffic_meter: Option<TrafficMeterMultiChannel>,
+    down_traffic_meter: Option<TrafficMeterMultiChannel>,
 }
 
 impl UdpChannel {
@@ -67,6 +68,12 @@ impl UdpChannel {
         Ok(Self {
             main_udp_socket: Arc::new(main_udp_socket),
             channel_num,
+            up_traffic_meter: config
+                .enable_traffic
+                .then(TrafficMeterMultiChannel::default),
+            down_traffic_meter: config
+                .enable_traffic
+                .then(TrafficMeterMultiChannel::default),
         })
     }
 
@@ -90,9 +97,40 @@ impl UdpChannel {
         Ok(ports)
     }
 
+    pub fn up_traffic_total(&self) -> u64 {
+        self.up_traffic_meter.as_ref().map_or(0, |v| v.total())
+    }
+
+    pub fn up_traffic_all(&self) -> Option<(u64, std::collections::HashMap<usize, u64>)> {
+        self.up_traffic_meter.as_ref().map(|v| v.get_all())
+    }
+
+    pub fn up_traffic_history(
+        &self,
+    ) -> Option<(u64, std::collections::HashMap<usize, (u64, Vec<usize>)>)> {
+        self.up_traffic_meter.as_ref().map(|v| v.get_all_history())
+    }
+
+    pub fn down_traffic_total(&self) -> u64 {
+        self.down_traffic_meter.as_ref().map_or(0, |v| v.total())
+    }
+
+    pub fn down_traffic_all(&self) -> Option<(u64, std::collections::HashMap<usize, u64>)> {
+        self.down_traffic_meter.as_ref().map(|v| v.get_all())
+    }
+
+    pub fn down_traffic_history(
+        &self,
+    ) -> Option<(u64, std::collections::HashMap<usize, (u64, Vec<usize>)>)> {
+        self.down_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_history())
+    }
+
     pub fn send_main(&self, index: usize, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
         if let Some(udp) = self.main_udp_socket.get(index) {
             udp.send_to(buf, addr)?;
+            self.record_up_traffic(index, buf.len());
             Ok(())
         } else {
             Err(io::Error::new(
@@ -124,16 +162,23 @@ impl UdpChannel {
         self.send_main(route_key.index(), buf, route_key.addr)
     }
 
-    pub fn start<H>(
-        &self,
-        stop_manager: StopManager,
-        recv_handler: H,
-        context: ChannelContext,
-    ) -> anyhow::Result<()>
+    pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
     where
-        H: RecvChannelHandler,
+        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     {
-        main_udp_listen(self.clone(), stop_manager, recv_handler, context)
+        main_udp_listen(self.clone(), stop_manager, recv_handler)
+    }
+
+    fn record_up_traffic(&self, index: usize, len: usize) {
+        if let Some(up_traffic_meter) = &self.up_traffic_meter {
+            up_traffic_meter.add_traffic(index, len);
+        }
+    }
+
+    fn record_down_traffic(&self, index: usize, len: usize) {
+        if let Some(down_traffic_meter) = &self.down_traffic_meter {
+            down_traffic_meter.add_traffic(index, len);
+        }
     }
 }
 
@@ -182,10 +227,9 @@ fn main_udp_listen<H>(
     udp_channel: UdpChannel,
     stop_manager: StopManager,
     recv_handler: H,
-    context: ChannelContext,
 ) -> anyhow::Result<()>
 where
-    H: RecvChannelHandler,
+    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
     let waker = Arc::new(Waker::new(poll.registry(), NOTIFY)?);
@@ -198,7 +242,7 @@ where
     thread::Builder::new()
         .name("mainUdp".into())
         .spawn(move || {
-            if let Err(e) = main_udp_listen0(udp_channel, poll, recv_handler, context) {
+            if let Err(e) = main_udp_listen0(udp_channel, poll, recv_handler) {
                 log::error!("{:?}", e);
             }
             drop(waker);
@@ -207,14 +251,9 @@ where
     Ok(())
 }
 
-fn main_udp_listen0<H>(
-    udp_channel: UdpChannel,
-    mut poll: Poll,
-    recv_handler: H,
-    context: ChannelContext,
-) -> io::Result<()>
+fn main_udp_listen0<H>(udp_channel: UdpChannel, mut poll: Poll, recv_handler: H) -> io::Result<()>
 where
-    H: RecvChannelHandler,
+    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
     let mut udps = Vec::with_capacity(udp_channel.main_len());
@@ -247,12 +286,14 @@ where
             };
             loop {
                 match udp.recv_from(&mut buf) {
-                    Ok((len, addr)) => recv_handler.handle(
-                        &mut buf[..len],
-                        &mut extend,
-                        RouteKey::new(ConnectProtocol::UDP, index, addr),
-                        &context,
-                    ),
+                    Ok((len, addr)) => {
+                        udp_channel.record_down_traffic(index, len);
+                        recv_handler(
+                            &mut buf[..len],
+                            &mut extend,
+                            RouteKey::new(ConnectProtocol::UDP, index, addr),
+                        )
+                    }
                     Err(e) => {
                         if e.kind() == io::ErrorKind::WouldBlock {
                             break;

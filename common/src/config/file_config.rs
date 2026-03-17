@@ -29,8 +29,6 @@ pub struct FileConfig {
     pub tcp: bool,
     pub ip: Option<String>,
     pub use_channel: String,
-    #[cfg(feature = "ip_proxy")]
-    pub no_proxy: bool,
     pub cipher_model: Option<String>,
     pub finger: bool,
     pub punch_model: String,
@@ -73,8 +71,6 @@ impl Default for FileConfig {
             tcp: false,
             ip: None,
             use_channel: "all".to_string(),
-            #[cfg(feature = "ip_proxy")]
-            no_proxy: false,
             cipher_model: None,
             finger: false,
             punch_model: "all".to_string(),
@@ -159,9 +155,6 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool
         file_conf.password,
         file_conf.mtu,
         virtual_ip,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(feature = "ip_proxy")]
-        file_conf.no_proxy,
         cipher_model,
         file_conf.finger,
         punch_model,

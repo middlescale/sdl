@@ -70,7 +70,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
     opts.optopt("", "punch", "取值ipv4/ipv6", "<punch>");
     opts.optopt("", "ports", "监听的端口", "<port,port>");
     opts.optflag("", "cmd", "开启窗口输入");
-    opts.optflag("", "no-proxy", "关闭内置代理");
     opts.optflag("", "latency-first", "优先延迟");
     opts.optopt("", "use-channel", "使用通道 relay/p2p", "<use-channel>");
     opts.optopt("", "packet-loss", "丢包率", "<packet-loss>");
@@ -262,9 +261,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             .map(|v| v.split(",").map(|x| x.parse().unwrap_or(0)).collect());
 
         let cmd = matches.opt_present("cmd");
-        #[cfg(feature = "ip_proxy")]
-        #[cfg(feature = "integrated_tun")]
-        let no_proxy = matches.opt_present("no-proxy");
         let latency_first = matches.opt_present("latency-first");
         let packet_loss = matches
             .opt_get::<f64>("packet-loss")
@@ -301,9 +297,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             password,
             mtu,
             virtual_ip,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(feature = "ip_proxy")]
-            no_proxy,
             cipher_model,
             finger,
             punch_model,
@@ -354,7 +347,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
         ("--cmd", ("开启交互式命令,使用此参数开启控制台输入", "Enable interactive command mode, use this parameter to enable console input")),
-        ("--no-proxy", ("关闭内置代理,如需点对网则需要配置网卡NAT转发", "Disable built-in proxy, configure network card NAT forwarding for point-to-point networking")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
         ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
@@ -486,12 +478,6 @@ fn print_usage(program: &str, _opts: Options) {
     println!(
         "  --cmd               {}",
         get_description("--cmd", &language)
-    );
-    #[cfg(feature = "ip_proxy")]
-    #[cfg(feature = "integrated_tun")]
-    println!(
-        "  --no-proxy          {}",
-        get_description("--no-proxy", &language)
     );
     println!(
         "  --latency-first     {}",

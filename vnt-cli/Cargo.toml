@@ -21,7 +21,7 @@ winapi = { version = "0.3.9", features = ["handleapi", "processthreadsapi", "win
 
 [features]
 default = ["default-feature"]
-default-feature = ["aes_gcm", "aes_cbc", "aes_ecb", "sm4_cbc", "chacha20_poly1305", "ip_proxy", "port_mapping", "log", "command", "file_config", "lz4", "quic"]
+default-feature = ["aes_gcm", "aes_cbc", "aes_ecb", "sm4_cbc", "chacha20_poly1305", "port_mapping", "log", "command", "file_config", "lz4", "quic"]
 
 openssl = ["vnt/openssl", "common/openssl"]
 openssl-vendored = ["vnt/openssl-vendored", "common/openssl-vendored"]
@@ -34,7 +34,6 @@ chacha20_poly1305 = ["vnt/chacha20_poly1305", "common/chacha20_poly1305"]
 port_mapping = ["vnt/port_mapping", "common/port_mapping"]
 lz4 = ["vnt/lz4_compress", "common/lz4"]
 zstd = ["vnt/zstd_compress", "common/zstd"]
-ip_proxy = ["vnt/ip_proxy", "common/ip_proxy"]
 upnp = ["vnt/upnp", "common/upnp"]
 quic = ["vnt/quic", "common/quic"]
 log = ["common/log"]

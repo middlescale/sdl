@@ -153,11 +153,6 @@ aes_gcm/aes_cbc/aes_ecb/sm4_cbc/chacha20_poly1305/chacha20/xor，默认使用aes
 
 优先使用低延迟通道，默认情况下优先使用p2p通道，某些情况下可能p2p比客户端中继延迟更高，可使用此参数进行优化传输
 
-### --no-proxy
-
-关闭内置的ip代理，内置的代理较为简单，而且一般来说直接使用网卡NAT转发性能会更高，
-有需要可以自行配置NAT转发，[可参考‘编译’小节中的NAT配置](https://github.com/vnt-dev/vnt#%E7%BC%96%E8%AF%91)
-
 ### --dns `<223.5.5.5>`
 
 设置域名解析服务器地址，可以设置多个。如果使用TXT记录的域名，则dns默认使用223.5.5.5和114.114.114.114，端口省略值为53
@@ -209,7 +204,6 @@ ports:
   - 0 #使用随机端口，tcp监听此端口
   - 0
 cmd: false #关闭控制台输入
-no_proxy: false #是否关闭内置代理，true为关闭
 latency_first: false #是否优先低延迟通道，默认为false，表示优先使用p2p通道
 device_name: vnt-tun #网卡名称
 packet_loss: 0 #指定丢包率 取值0~1之间的数 用于模拟弱网

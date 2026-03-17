@@ -1,8 +1,6 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-pub mod context;
-pub mod handler;
 pub mod notify;
 pub mod punch;
 pub mod punch_workers;

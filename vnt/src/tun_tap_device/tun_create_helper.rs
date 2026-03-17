@@ -10,8 +10,6 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::IpProxyMap;
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
@@ -63,8 +61,6 @@ struct TunDeviceHelperInner {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    #[cfg(feature = "ip_proxy")]
-    ip_proxy_map: Option<IpProxyMap>,
     client_cipher: Cipher,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
@@ -77,7 +73,6 @@ impl TunDeviceHelper {
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
-        #[cfg(feature = "ip_proxy")] ip_proxy_map: Option<IpProxyMap>,
         client_cipher: Cipher,
         device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
         compressor: Compressor,
@@ -89,8 +84,6 @@ impl TunDeviceHelper {
             current_device,
             gateway_sessions,
             ip_route,
-            #[cfg(feature = "ip_proxy")]
-            ip_proxy_map,
             client_cipher,
             device_map,
             compressor,
@@ -126,8 +119,6 @@ impl TunDeviceHelper {
             inner.current_device,
             inner.gateway_sessions,
             inner.ip_route,
-            #[cfg(feature = "ip_proxy")]
-            inner.ip_proxy_map,
             inner.client_cipher,
             inner.device_map,
             inner.compressor,

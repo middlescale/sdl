@@ -14,13 +14,10 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route_manager::RouteManager;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::IpProxyMap;
 use crate::nat::NatTest;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
-use crate::util::limit::TrafficMeterMultiAddress;
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
@@ -62,13 +59,8 @@ pub struct VntRuntime {
     pub gateway_sessions: GatewaySessions,
     pub route_manager: RouteManager,
     pub udp_channel: UdpChannel,
-    pub up_traffic_meter: Option<TrafficMeterMultiAddress>,
-    pub down_traffic_meter: Option<TrafficMeterMultiAddress>,
     pub data_channel: DataChannel,
     pub punch_coordinator: PunchCoordinator,
-    #[cfg(feature = "ip_proxy")]
-    #[cfg(feature = "integrated_tun")]
-    pub ip_proxy_map: Option<IpProxyMap>,
     #[cfg(feature = "integrated_tun")]
     pub tun_device_helper: TunDeviceHelper,
 }
@@ -76,9 +68,5 @@ pub struct VntRuntime {
 impl VntRuntime {
     pub fn route_manager(&self) -> RouteManager {
         self.route_manager.clone()
-    }
-
-    pub fn channel_num(&self) -> usize {
-        self.udp_channel.channel_num()
     }
 }

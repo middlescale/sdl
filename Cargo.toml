@@ -1,5 +1,5 @@
 [workspace]
-members = ["vnt", "common", "vnt-cli", "vn-link", "vnt-dns"]
+members = ["vnt", "common", "vnt-cli", "vnt-dns"]
 
 [profile.release]
 opt-level = 'z'

@@ -68,11 +68,7 @@ impl DataChannel {
         buf: &crate::protocol::NetPacket<B>,
         route_key: RouteKey,
     ) -> io::Result<()> {
-        runtime.udp_channel.send_by_key(buf.buffer(), route_key)?;
-        if let Some(up_traffic_meter) = &runtime.up_traffic_meter {
-            up_traffic_meter.add_traffic(buf.destination(), buf.data_len());
-        }
-        Ok(())
+        runtime.udp_channel.send_by_key(buf.buffer(), route_key)
     }
 
     fn runtime(&self) -> io::Result<Arc<VntRuntime>> {

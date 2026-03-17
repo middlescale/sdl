@@ -8,15 +8,12 @@ use packet::icmp::{icmp, Kind};
 use packet::ip::ipv4;
 use packet::ip::ipv4::packet::IpV4Packet;
 
-use crate::channel::context::ChannelContext;
 use crate::channel::punch::NatInfo;
 use crate::channel::{Route, RouteKey};
 use crate::core::VntRuntime;
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
-#[cfg(feature = "ip_proxy")]
-use crate::ip_proxy::ProxyHandler;
 use crate::proto::message::{PunchInfo, PunchNatType};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::ControlPacket;
@@ -44,11 +41,10 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         mut net_packet: NetPacket<&mut [u8]>,
         mut extend: NetPacket<&mut [u8]>,
         route_key: RouteKey,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         self.runtime.client_cipher.decrypt_ipv4(&mut net_packet)?;
-        context
+        self.runtime
             .route_manager()
             .touch_path(&net_packet.source(), &route_key);
         //处理扩展
@@ -66,13 +62,13 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             Protocol::Service => {}
             Protocol::Error => {}
             Protocol::Control => {
-                self.control(context, current_device, net_packet, route_key)?;
+                self.control(current_device, net_packet, route_key)?;
             }
             Protocol::IpTurn => {
-                self.ip_turn(net_packet, context, current_device, route_key)?;
+                self.ip_turn(net_packet, current_device, route_key)?;
             }
             Protocol::OtherTurn => {
-                self.other_turn(context, current_device, net_packet, route_key)?;
+                self.other_turn(current_device, net_packet, route_key)?;
             }
             Protocol::Unknown(_) => {}
         }
@@ -84,7 +80,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     fn ip_turn(
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
@@ -108,7 +103,9 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 net_packet.set_destination(source);
                                 //不管加不加密，和接收到的数据长度都一致
                                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                                context.send_by_key(&net_packet, route_key)?;
+                                self.runtime
+                                    .udp_channel
+                                    .send_by_key(net_packet.buffer(), route_key)?;
                                 return Ok(());
                             }
                         }
@@ -160,13 +157,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         }
                         _ => {}
                     }
-                    #[cfg(feature = "ip_proxy")]
-                    #[cfg(feature = "integrated_tun")]
-                    if let Some(ip_proxy_map) = &self.runtime.ip_proxy_map {
-                        if ip_proxy_map.recv_handle(&mut ipv4, source, destination)? {
-                            return Ok(());
-                        }
-                    }
                 }
                 self.device.write(net_packet.payload())?;
             }
@@ -182,7 +172,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     }
     fn control(
         &self,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         mut net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
@@ -192,13 +181,17 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PingPacket(_) => {
                 let route = Route::from_default_rt(route_key, metric);
-                context.route_manager().add_path_if_absent(source, route);
+                self.runtime
+                    .route_manager()
+                    .add_path_if_absent(source, route);
                 net_packet.set_transport_protocol(control_packet::Protocol::Pong.into());
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                context.send_by_key(&net_packet, route_key)?;
+                self.runtime
+                    .udp_channel
+                    .send_by_key(net_packet.buffer(), route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
@@ -207,11 +200,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, metric, rt);
-                context.route_manager().add_path(source, route);
+                self.runtime.route_manager().add_path(source, route);
             }
             ControlPacket::PunchRequest => {
                 log::info!("PunchRequest={:?},source={}", route_key, source);
-                if context.use_channel_type().is_only_relay() {
+                if self
+                    .runtime
+                    .route_manager
+                    .use_channel_type()
+                    .is_only_relay()
+                {
                     return Ok(());
                 }
                 //忽略掉来源于自己的包
@@ -229,14 +227,21 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                context.send_by_key(&net_packet, route_key)?;
+                self.runtime
+                    .udp_channel
+                    .send_by_key(net_packet.buffer(), route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
                 // context.route_table.add_route_if_absent(source, route);
             }
             ControlPacket::PunchResponse => {
                 log::info!("PunchResponse={:?},source={}", route_key, source);
-                if context.use_channel_type().is_only_relay() {
+                if self
+                    .runtime
+                    .route_manager
+                    .use_channel_type()
+                    .is_only_relay()
+                {
                     return Ok(());
                 }
                 if self
@@ -247,7 +252,9 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 let route = Route::from_default_rt(route_key, metric);
-                context.route_manager().add_path_if_absent(source, route);
+                self.runtime
+                    .route_manager()
+                    .add_path_if_absent(source, route);
             }
             ControlPacket::AddrRequest => match route_key.addr.ip() {
                 std::net::IpAddr::V4(ipv4) => {
@@ -262,7 +269,9 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
                     self.runtime.client_cipher.encrypt_ipv4(&mut packet)?;
-                    context.send_by_key(&packet, route_key)?;
+                    self.runtime
+                        .udp_channel
+                        .send_by_key(packet.buffer(), route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
             },
@@ -272,12 +281,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     }
     fn other_turn(
         &self,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
-        if context.use_channel_type().is_only_relay() {
+        if self
+            .runtime
+            .route_manager
+            .use_channel_type()
+            .is_only_relay()
+        {
             return Ok(());
         }
         let source = net_packet.source();
@@ -371,7 +384,9 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         .punch_coordinator
                         .submit_from_peer(source, peer_nat_info)
                     {
-                        context.send_by_key(&punch_packet, route_key)?;
+                        self.runtime
+                            .udp_channel
+                            .send_by_key(punch_packet.buffer(), route_key)?;
                     }
                 } else {
                     self.runtime

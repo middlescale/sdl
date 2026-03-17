@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::thread;
 
-use crate::channel::context::ChannelContext;
-use crate::channel::handler::RecvChannelHandler;
 use crate::channel::RouteKey;
 use crate::core::VntRuntime;
 use crate::handle::callback::VntCallback;
@@ -25,14 +23,8 @@ pub struct RecvDataHandler<Call, Device> {
     server: ServerPacketHandler<Call, Device>,
 }
 
-impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHandler<Call, Device> {
-    fn handle(
-        &self,
-        buf: &mut [u8],
-        extend: &mut [u8],
-        route_key: RouteKey,
-        context: &ChannelContext,
-    ) {
+impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
+    pub fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
         if buf.len() < HEAD_LEN {
             return;
         }
@@ -48,7 +40,7 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHand
                 }
             }
         }
-        if let Err(e) = self.handle0(buf, extend, route_key, context) {
+        if let Err(e) = self.handle0(buf, extend, route_key) {
             log::error!(
                 "[{}]-{:?}-{:?}",
                 thread::current().name().unwrap_or(""),
@@ -57,13 +49,11 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvChannelHandler for RecvDataHand
             );
         }
     }
-}
 
-impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
     pub fn new(runtime: Arc<VntRuntime>, device: Device, callback: Call) -> Self {
         let server = ServerPacketHandler::new(runtime.clone(), device.clone(), callback);
         let client = ClientPacketHandler::new(runtime.clone(), device.clone());
-        let turn = TurnPacketHandler::new();
+        let turn = TurnPacketHandler::new(runtime.clone());
         Self {
             runtime,
             turn,
@@ -71,12 +61,12 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             server,
         }
     }
+
     fn handle0(
         &self,
         buf: &mut [u8],
         extend: &mut [u8],
         route_key: RouteKey,
-        context: &ChannelContext,
     ) -> anyhow::Result<()> {
         let net_packet = NetPacket::new(buf)?;
 
@@ -94,24 +84,19 @@ impl<Call: VntCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             || dest.is_unspecified()
             || dest == current_device.broadcast_ip
         {
-            // 统计流量
-            if let Some(down_traffic_meter) = &context.down_traffic_meter {
-                down_traffic_meter.add_traffic(net_packet.source(), net_packet.data_len())
-            }
-
             if is_control_or_service_packet(&net_packet, &current_device) {
                 //服务端-客户端包
                 self.server
-                    .handle(net_packet, extend, route_key, context, &current_device)
+                    .handle(net_packet, extend, route_key, &current_device)
             } else {
                 //客户端-客户端包
                 self.client
-                    .handle(net_packet, extend, route_key, context, &current_device)
+                    .handle(net_packet, extend, route_key, &current_device)
             }
         } else {
             //转发包
             self.turn
-                .handle(net_packet, extend, route_key, context, &current_device)
+                .handle(net_packet, extend, route_key, &current_device)
         }
     }
 }
@@ -136,7 +121,6 @@ pub trait PacketHandler {
         net_packet: NetPacket<&mut [u8]>,
         extend: NetPacket<&mut [u8]>,
         route_key: RouteKey,
-        context: &ChannelContext,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()>;
 }

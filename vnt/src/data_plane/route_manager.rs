@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::channel::context::ChannelContext;
 use crate::channel::{Route, RouteKey, UseChannelType};
 use crate::cipher::Cipher;
 use crate::data_plane::route_state::RouteState;
@@ -12,6 +11,7 @@ use crate::data_plane::route_table::RouteTable;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol};
+use crate::transport::udp_channel::UdpChannel;
 use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
 
@@ -21,6 +21,13 @@ const ROUTE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 #[derive(Clone)]
 pub struct RouteManager {
     route_table: Arc<RouteTable>,
+    sender: Option<RouteSender>,
+}
+
+#[derive(Clone)]
+struct RouteSender {
+    udp_channel: UdpChannel,
+    channel_num: usize,
 }
 
 pub enum StaleDirectRoute {
@@ -34,24 +41,34 @@ pub struct StaleDirectRouteCleanup {
 }
 
 impl RouteManager {
-    pub fn new(route_table: Arc<RouteTable>) -> Self {
-        Self { route_table }
-    }
-
-    pub fn start_maintenance(
-        &self,
+    pub fn new(
+        route_table: Arc<RouteTable>,
+        udp_channel: UdpChannel,
         stop_manager: StopManager,
-        context: ChannelContext,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         client_cipher: Cipher,
-    ) -> anyhow::Result<()> {
-        self.start_heartbeat_loop(
+    ) -> anyhow::Result<Self> {
+        let manager = Self {
+            route_table,
+            sender: Some(RouteSender {
+                channel_num: udp_channel.channel_num(),
+                udp_channel,
+            }),
+        };
+        manager.start_heartbeat_loop(
             stop_manager.clone(),
-            context.clone(),
             current_device.clone(),
             client_cipher,
         )?;
-        self.start_stale_direct_route_cleanup_loop(stop_manager)
+        manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
+        Ok(manager)
+    }
+
+    pub fn new_detached(route_table: Arc<RouteTable>) -> Self {
+        Self {
+            route_table,
+            sender: None,
+        }
     }
 
     pub fn use_channel_type(&self) -> UseChannelType {
@@ -181,13 +198,11 @@ impl RouteManager {
         StaleDirectRoute::Sleep(sleep_time)
     }
 
-    pub fn send_heartbeats(
-        &self,
-        context: &ChannelContext,
-        current_device: CurrentDeviceInfo,
-        client_cipher: &Cipher,
-    ) {
-        let channel_num = context.channel_num();
+    pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo, client_cipher: &Cipher) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let channel_num = sender.channel_num;
         let src_ip = current_device.virtual_ip;
         for (dest_ip, routes) in self.heartbeat_targets(channel_num) {
             if current_device.is_gateway_vip(&dest_ip) {
@@ -201,7 +216,7 @@ impl RouteManager {
                 }
             };
             for route in &routes {
-                if let Err(e) = context.send_by_key(&net_packet, route.route_key()) {
+                if let Err(e) = self.send_by_key(sender, &net_packet, route.route_key()) {
                     log::warn!("heartbeat err={:?}", e)
                 }
             }
@@ -238,7 +253,6 @@ impl RouteManager {
     fn start_heartbeat_loop(
         &self,
         stop_manager: StopManager,
-        context: ChannelContext,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         client_cipher: Cipher,
     ) -> anyhow::Result<()> {
@@ -261,7 +275,7 @@ impl RouteManager {
                     return;
                 }
                 while !stop_manager.is_stopped() {
-                    route_manager.send_heartbeats(&context, current_device.load(), &client_cipher);
+                    route_manager.send_heartbeats(current_device.load(), &client_cipher);
                     if wait_for_stop(&stop_manager, ROUTE_HEARTBEAT_INTERVAL) {
                         break;
                     }
@@ -303,6 +317,15 @@ impl RouteManager {
                 worker.stop_all();
             })?;
         Ok(())
+    }
+
+    fn send_by_key<B: AsRef<[u8]>>(
+        &self,
+        sender: &RouteSender,
+        buf: &NetPacket<B>,
+        route_key: RouteKey,
+    ) -> io::Result<()> {
+        sender.udp_channel.send_by_key(buf.buffer(), route_key)
     }
 }
 
@@ -360,7 +383,7 @@ mod tests {
     #[test]
     fn next_stale_direct_route_ignores_stale_relay_routes() {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
-        let manager = RouteManager::new(table.clone());
+        let manager = RouteManager::new_detached(table.clone());
         table.add_route(Ipv4Addr::new(10, 0, 0, 2), route(2, 2000));
         thread::sleep(Duration::from_millis(15));
 
@@ -373,7 +396,7 @@ mod tests {
     #[test]
     fn next_stale_direct_route_times_out_stale_p2p_routes() {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
-        let manager = RouteManager::new(table.clone());
+        let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 3);
         let route = route(1, 2001);
         table.add_route(peer, route);
@@ -391,7 +414,7 @@ mod tests {
     #[test]
     fn cleanup_stale_direct_routes_only_removes_stale_p2p_routes() {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false, 1));
-        let manager = RouteManager::new(table.clone());
+        let manager = RouteManager::new_detached(table.clone());
         let relay_peer = Ipv4Addr::new(10, 0, 0, 4);
         let p2p_peer = Ipv4Addr::new(10, 0, 0, 5);
         let relay = route(2, 2002);

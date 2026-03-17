@@ -10,7 +10,7 @@ pub fn addr_request(scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
 }
 
 fn pub_address_request(scheduler: &Scheduler, runtime: Arc<VntRuntime>, count: usize) {
-    let channel_num = runtime.channel_num();
+    let channel_num = runtime.udp_channel.channel_num();
     let index = count % channel_num;
     if let Err(e) = addr_request0(runtime.as_ref(), index) {
         log::warn!("{:?}", e);

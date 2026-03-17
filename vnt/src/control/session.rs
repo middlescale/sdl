@@ -335,8 +335,8 @@ impl ControlSession {
             item.next_ip = ip.into();
             message.p2p_list.push(item);
         }
-        message.up_stream = runtime.up_traffic_meter.as_ref().map_or(0, |v| v.total());
-        message.down_stream = runtime.down_traffic_meter.as_ref().map_or(0, |v| v.total());
+        message.up_stream = runtime.udp_channel.up_traffic_total();
+        message.down_stream = runtime.udp_channel.down_traffic_total();
         message.nat_type =
             protobuf::EnumOrUnknown::new(if runtime.nat_test.nat_info().nat_type.is_cone() {
                 PunchNatType::Cone

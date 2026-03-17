@@ -79,7 +79,6 @@ default = [
     "aes_ecb",
     "sm4_cbc",
     "chacha20_poly1305",
-    "ip_proxy",
     "port_mapping",
     "lz4_compress",
     "zstd_compress",
@@ -95,7 +94,6 @@ aes_ecb = ["ecb"]
 sm4_cbc = ["libsm"]
 aes_gcm = ["aes-gcm"]
 chacha20_poly1305 = ["chacha20poly1305", "chacha20"]
-ip_proxy = []
 port_mapping = []
 lz4_compress = ["lz4_flex"]
 zstd_compress = ["zstd"]

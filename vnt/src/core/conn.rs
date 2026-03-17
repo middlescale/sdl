@@ -6,34 +6,27 @@ use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
-use tokio::sync::mpsc::channel;
 
-use crate::channel::context::ChannelContext;
-use crate::channel::handler::RecvChannelHandler;
 use crate::channel::punch::{NatInfo, Punch};
 use crate::channel::punch_workers::{spawn_punch_workers, PunchCoordinator};
-use crate::channel::sender::IpPacketSender;
 use crate::channel::{Route, RouteKey};
 use crate::cipher::Cipher;
-use crate::compression::Compressor;
 use crate::control::ControlSession;
 use crate::core::{Config, RuntimeConfig, VntRuntime};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
+use crate::data_plane::route_table::RouteTable;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::recv_data::RecvDataHandler;
 use crate::handle::{maintain, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::NatTest;
-#[cfg(feature = "quic")]
-use crate::transport::quic_channel::quic_connect_accept;
 use crate::transport::quic_channel::QuicChannel;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::limit::TrafficMeterMultiAddress;
 use crate::util::{device_key_alg, load_or_create_device_public_key, Scheduler, StopManager};
 use crate::{nat, VntCallback};
 
@@ -74,14 +67,8 @@ pub struct VntInner {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     nat_test: NatTest,
     device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    context: Arc<Mutex<Option<ChannelContext>>>,
     peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
     client_secret_hash: Option<[u8; 16]>,
-    compressor: Compressor,
-    client_cipher: Cipher,
-    external_route: ExternalRoute,
-    up_traffic_meter: Option<TrafficMeterMultiAddress>,
-    down_traffic_meter: Option<TrafficMeterMultiAddress>,
 }
 
 impl VntInner {
@@ -103,15 +90,6 @@ impl VntInner {
         device: Device,
     ) -> anyhow::Result<Self> {
         log::info!("config: {:?}", config);
-        let (up_traffic_meter, down_traffic_meter) = if config.enable_traffic {
-            (
-                Some(TrafficMeterMultiAddress::default()),
-                Some(TrafficMeterMultiAddress::default()),
-            )
-        } else {
-            (None, None)
-        };
-
         let finger = if config.finger {
             Some(config.token.clone())
         } else {
@@ -172,18 +150,11 @@ impl VntInner {
         //通道上下文
         let udp_channel = UdpChannel::bind(&config)?;
         let channel_num = udp_channel.channel_num();
-        let context = ChannelContext::new(
-            udp_channel.clone(),
-            channel_num,
-            &config,
-            up_traffic_meter.clone(),
-            down_traffic_meter.clone(),
-        );
         let local_ipv6 = nat::local_ipv6();
-        let udp_ports = context.main_local_udp_port()?;
+        let udp_ports = udp_channel.main_local_udp_port()?;
         //nat检测工具
         let nat_test = NatTest::new(
-            context.channel_num(),
+            channel_num,
             config.stun_server.clone(),
             local_ipv4,
             local_ipv6,
@@ -202,27 +173,19 @@ impl VntInner {
             current_device.clone(),
         );
 
-        #[cfg(feature = "ip_proxy")]
-        #[cfg(feature = "integrated_tun")]
-        let proxy_map = if !config.out_ips.is_empty() && !config.no_proxy {
-            Some(crate::ip_proxy::init_proxy(
-                context.clone(),
-                stop_manager.clone(),
-                current_device.clone(),
-                client_cipher.clone(),
-            )?)
-        } else {
-            None
-        };
         let punch_coordinator = PunchCoordinator::new();
         let gateway_sessions = GatewaySessions::new(current_device.clone());
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
-        let route_table = context.route_table();
-        let route_manager = RouteManager::new(route_table.clone());
-        route_manager.start_maintenance(
+        let route_table = Arc::new(RouteTable::new(
+            config.use_channel_type,
+            config.latency_first,
+            channel_num,
+        ));
+        let route_manager = RouteManager::new(
+            route_table.clone(),
+            udp_channel.clone(),
             stop_manager.clone(),
-            context.clone(),
             current_device.clone(),
             client_cipher.clone(),
         )?;
@@ -236,8 +199,6 @@ impl VntInner {
                     current_device.clone(),
                     gateway_sessions.clone(),
                     external_route.clone(),
-                    #[cfg(feature = "ip_proxy")]
-                    proxy_map.clone(),
                     client_cipher.clone(),
                     device_map.clone(),
                     config.compressor,
@@ -258,13 +219,8 @@ impl VntInner {
                 gateway_sessions: gateway_sessions.clone(),
                 route_manager: route_manager.clone(),
                 udp_channel: udp_channel.clone(),
-                up_traffic_meter: up_traffic_meter.clone(),
-                down_traffic_meter: down_traffic_meter.clone(),
                 data_channel,
                 punch_coordinator: punch_coordinator.clone(),
-                #[cfg(feature = "ip_proxy")]
-                #[cfg(feature = "integrated_tun")]
-                ip_proxy_map: proxy_map.clone(),
                 #[cfg(feature = "integrated_tun")]
                 tun_device_helper,
             }
@@ -272,32 +228,22 @@ impl VntInner {
         let handler = RecvDataHandler::new(runtime.clone(), device, callback.clone());
         let control_handler = handler.clone();
         {
-            let context = context.clone();
             let handler = handler.clone();
             gateway_sessions.start(stop_manager.clone(), move |mut packet, route_key| {
                 let mut extend = [0u8; crate::channel::BUFFER_SIZE];
-                handler.handle(&mut packet, &mut extend, route_key, &context);
+                handler.handle(&mut packet, &mut extend, route_key);
             })?;
         }
 
         //初始化网络数据通道
-        #[cfg(feature = "quic")]
-        let (quic_connect_s, quic_connect_r) = channel(16);
-        #[cfg(feature = "quic")]
-        let _ = &quic_connect_s;
-        context
-            .udp_channel
-            .start(stop_manager.clone(), handler.clone(), context.clone())?;
-        #[cfg(feature = "quic")]
-        quic_connect_accept(
-            quic_connect_r,
-            handler,
-            context.clone(),
-            stop_manager.clone(),
-        )?;
+        udp_channel.start(stop_manager.clone(), {
+            let handler = handler.clone();
+            move |buf, extend, route_key| handler.handle(buf, extend, route_key)
+        })?;
         // 打洞逻辑
         let punch = Punch::new(
-            context.clone(),
+            udp_channel.clone(),
+            route_manager.clone(),
             config.punch_model,
             nat_test.clone(),
             current_device.clone(),
@@ -318,11 +264,10 @@ impl VntInner {
             runtime.gateway_sessions.clone(),
             callback.clone(),
             {
-                let context = context.clone();
                 let handler = control_handler;
                 move |mut packet, route_key| {
                     let mut extend = [0u8; crate::channel::BUFFER_SIZE];
-                    handler.handle(&mut packet, &mut extend, route_key, &context);
+                    handler.handle(&mut packet, &mut extend, route_key);
                 }
             },
         )?;
@@ -337,7 +282,6 @@ impl VntInner {
                 start(scheduler, runtime.clone());
             });
         }
-        let compressor = config.compressor;
         Ok(Self {
             stop_manager,
             config,
@@ -345,14 +289,8 @@ impl VntInner {
             current_device,
             nat_test,
             device_map,
-            context: Arc::new(Mutex::new(Some(context))),
             peer_nat_info_map,
             client_secret_hash: runtime_config.client_secret_hash,
-            compressor,
-            client_cipher,
-            external_route,
-            up_traffic_meter,
-            down_traffic_meter,
         })
     }
 }
@@ -421,28 +359,24 @@ impl VntInner {
             .snapshot_route_states(current_device.virtual_gateway)
     }
     pub fn up_stream(&self) -> u64 {
-        self.up_traffic_meter.as_ref().map_or(0, |v| v.total())
+        self.runtime.udp_channel.up_traffic_total()
     }
-    pub fn up_stream_all(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
-        self.up_traffic_meter.as_ref().map(|v| v.get_all())
+    pub fn up_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
+        self.runtime.udp_channel.up_traffic_all()
     }
-    pub fn up_stream_history(&self) -> Option<(u64, HashMap<Ipv4Addr, (u64, Vec<usize>)>)> {
-        self.up_traffic_meter.as_ref().map(|v| v.get_all_history())
+    pub fn up_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
+        self.runtime.udp_channel.up_traffic_history()
     }
     pub fn down_stream(&self) -> u64 {
-        self.down_traffic_meter.as_ref().map_or(0, |v| v.total())
+        self.runtime.udp_channel.down_traffic_total()
     }
-    pub fn down_stream_all(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
-        self.down_traffic_meter.as_ref().map(|v| v.get_all())
+    pub fn down_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
+        self.runtime.udp_channel.down_traffic_all()
     }
-    pub fn down_stream_history(&self) -> Option<(u64, HashMap<Ipv4Addr, (u64, Vec<usize>)>)> {
-        self.down_traffic_meter
-            .as_ref()
-            .map(|v| v.get_all_history())
+    pub fn down_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
+        self.runtime.udp_channel.down_traffic_history()
     }
     pub fn stop(&self) {
-        //退出协助回收资源
-        let _ = self.context.lock().take();
         self.stop_manager.stop()
     }
     pub fn is_stopped(&self) -> bool {
@@ -462,19 +396,6 @@ impl VntInner {
     }
     pub fn config(&self) -> &Config {
         &self.config
-    }
-    pub fn ipv4_packet_sender(&self) -> Option<IpPacketSender> {
-        if let Some(c) = self.context.lock().as_ref() {
-            Some(IpPacketSender::new(
-                c.clone(),
-                self.current_device.clone(),
-                self.compressor.clone(),
-                self.client_cipher.clone(),
-                self.external_route.clone(),
-            ))
-        } else {
-            None
-        }
     }
 }
 

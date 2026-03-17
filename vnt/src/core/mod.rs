@@ -38,9 +38,6 @@ pub struct Config {
     pub mtu: Option<u32>,
     pub protocol: ConnectProtocol,
     pub ip: Option<Ipv4Addr>,
-    #[cfg(feature = "ip_proxy")]
-    #[cfg(feature = "integrated_tun")]
-    pub no_proxy: bool,
     pub cipher_model: CipherModel,
     pub finger: bool,
     pub punch_model: PunchModel,
@@ -92,9 +89,6 @@ impl Config {
             None,
             None,
             ip,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(feature = "ip_proxy")]
-            false,
             CipherModel::None,
             false,
             PunchModel::All,
@@ -132,9 +126,6 @@ impl Config {
         password: Option<String>,
         mtu: Option<u32>,
         ip: Option<Ipv4Addr>,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(feature = "ip_proxy")]
-        no_proxy: bool,
         cipher_model: CipherModel,
         finger: bool,
         punch_model: PunchModel,
@@ -238,9 +229,6 @@ impl Config {
             mtu,
             protocol,
             ip,
-            #[cfg(feature = "ip_proxy")]
-            #[cfg(feature = "integrated_tun")]
-            no_proxy,
             cipher_model,
             finger,
             punch_model,

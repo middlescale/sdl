@@ -162,7 +162,7 @@ fn punch_start(
             log::error!("{:?}", e);
             continue;
         }
-        if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count < 2, count) {
+        if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count) {
             log::warn!("{:?}", e)
         }
     }

@@ -53,14 +53,14 @@ pub struct ChartA {
     pub disable_stats: bool,
     pub up_total: u64,
     pub down_total: u64,
-    pub up_map: HashMap<Ipv4Addr, u64>,
-    pub down_map: HashMap<Ipv4Addr, u64>,
+    pub up_map: HashMap<usize, u64>,
+    pub down_map: HashMap<usize, u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct ChartB {
     pub disable_stats: bool,
-    pub ip: Option<Ipv4Addr>,
+    pub channel: Option<usize>,
     pub up_total: u64,
     pub up_list: Vec<usize>,
     pub down_total: u64,
