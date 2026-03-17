@@ -4,7 +4,6 @@ use std::str::FromStr;
 pub mod notify;
 pub mod punch;
 pub mod punch_workers;
-pub mod sender;
 
 pub const BUFFER_SIZE: usize = 1024 * 64;
 
