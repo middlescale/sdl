@@ -18,7 +18,7 @@ use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::recv_data::RecvDataHandler;
-use crate::handle::{maintain, ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, Punch};
 use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
@@ -27,7 +27,7 @@ use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{device_key_alg, load_or_create_device_public_key, Scheduler, StopManager};
+use crate::util::{device_key_alg, load_or_create_device_public_key, StopManager};
 use crate::{nat, VntCallback};
 
 #[derive(Clone)]
@@ -161,8 +161,6 @@ impl VntInner {
             config.local_ipv4.is_none(),
             config.punch_model,
         );
-        // 定时器
-        let scheduler = Scheduler::new(stop_manager.clone())?;
         let external_route = ExternalRoute::new(config.in_ips.clone());
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
         let control_session = ControlSession::new(
@@ -271,13 +269,17 @@ impl VntInner {
         {
             let runtime = runtime.clone();
             if !config.use_channel_type.is_only_relay() {
-                // 定时nat探测
-                maintain::retrieve_nat_type(&scheduler, runtime.clone());
+                runtime.nat_test.start_refresh_task(
+                    stop_manager.clone(),
+                    runtime.config.default_interface.clone(),
+                )?;
+                runtime
+                    .control_session
+                    .start_public_addr_reporter(stop_manager.clone(), runtime.clone())?;
             }
-            //延迟启动
-            scheduler.timeout(Duration::from_secs(3), move |scheduler| {
-                start(scheduler, runtime.clone());
-            });
+            runtime
+                .control_session
+                .start_status_reporter(stop_manager.clone(), runtime.clone())?;
         }
         Ok(Self {
             stop_manager,
@@ -290,18 +292,6 @@ impl VntInner {
             client_secret_hash: runtime_config.client_secret_hash,
         })
     }
-}
-
-pub fn start(scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
-    // 默认禁用客户端中继探测（client-relay）
-
-    if !runtime.route_manager().use_channel_type().is_only_relay() {
-        // 定时地址探测
-        maintain::addr_request(&scheduler, runtime.clone());
-    }
-    runtime
-        .control_session
-        .start_status_reporter(scheduler, runtime.clone())
 }
 
 impl VntInner {

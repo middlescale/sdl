@@ -3,6 +3,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -11,6 +12,8 @@ use rand::prelude::SliceRandom;
 use rand::Rng;
 
 use crate::transport::socket::LocalInterface;
+use crate::transport::udp_channel::UdpChannel;
+use crate::util::StopManager;
 #[cfg(feature = "upnp")]
 use crate::util::UPnP;
 
@@ -175,9 +178,62 @@ impl NatTest {
         last.elapsed() > Duration::from_secs(10)
             && self.time.compare_exchange(last, Instant::now()).is_ok()
     }
+    pub fn start_refresh_task(
+        &self,
+        stop_manager: StopManager,
+        default_interface: LocalInterface,
+    ) -> anyhow::Result<()> {
+        let nat_test = self.clone();
+        let (stop_sender, stop_receiver) = std::sync::mpsc::channel::<()>();
+        let worker = stop_manager.add_listener("natRefresh".into(), move || {
+            let _ = stop_sender.send(());
+        })?;
+        thread::Builder::new()
+            .name("natRefresh".into())
+            .spawn(move || {
+                refresh_nat_type0(nat_test.clone(), default_interface.clone());
+                loop {
+                    if stop_receiver
+                        .recv_timeout(Duration::from_secs(60 * 10))
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    refresh_nat_type0(nat_test.clone(), default_interface.clone());
+                }
+                drop(worker);
+            })?;
+        Ok(())
+    }
 
     pub fn nat_info(&self) -> NatInfo {
         self.info.lock().clone()
+    }
+    pub fn has_public_udp_endpoints(&self) -> bool {
+        let guard = self.info.lock();
+        !guard.public_ips.is_empty()
+            && !guard.public_ports.is_empty()
+            && !guard.public_ports.contains(&0)
+    }
+    pub fn public_addr_retry_delay(&self) -> Duration {
+        let guard = self.info.lock();
+        if !guard.public_ips.is_empty()
+            && !guard.public_ports.is_empty()
+            && !guard.public_ports.contains(&0)
+        {
+            if guard.nat_type == NatType::Symmetric {
+                Duration::from_secs(600)
+            } else {
+                Duration::from_secs(19)
+            }
+        } else {
+            Duration::from_secs(3)
+        }
+    }
+    pub fn request_public_addr(&self, udp_channel: &UdpChannel) -> anyhow::Result<()> {
+        let (data, addr) = self.send_data()?;
+        udp_channel.send_to(&data, addr)?;
+        Ok(())
     }
     pub fn is_local_udp(&self, ipv4: Ipv4Addr, port: u16) -> bool {
         for x in &self.udp_ports {
@@ -343,4 +399,31 @@ impl NatTest {
         }
         Ok(())
     }
+}
+
+fn refresh_nat_type0(nat_test: NatTest, default_interface: LocalInterface) {
+    thread::Builder::new()
+        .name("natTest".into())
+        .spawn(move || {
+            if nat_test.can_update() {
+                let local_ipv4 = if nat_test.update_local_ipv4 {
+                    local_ipv4()
+                } else {
+                    None
+                };
+                let local_ipv6 = local_ipv6();
+                match nat_test.re_test(local_ipv4, local_ipv6, &default_interface) {
+                    Ok(nat_info) => {
+                        log::info!("当前nat信息:{:?}", nat_info);
+                    }
+                    Err(e) => {
+                        log::warn!("nat re_test {:?}", e);
+                    }
+                };
+                #[cfg(feature = "upnp")]
+                nat_test.reset_upnp();
+                log::info!("刷新nat结束")
+            }
+        })
+        .expect("natTest");
 }

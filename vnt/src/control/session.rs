@@ -20,7 +20,7 @@ use crate::proto::message::{
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::quic_channel::QuicChannel;
-use crate::util::{address_choose, dns_query_all, Scheduler, StopManager};
+use crate::util::{address_choose, dns_query_all, StopManager};
 use crate::{ErrorInfo, VntCallback};
 use parking_lot::Mutex;
 
@@ -281,11 +281,42 @@ impl ControlSession {
         )
     }
 
-    pub fn start_status_reporter(&self, scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
+    pub fn start_status_reporter(
+        &self,
+        stop_manager: StopManager,
+        runtime: Arc<VntRuntime>,
+    ) -> anyhow::Result<()> {
+        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+        let worker = stop_manager.add_listener("statusReporter".into(), move || {
+            let _ = stop_sender.send(());
+        })?;
         let control_session = self.clone();
-        let _ = scheduler.timeout(Duration::from_secs(60), move |x| {
-            control_session.status_report_tick(x, runtime)
-        });
+        thread::Builder::new()
+            .name("statusReporter".into())
+            .spawn(move || {
+                control_session.run_status_reporter(stop_receiver, runtime);
+                drop(worker);
+            })?;
+        Ok(())
+    }
+
+    pub fn start_public_addr_reporter(
+        &self,
+        stop_manager: StopManager,
+        runtime: Arc<VntRuntime>,
+    ) -> anyhow::Result<()> {
+        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+        let worker = stop_manager.add_listener("publicAddrReporter".into(), move || {
+            let _ = stop_sender.send(());
+        })?;
+        let control_session = self.clone();
+        thread::Builder::new()
+            .name("publicAddrReporter".into())
+            .spawn(move || {
+                control_session.run_public_addr_reporter(stop_receiver, runtime);
+                drop(worker);
+            })?;
+        Ok(())
     }
 
     pub fn trigger_status_report(&self, runtime: &VntRuntime) {
@@ -299,10 +330,9 @@ impl ControlSession {
         thread::Builder::new()
             .name("upStatusEvent".into())
             .spawn(move || {
-                let nat_info = runtime.nat_test.nat_info();
-                if !has_public_endpoints(&nat_info.public_ips, &nat_info.public_ports) {
-                    if let Ok((data, addr)) = runtime.nat_test.send_data() {
-                        let _ = runtime.udp_channel.send_to(&data, addr);
+                if !runtime.nat_test.has_public_udp_endpoints() {
+                    if let Err(e) = runtime.nat_test.request_public_addr(&runtime.udp_channel) {
+                        log::warn!("{:?}", e);
                     }
                     thread::sleep(Duration::from_secs(2));
                 }
@@ -313,16 +343,38 @@ impl ControlSession {
             .expect("upStatusEvent");
     }
 
-    fn status_report_tick(&self, scheduler: &Scheduler, runtime: Arc<VntRuntime>) {
-        if let Err(e) = self.send_status_report_packet(runtime.as_ref()) {
-            log::warn!("{:?}", e)
+    fn run_status_reporter(&self, stop_receiver: mpsc::Receiver<()>, runtime: Arc<VntRuntime>) {
+        let mut delay = Duration::from_secs(60);
+        loop {
+            if stop_receiver.recv_timeout(delay).is_ok() {
+                break;
+            }
+            if let Err(e) = self.send_status_report_packet(runtime.as_ref()) {
+                log::warn!("{:?}", e)
+            }
+            delay = Duration::from_secs(10 * 60);
         }
-        let control_session = self.clone();
-        let rs = scheduler.timeout(Duration::from_secs(10 * 60), move |x| {
-            control_session.status_report_tick(x, runtime)
-        });
-        if !rs {
-            log::info!("定时任务停止");
+    }
+
+    fn run_public_addr_reporter(
+        &self,
+        stop_receiver: mpsc::Receiver<()>,
+        runtime: Arc<VntRuntime>,
+    ) {
+        let mut delay = Duration::from_secs(3);
+        loop {
+            if stop_receiver.recv_timeout(delay).is_ok() {
+                break;
+            }
+            let current_device = self.current_device();
+            if current_device.status.online()
+                && !runtime.route_manager().use_channel_type().is_only_relay()
+            {
+                if let Err(e) = runtime.nat_test.request_public_addr(&runtime.udp_channel) {
+                    log::warn!("{:?}", e);
+                }
+            }
+            delay = runtime.nat_test.public_addr_retry_delay();
         }
     }
 
@@ -393,10 +445,6 @@ fn handshake_request_packet(secret: bool) -> io::Result<NetPacket<Vec<u8>>> {
     net_packet.set_initial_ttl(MAX_TTL);
     net_packet.set_payload(&bytes)?;
     Ok(net_packet)
-}
-
-fn has_public_endpoints(public_ips: &[std::net::Ipv4Addr], public_ports: &[u16]) -> bool {
-    !public_ips.is_empty() && !public_ports.is_empty()
 }
 
 fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions: &GatewaySessions) {
