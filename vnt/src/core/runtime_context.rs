@@ -10,6 +10,7 @@ use crate::control::ControlSession;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route_manager::RouteManager;
+use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::NatInfo;
@@ -50,7 +51,7 @@ pub struct VntRuntime {
     pub config: RuntimeConfig,
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub nat_test: NatTest,
-    pub device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    pub peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
     pub external_route: ExternalRoute,
     pub out_external_route: AllowExternalRoute,
@@ -58,6 +59,7 @@ pub struct VntRuntime {
     pub control_session: ControlSession,
     pub gateway_sessions: GatewaySessions,
     pub route_manager: RouteManager,
+    pub data_plane_stats: DataPlaneStats,
     pub udp_channel: UdpChannel,
     pub data_channel: DataChannel,
     pub punch_coordinator: PunchCoordinator,

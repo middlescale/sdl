@@ -8,12 +8,15 @@ use crossbeam_utils::atomic::AtomicCell;
 use protobuf::Message;
 use std::sync::Arc;
 
-use crate::core::{RuntimeConfig, VntRuntime};
+use crate::core::RuntimeConfig;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route_manager::RouteManager;
+use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::callback::{ConnectInfo, ErrorType};
 use crate::handle::registrar;
 use crate::handle::PeerDeviceInfo;
 use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
+use crate::nat::NatTest;
 use crate::proto::message::{
     ClientStatusInfo, HandshakeRequest, PunchNatType, RefreshGatewayGrantRequest, RouteItem,
 };
@@ -30,27 +33,38 @@ const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
 const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
 
 #[derive(Clone)]
+pub struct ControlSessionDeps {
+    pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    pub peer_state: Arc<
+        Mutex<(
+            u16,
+            std::collections::HashMap<std::net::Ipv4Addr, PeerDeviceInfo>,
+        )>,
+    >,
+    pub gateway_sessions: GatewaySessions,
+    pub data_plane_stats: DataPlaneStats,
+    pub nat_test: NatTest,
+    pub route_manager: RouteManager,
+}
+
+#[derive(Clone)]
 pub struct ControlSession {
     channel: QuicChannel,
     config: RuntimeConfig,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    deps: ControlSessionDeps,
 }
 
 impl ControlSession {
-    pub fn new(
-        channel: QuicChannel,
-        config: RuntimeConfig,
-        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    ) -> Self {
+    pub fn new(channel: QuicChannel, config: RuntimeConfig, deps: ControlSessionDeps) -> Self {
         Self {
             channel,
             config,
-            current_device,
+            deps,
         }
     }
 
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.current_device.load()
+        self.deps.current_device.load()
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -68,13 +82,6 @@ impl ControlSession {
     pub fn start<Call: VntCallback, F>(
         &self,
         stop_manager: StopManager,
-        device_map: Arc<
-            Mutex<(
-                u16,
-                std::collections::HashMap<std::net::Ipv4Addr, PeerDeviceInfo>,
-            )>,
-        >,
-        gateway_sessions: GatewaySessions,
         call: Call,
         on_packet: F,
     ) -> anyhow::Result<()>
@@ -90,7 +97,7 @@ impl ControlSession {
         thread::Builder::new()
             .name("controlSession".into())
             .spawn(move || {
-                control_session.run(device_map, gateway_sessions, call, stop_receiver);
+                control_session.run(call, stop_receiver);
                 drop(worker);
             })?;
         Ok(())
@@ -101,7 +108,7 @@ impl ControlSession {
         call: &Call,
         connect_count: &mut usize,
     ) -> io::Result<()> {
-        let current_device_info = &self.current_device;
+        let current_device_info = &self.deps.current_device;
         let mut current_device = current_device_info.load();
         if current_device.status.offline() {
             *connect_count += 1;
@@ -119,18 +126,7 @@ impl ControlSession {
         Ok(())
     }
 
-    fn run<Call: VntCallback>(
-        &self,
-        device_map: Arc<
-            Mutex<(
-                u16,
-                std::collections::HashMap<std::net::Ipv4Addr, PeerDeviceInfo>,
-            )>,
-        >,
-        gateway_sessions: GatewaySessions,
-        call: Call,
-        stop_receiver: mpsc::Receiver<()>,
-    ) {
+    fn run<Call: VntCallback>(&self, call: Call, stop_receiver: mpsc::Receiver<()>) {
         let mut connect_count = 0usize;
         let mut last_connect_at = Instant::now()
             .checked_sub(Duration::from_secs(5))
@@ -138,6 +134,12 @@ impl ControlSession {
         let mut last_heartbeat_at = Instant::now()
             .checked_sub(Duration::from_secs(3))
             .unwrap_or_else(Instant::now);
+        let mut last_status_report_at = Instant::now();
+        let mut status_report_delay = Duration::from_secs(60);
+        let mut last_public_addr_at = Instant::now()
+            .checked_sub(Duration::from_secs(3))
+            .unwrap_or_else(Instant::now);
+        let mut public_addr_delay = Duration::from_secs(3);
         loop {
             if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
                 break;
@@ -157,17 +159,32 @@ impl ControlSession {
                 }
                 continue;
             }
-            if last_heartbeat_at.elapsed() < Duration::from_secs(3) {
-                continue;
-            }
-            last_heartbeat_at = Instant::now();
-            match self.send_server_heartbeat(device_map.lock().0) {
-                Ok(_) => {}
-                Err(e) => {
-                    log::warn!("heartbeat err={:?}", e);
+            if last_heartbeat_at.elapsed() >= Duration::from_secs(3) {
+                last_heartbeat_at = Instant::now();
+                match self.send_server_heartbeat(self.deps.peer_state.lock().0) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("heartbeat err={:?}", e);
+                    }
                 }
+                try_refresh_gateway_grant(self, &self.deps.gateway_sessions);
             }
-            try_refresh_gateway_grant(self, &gateway_sessions);
+            if last_status_report_at.elapsed() >= status_report_delay {
+                if let Err(e) = self.send_status_report_packet() {
+                    log::warn!("{:?}", e)
+                }
+                last_status_report_at = Instant::now();
+                status_report_delay = Duration::from_secs(10 * 60);
+            }
+            if !self.deps.route_manager.use_channel_type().is_only_relay()
+                && last_public_addr_at.elapsed() >= public_addr_delay
+            {
+                if let Err(e) = self.deps.nat_test.request_public_addr() {
+                    log::warn!("{:?}", e);
+                }
+                last_public_addr_at = Instant::now();
+                public_addr_delay = self.deps.nat_test.public_addr_retry_delay();
+            }
         }
     }
 
@@ -281,109 +298,36 @@ impl ControlSession {
         )
     }
 
-    pub fn start_status_reporter(
-        &self,
-        stop_manager: StopManager,
-        runtime: Arc<VntRuntime>,
-    ) -> anyhow::Result<()> {
-        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
-        let worker = stop_manager.add_listener("statusReporter".into(), move || {
-            let _ = stop_sender.send(());
-        })?;
-        let control_session = self.clone();
-        thread::Builder::new()
-            .name("statusReporter".into())
-            .spawn(move || {
-                control_session.run_status_reporter(stop_receiver, runtime);
-                drop(worker);
-            })?;
-        Ok(())
-    }
-
-    pub fn start_public_addr_reporter(
-        &self,
-        stop_manager: StopManager,
-        runtime: Arc<VntRuntime>,
-    ) -> anyhow::Result<()> {
-        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
-        let worker = stop_manager.add_listener("publicAddrReporter".into(), move || {
-            let _ = stop_sender.send(());
-        })?;
-        let control_session = self.clone();
-        thread::Builder::new()
-            .name("publicAddrReporter".into())
-            .spawn(move || {
-                control_session.run_public_addr_reporter(stop_receiver, runtime);
-                drop(worker);
-            })?;
-        Ok(())
-    }
-
-    pub fn trigger_status_report(&self, runtime: &VntRuntime) {
-        if let Err(e) = self.send_status_report_packet(runtime) {
+    pub fn trigger_status_report(&self) {
+        if let Err(e) = self.send_status_report_packet() {
             log::warn!("{:?}", e)
         }
     }
 
-    pub fn trigger_status_report_with_nat_ready(&self, runtime: Arc<VntRuntime>) {
+    pub fn trigger_status_report_with_nat_ready(&self) {
         let control_session = self.clone();
         thread::Builder::new()
             .name("upStatusEvent".into())
             .spawn(move || {
-                if !runtime.nat_test.has_public_udp_endpoints() {
-                    if let Err(e) = runtime.nat_test.request_public_addr(&runtime.udp_channel) {
+                if !control_session.deps.nat_test.has_public_udp_endpoints() {
+                    if let Err(e) = control_session.deps.nat_test.request_public_addr() {
                         log::warn!("{:?}", e);
                     }
                     thread::sleep(Duration::from_secs(2));
                 }
-                if let Err(e) = control_session.send_status_report_packet(runtime.as_ref()) {
+                if let Err(e) = control_session.send_status_report_packet() {
                     log::warn!("{:?}", e)
                 }
             })
             .expect("upStatusEvent");
     }
 
-    fn run_status_reporter(&self, stop_receiver: mpsc::Receiver<()>, runtime: Arc<VntRuntime>) {
-        let mut delay = Duration::from_secs(60);
-        loop {
-            if stop_receiver.recv_timeout(delay).is_ok() {
-                break;
-            }
-            if let Err(e) = self.send_status_report_packet(runtime.as_ref()) {
-                log::warn!("{:?}", e)
-            }
-            delay = Duration::from_secs(10 * 60);
-        }
-    }
-
-    fn run_public_addr_reporter(
-        &self,
-        stop_receiver: mpsc::Receiver<()>,
-        runtime: Arc<VntRuntime>,
-    ) {
-        let mut delay = Duration::from_secs(3);
-        loop {
-            if stop_receiver.recv_timeout(delay).is_ok() {
-                break;
-            }
-            let current_device = self.current_device();
-            if current_device.status.online()
-                && !runtime.route_manager().use_channel_type().is_only_relay()
-            {
-                if let Err(e) = runtime.nat_test.request_public_addr(&runtime.udp_channel) {
-                    log::warn!("{:?}", e);
-                }
-            }
-            delay = runtime.nat_test.public_addr_retry_delay();
-        }
-    }
-
-    fn send_status_report_packet(&self, runtime: &VntRuntime) -> io::Result<()> {
+    fn send_status_report_packet(&self) -> io::Result<()> {
         let device_info = self.current_device();
         if device_info.status.offline() {
             return Ok(());
         }
-        let routes = runtime.route_manager().snapshot_direct_routes();
+        let routes = self.deps.route_manager.snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
         for (ip, _) in routes {
@@ -391,15 +335,15 @@ impl ControlSession {
             item.next_ip = ip.into();
             message.p2p_list.push(item);
         }
-        message.up_stream = runtime.udp_channel.up_traffic_total();
-        message.down_stream = runtime.udp_channel.down_traffic_total();
+        message.up_stream = self.deps.data_plane_stats.up_traffic_total();
+        message.down_stream = self.deps.data_plane_stats.down_traffic_total();
         message.nat_type =
-            protobuf::EnumOrUnknown::new(if runtime.nat_test.nat_info().nat_type.is_cone() {
+            protobuf::EnumOrUnknown::new(if self.deps.nat_test.nat_info().nat_type.is_cone() {
                 PunchNatType::Cone
             } else {
                 PunchNatType::Symmetric
             });
-        let nat_info = runtime.nat_test.nat_info();
+        let nat_info = self.deps.nat_test.nat_info();
         message.public_ip_list = nat_info
             .public_ips
             .iter()

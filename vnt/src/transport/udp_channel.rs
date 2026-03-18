@@ -1,15 +1,15 @@
 use mio::net::UdpSocket as MioUdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 
 use crate::core::Config;
 use crate::data_plane::route::RouteKey;
+use crate::data_plane::stats::DataPlaneStats;
 use crate::protocol::BUFFER_SIZE;
 use crate::transport::connect_protocol::ConnectProtocol;
-use crate::util::limit::TrafficMeterMultiChannel;
 use crate::util::StopManager;
 
 const NOTIFY: Token = Token(0);
@@ -18,12 +18,11 @@ const NOTIFY: Token = Token(0);
 pub struct UdpChannel {
     socket: Arc<UdpSocket>,
     dual_stack: bool,
-    up_traffic_meter: Option<TrafficMeterMultiChannel>,
-    down_traffic_meter: Option<TrafficMeterMultiChannel>,
+    stats: DataPlaneStats,
 }
 
 impl UdpChannel {
-    pub fn bind(config: &Config) -> anyhow::Result<Self> {
+    pub fn bind(config: &Config, stats: DataPlaneStats) -> anyhow::Result<Self> {
         let port = config
             .ports
             .as_ref()
@@ -40,12 +39,7 @@ impl UdpChannel {
         Ok(Self {
             socket: Arc::new(socket),
             dual_stack,
-            up_traffic_meter: config
-                .enable_traffic
-                .then(TrafficMeterMultiChannel::default),
-            down_traffic_meter: config
-                .enable_traffic
-                .then(TrafficMeterMultiChannel::default),
+            stats,
         })
     }
 
@@ -58,33 +52,31 @@ impl UdpChannel {
     }
 
     pub fn up_traffic_total(&self) -> u64 {
-        self.up_traffic_meter.as_ref().map_or(0, |v| v.total())
+        self.stats.up_traffic_total()
     }
 
     pub fn up_traffic_all(&self) -> Option<(u64, std::collections::HashMap<usize, u64>)> {
-        self.up_traffic_meter.as_ref().map(|v| v.get_all())
+        self.stats.up_traffic_all()
     }
 
     pub fn up_traffic_history(
         &self,
     ) -> Option<(u64, std::collections::HashMap<usize, (u64, Vec<usize>)>)> {
-        self.up_traffic_meter.as_ref().map(|v| v.get_all_history())
+        self.stats.up_traffic_history()
     }
 
     pub fn down_traffic_total(&self) -> u64 {
-        self.down_traffic_meter.as_ref().map_or(0, |v| v.total())
+        self.stats.down_traffic_total()
     }
 
     pub fn down_traffic_all(&self) -> Option<(u64, std::collections::HashMap<usize, u64>)> {
-        self.down_traffic_meter.as_ref().map(|v| v.get_all())
+        self.stats.down_traffic_all()
     }
 
     pub fn down_traffic_history(
         &self,
     ) -> Option<(u64, std::collections::HashMap<usize, (u64, Vec<usize>)>)> {
-        self.down_traffic_meter
-            .as_ref()
-            .map(|v| v.get_all_history())
+        self.stats.down_traffic_history()
     }
 
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
@@ -114,7 +106,7 @@ impl UdpChannel {
     fn normalize_send_addr(&self, addr: SocketAddr) -> SocketAddr {
         if self.dual_stack {
             if let SocketAddr::V4(addr_v4) = addr {
-                return SocketAddr::V6(SocketAddrV6::new(
+                return SocketAddr::V6(std::net::SocketAddrV6::new(
                     addr_v4.ip().to_ipv6_mapped(),
                     addr_v4.port(),
                     0,
@@ -139,15 +131,11 @@ impl UdpChannel {
     }
 
     fn record_up_traffic(&self, len: usize) {
-        if let Some(up_traffic_meter) = &self.up_traffic_meter {
-            up_traffic_meter.add_traffic(0, len);
-        }
+        self.stats.record_up(0, len);
     }
 
     fn record_down_traffic(&self, len: usize) {
-        if let Some(down_traffic_meter) = &self.down_traffic_meter {
-            down_traffic_meter.add_traffic(0, len);
-        }
+        self.stats.record_down(0, len);
     }
 }
 
@@ -259,8 +247,8 @@ where
 mod tests {
     use super::UdpChannel;
     use crate::data_plane::route::RouteKey;
+    use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
-    use crate::util::limit::TrafficMeterMultiChannel;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
     use std::sync::Arc;
     use std::time::Duration;
@@ -269,8 +257,7 @@ mod tests {
         UdpChannel {
             socket: Arc::new(socket),
             dual_stack,
-            up_traffic_meter: enable_traffic.then(TrafficMeterMultiChannel::default),
-            down_traffic_meter: enable_traffic.then(TrafficMeterMultiChannel::default),
+            stats: DataPlaneStats::new(enable_traffic),
         }
     }
 

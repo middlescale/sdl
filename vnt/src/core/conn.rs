@@ -8,7 +8,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::cipher::Cipher;
-use crate::control::ControlSession;
+use crate::control::{ControlSession, ControlSessionDeps};
 use crate::core::{Config, RuntimeConfig, VntRuntime};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
@@ -16,6 +16,7 @@ use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
+use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::recv_data::RecvDataHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
@@ -66,7 +67,7 @@ pub struct VntInner {
     runtime: Arc<VntRuntime>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     nat_test: NatTest,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
     client_secret_hash: Option<[u8; 16]>,
 }
@@ -103,7 +104,7 @@ impl VntInner {
             config.server_address,
         )));
         //设备列表
-        let device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>> =
+        let peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>> =
             Arc::new(Mutex::new((0, HashMap::with_capacity(16))));
         let local_ipv4 = if let Some(local_ipv4) = config.local_ipv4 {
             Some(local_ipv4)
@@ -148,12 +149,15 @@ impl VntInner {
             config.port_mapping_list.clone(),
         )?;
         //通道上下文
-        let udp_channel = UdpChannel::bind(&config)?;
+        let data_plane_stats = DataPlaneStats::new(config.enable_traffic);
+        let udp_channel = UdpChannel::bind(&config, data_plane_stats.clone())?;
         let local_ipv6 = nat::local_ipv6();
         let udp_ports = vec![udp_channel.local_udp_port()?];
         //nat检测工具
         let nat_test = NatTest::new(
             config.stun_server.clone(),
+            config.local_interface.clone(),
+            udp_channel.clone(),
             local_ipv4,
             local_ipv6,
             udp_ports,
@@ -163,12 +167,6 @@ impl VntInner {
         );
         let external_route = ExternalRoute::new(config.in_ips.clone());
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
-        let control_session = ControlSession::new(
-            QuicChannel::new(config.server_address),
-            runtime_config.clone(),
-            current_device.clone(),
-        );
-
         let punch_coordinator = PunchCoordinator::new();
         let gateway_sessions = GatewaySessions::new(current_device.clone());
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
@@ -184,6 +182,18 @@ impl VntInner {
             current_device.clone(),
             client_cipher.clone(),
         )?;
+        let control_session = ControlSession::new(
+            QuicChannel::new(config.server_address),
+            runtime_config.clone(),
+            ControlSessionDeps {
+                current_device: current_device.clone(),
+                peer_state: peer_state.clone(),
+                gateway_sessions: gateway_sessions.clone(),
+                data_plane_stats: data_plane_stats.clone(),
+                nat_test: nat_test.clone(),
+                route_manager: route_manager.clone(),
+            },
+        );
         let runtime = Arc::new_cyclic(|weak_runtime| {
             let data_channel = DataChannel::new(weak_runtime.clone());
             #[cfg(feature = "integrated_tun")]
@@ -195,7 +205,7 @@ impl VntInner {
                     gateway_sessions.clone(),
                     external_route.clone(),
                     client_cipher.clone(),
-                    device_map.clone(),
+                    peer_state.clone(),
                     config.compressor,
                     device.clone().into_device_adapter(),
                 )
@@ -205,7 +215,7 @@ impl VntInner {
                 config: runtime_config.clone(),
                 current_device: current_device.clone(),
                 nat_test: nat_test.clone(),
-                device_map: device_map.clone(),
+                peer_state: peer_state.clone(),
                 peer_nat_info_map: peer_nat_info_map.clone(),
                 external_route: external_route.clone(),
                 out_external_route: out_external_route.clone(),
@@ -213,6 +223,7 @@ impl VntInner {
                 control_session: control_session.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 route_manager: route_manager.clone(),
+                data_plane_stats: data_plane_stats.clone(),
                 udp_channel: udp_channel.clone(),
                 data_channel,
                 punch_coordinator: punch_coordinator.clone(),
@@ -253,33 +264,20 @@ impl VntInner {
         // #[cfg(not(target_os = "android"))]
         // tun_helper.start(device)?;
 
-        runtime.control_session.start(
-            stop_manager.clone(),
-            runtime.device_map.clone(),
-            runtime.gateway_sessions.clone(),
-            callback.clone(),
-            {
+        runtime
+            .control_session
+            .start(stop_manager.clone(), callback.clone(), {
                 let handler = control_handler;
                 move |mut packet, route_key| {
                     let mut extend = [0u8; crate::protocol::BUFFER_SIZE];
                     handler.handle(&mut packet, &mut extend, route_key);
                 }
-            },
-        )?;
+            })?;
         {
             let runtime = runtime.clone();
             if !config.use_channel_type.is_only_relay() {
-                runtime.nat_test.start_refresh_task(
-                    stop_manager.clone(),
-                    runtime.config.default_interface.clone(),
-                )?;
-                runtime
-                    .control_session
-                    .start_public_addr_reporter(stop_manager.clone(), runtime.clone())?;
+                runtime.nat_test.start_refresh_task(stop_manager.clone())?;
             }
-            runtime
-                .control_session
-                .start_status_reporter(stop_manager.clone(), runtime.clone())?;
         }
         Ok(Self {
             stop_manager,
@@ -287,7 +285,7 @@ impl VntInner {
             runtime,
             current_device,
             nat_test,
-            device_map,
+            peer_state,
             peer_nat_info_map,
             client_secret_hash: runtime_config.client_secret_hash,
         })
@@ -320,7 +318,7 @@ impl VntInner {
         self.nat_test.nat_info()
     }
     pub fn device_list(&self) -> Vec<PeerDeviceInfo> {
-        let device_list_lock = self.device_map.lock();
+        let device_list_lock = self.peer_state.lock();
         let (_epoch, device_list) = device_list_lock.clone();
         drop(device_list_lock);
         device_list.into_values().collect()
@@ -346,22 +344,22 @@ impl VntInner {
             .snapshot_route_states(current_device.virtual_gateway)
     }
     pub fn up_stream(&self) -> u64 {
-        self.runtime.udp_channel.up_traffic_total()
+        self.runtime.data_plane_stats.up_traffic_total()
     }
     pub fn up_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
-        self.runtime.udp_channel.up_traffic_all()
+        self.runtime.data_plane_stats.up_traffic_all()
     }
     pub fn up_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
-        self.runtime.udp_channel.up_traffic_history()
+        self.runtime.data_plane_stats.up_traffic_history()
     }
     pub fn down_stream(&self) -> u64 {
-        self.runtime.udp_channel.down_traffic_total()
+        self.runtime.data_plane_stats.down_traffic_total()
     }
     pub fn down_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
-        self.runtime.udp_channel.down_traffic_all()
+        self.runtime.data_plane_stats.down_traffic_all()
     }
     pub fn down_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
-        self.runtime.udp_channel.down_traffic_history()
+        self.runtime.data_plane_stats.down_traffic_history()
     }
     pub fn stop(&self) {
         self.stop_manager.stop()

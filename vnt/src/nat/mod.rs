@@ -116,6 +116,8 @@ pub const fn is_ipv6_global(ipv6addr: &Ipv6Addr) -> bool {
 #[derive(Clone)]
 pub struct NatTest {
     stun_server: Vec<String>,
+    default_interface: LocalInterface,
+    udp_channel: UdpChannel,
     info: Arc<Mutex<NatInfo>>,
     time: Arc<AtomicCell<Instant>>,
     udp_ports: Vec<u16>,
@@ -128,6 +130,8 @@ pub struct NatTest {
 impl NatTest {
     pub fn new(
         stun_server: Vec<String>,
+        default_interface: LocalInterface,
+        udp_channel: UdpChannel,
         local_ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
         udp_ports: Vec<u16>,
@@ -160,6 +164,8 @@ impl NatTest {
         let instant = Instant::now();
         NatTest {
             stun_server,
+            default_interface,
+            udp_channel,
             info,
             time: Arc::new(AtomicCell::new(
                 instant
@@ -178,11 +184,7 @@ impl NatTest {
         last.elapsed() > Duration::from_secs(10)
             && self.time.compare_exchange(last, Instant::now()).is_ok()
     }
-    pub fn start_refresh_task(
-        &self,
-        stop_manager: StopManager,
-        default_interface: LocalInterface,
-    ) -> anyhow::Result<()> {
+    pub fn start_refresh_task(&self, stop_manager: StopManager) -> anyhow::Result<()> {
         let nat_test = self.clone();
         let (stop_sender, stop_receiver) = std::sync::mpsc::channel::<()>();
         let worker = stop_manager.add_listener("natRefresh".into(), move || {
@@ -191,7 +193,7 @@ impl NatTest {
         thread::Builder::new()
             .name("natRefresh".into())
             .spawn(move || {
-                refresh_nat_type0(nat_test.clone(), default_interface.clone());
+                refresh_nat_type0(nat_test.clone());
                 loop {
                     if stop_receiver
                         .recv_timeout(Duration::from_secs(60 * 10))
@@ -199,7 +201,7 @@ impl NatTest {
                     {
                         break;
                     }
-                    refresh_nat_type0(nat_test.clone(), default_interface.clone());
+                    refresh_nat_type0(nat_test.clone());
                 }
                 drop(worker);
             })?;
@@ -230,9 +232,9 @@ impl NatTest {
             Duration::from_secs(3)
         }
     }
-    pub fn request_public_addr(&self, udp_channel: &UdpChannel) -> anyhow::Result<()> {
+    pub fn request_public_addr(&self) -> anyhow::Result<()> {
         let (data, addr) = self.send_data()?;
-        udp_channel.send_to(&data, addr)?;
+        self.udp_channel.send_to(&data, addr)?;
         Ok(())
     }
     pub fn is_local_udp(&self, ipv4: Ipv4Addr, port: u16) -> bool {
@@ -401,7 +403,7 @@ impl NatTest {
     }
 }
 
-fn refresh_nat_type0(nat_test: NatTest, default_interface: LocalInterface) {
+fn refresh_nat_type0(nat_test: NatTest) {
     thread::Builder::new()
         .name("natTest".into())
         .spawn(move || {
@@ -412,7 +414,7 @@ fn refresh_nat_type0(nat_test: NatTest, default_interface: LocalInterface) {
                     None
                 };
                 let local_ipv6 = local_ipv6();
-                match nat_test.re_test(local_ipv4, local_ipv6, &default_interface) {
+                match nat_test.re_test(local_ipv4, local_ipv6, &nat_test.default_interface) {
                     Ok(nat_info) => {
                         log::info!("当前nat信息:{:?}", nat_info);
                     }

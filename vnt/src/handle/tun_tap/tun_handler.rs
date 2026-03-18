@@ -46,7 +46,7 @@ pub fn start(
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> io::Result<()> {
@@ -61,7 +61,7 @@ pub fn start(
                 gateway_sessions,
                 ip_route,
                 client_cipher,
-                device_map,
+                peer_state,
                 compressor,
                 device_stop,
             ) {
@@ -77,9 +77,9 @@ fn broadcast(
     gateway_sessions: &GatewaySessions,
     net_packet: &mut NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
-    device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
 ) -> anyhow::Result<()> {
-    let list: Vec<Ipv4Addr> = device_map
+    let list: Vec<Ipv4Addr> = peer_state
         .lock()
         .1
         .values()
@@ -152,7 +152,7 @@ pub(crate) fn handle(
     gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
     client_cipher: &Cipher,
-    device_map: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
@@ -222,7 +222,7 @@ pub(crate) fn handle(
             gateway_sessions,
             &mut net_packet,
             &current_device,
-            device_map,
+            peer_state,
         )?;
         return Ok(());
     }

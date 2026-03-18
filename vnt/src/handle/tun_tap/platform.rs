@@ -23,7 +23,7 @@ pub(crate) fn start_simple(
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> anyhow::Result<()> {
@@ -56,7 +56,7 @@ pub(crate) fn start_simple(
         gateway_sessions,
         ip_route,
         client_cipher,
-        device_map,
+        peer_state,
         compressor,
     ) {
         log::error!("{:?}", e);
@@ -76,7 +76,7 @@ fn start_simple0(
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
@@ -103,7 +103,7 @@ fn start_simple0(
             &gateway_sessions,
             &ip_route,
             &client_cipher,
-            &device_map,
+            &peer_state,
             &compressor,
         ) {
             Ok(_) => {}

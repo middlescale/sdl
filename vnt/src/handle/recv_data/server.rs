@@ -414,7 +414,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.set_device_info_list(response.device_info_list, response.epoch as _);
                     self.runtime
                         .control_session
-                        .trigger_status_report_with_nat_ready(self.runtime.clone());
+                        .trigger_status_report_with_nat_ready();
                     if old.status.offline() {
                         self.callback.success();
                     }
@@ -595,7 +595,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             })
             .collect();
         {
-            let mut dev = self.runtime.device_map.lock();
+            let mut dev = self.runtime.peer_state.lock();
             //这里可能会收到旧的消息，但是随着时间推移总会收到新的
             dev.0 = epoch;
             dev.1.clear();
@@ -650,7 +650,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.callback.error(err);
                 //掉线epoch要归零
                 {
-                    let mut dev = self.runtime.device_map.lock();
+                    let mut dev = self.runtime.peer_state.lock();
                     dev.0 = 0;
                     drop(dev);
                 }
@@ -721,7 +721,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime
                     .route_manager()
                     .add_path(net_packet.source(), route);
-                let epoch = self.runtime.device_map.lock().0;
+                let epoch = self.runtime.peer_state.lock().0;
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
                     self.runtime

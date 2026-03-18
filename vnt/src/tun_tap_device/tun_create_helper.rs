@@ -62,7 +62,7 @@ struct TunDeviceHelperInner {
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
     client_cipher: Cipher,
-    device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     compressor: Compressor,
 }
 
@@ -74,7 +74,7 @@ impl TunDeviceHelper {
         gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
         client_cipher: Cipher,
-        device_map: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+        peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
         compressor: Compressor,
         device_adapter: DeviceAdapter,
     ) -> Self {
@@ -85,7 +85,7 @@ impl TunDeviceHelper {
             gateway_sessions,
             ip_route,
             client_cipher,
-            device_map,
+            peer_state,
             compressor,
         };
         Self {
@@ -120,7 +120,7 @@ impl TunDeviceHelper {
             inner.gateway_sessions,
             inner.ip_route,
             inner.client_cipher,
-            inner.device_map,
+            inner.peer_state,
             inner.compressor,
             device_stop,
         )

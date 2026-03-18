@@ -1,3 +1,3 @@
 mod session;
 
-pub use session::ControlSession;
+pub use session::{ControlSession, ControlSessionDeps};
