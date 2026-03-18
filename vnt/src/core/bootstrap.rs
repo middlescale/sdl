@@ -22,7 +22,7 @@ use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, Punch};
 use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
-use crate::transport::quic_channel::QuicChannel;
+use crate::transport::quic_channel::{extract_server_name, QuicChannel};
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
@@ -147,7 +147,10 @@ impl Vnt {
             client_cipher.clone(),
         )?;
         let control_session = ControlSession::new(
-            QuicChannel::new(config.server_address),
+            QuicChannel::new(
+                config.server_address,
+                extract_server_name(&config.server_address_str),
+            ),
             runtime_config.clone(),
             ControlSessionDeps {
                 current_device: current_device.clone(),

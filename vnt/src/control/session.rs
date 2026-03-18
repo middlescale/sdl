@@ -71,6 +71,10 @@ impl ControlSession {
         let current_device = self.current_device();
         self.channel
             .update_server_addr(current_device.control_server);
+        self.channel
+            .update_server_name(crate::transport::quic_channel::extract_server_name(
+                &self.config.server_addr,
+            ));
         self.channel.send_packet(packet)
     }
 

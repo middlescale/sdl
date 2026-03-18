@@ -39,15 +39,17 @@ impl ActiveConnection {
 #[derive(Clone)]
 pub struct QuicChannel {
     server_addr: Arc<AtomicCell<SocketAddr>>,
+    server_name: Arc<Mutex<String>>,
     sender: Sender<QuicCommand>,
     receiver: Arc<Mutex<Option<Receiver<QuicCommand>>>>,
 }
 
 impl QuicChannel {
-    pub fn new(server_addr: SocketAddr) -> Self {
+    pub fn new(server_addr: SocketAddr, server_name: String) -> Self {
         let (sender, receiver) = channel(128);
         Self {
             server_addr: Arc::new(AtomicCell::new(server_addr)),
+            server_name: Arc::new(Mutex::new(server_name)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
         }
@@ -74,6 +76,7 @@ impl QuicChannel {
         };
         let callback: PacketCallback = Arc::new(on_packet);
         let server_addr = self.server_addr.clone();
+        let server_name = self.server_name.clone();
         let worker_name = worker_name.to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
         let worker = stop_manager.add_listener(worker_name.clone(), move || {
@@ -88,7 +91,7 @@ impl QuicChannel {
             .name(worker_name.clone())
             .spawn(move || {
                 let worker_task = runtime.spawn(async move {
-                    run_quic_worker(receiver, server_addr, callback).await;
+                    run_quic_worker(receiver, server_addr, server_name, callback).await;
                 });
                 runtime.block_on(async {
                     let mut worker_task = worker_task;
@@ -111,6 +114,10 @@ impl QuicChannel {
         self.server_addr.store(server_addr);
     }
 
+    pub fn update_server_name(&self, server_name: String) {
+        *self.server_name.lock() = server_name;
+    }
+
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         self.sender
             .try_send(QuicCommand::Send(packet.buffer().to_vec()))
@@ -128,6 +135,7 @@ impl QuicChannel {
 async fn run_quic_worker(
     mut receiver: Receiver<QuicCommand>,
     server_addr: Arc<AtomicCell<SocketAddr>>,
+    server_name: Arc<Mutex<String>>,
     on_packet: PacketCallback,
 ) {
     let mut active: Option<ActiveConnection> = None;
@@ -141,7 +149,8 @@ async fn run_quic_worker(
                     }
                 }
                 if active.is_none() {
-                    match connect(addr, b"vnt-control").await {
+                    let name = server_name.lock().clone();
+                    match connect(addr, &name, b"vnt-control").await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -184,7 +193,8 @@ async fn run_quic_worker(
                     if let Some(connection) = active.take() {
                         connection.close();
                     }
-                    match connect(addr, b"vnt-control").await {
+                    let name = server_name.lock().clone();
+                    match connect(addr, &name, b"vnt-control").await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -237,7 +247,11 @@ pub(crate) struct QuicClientConnection {
     pub recv: RecvStream,
 }
 
-pub(crate) async fn connect(addr: SocketAddr, alpn: &[u8]) -> anyhow::Result<QuicClientConnection> {
+pub(crate) async fn connect(
+    addr: SocketAddr,
+    server_name: &str,
+    alpn: &[u8],
+) -> anyhow::Result<QuicClientConnection> {
     let mut roots = RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {
@@ -264,7 +278,6 @@ pub(crate) async fn connect(addr: SocketAddr, alpn: &[u8]) -> anyhow::Result<Qui
     let mut endpoint = Endpoint::client(bind_addr)?;
     endpoint.set_default_client_config(client_config);
 
-    let server_name = addr.ip().to_string();
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
     let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
@@ -276,6 +289,29 @@ pub(crate) async fn connect(addr: SocketAddr, alpn: &[u8]) -> anyhow::Result<Qui
         send,
         recv,
     })
+}
+
+pub fn extract_server_name(addr: &str) -> String {
+    let raw = addr
+        .trim()
+        .strip_prefix("quic://")
+        .unwrap_or(addr.trim())
+        .trim();
+    if let Some(host) = raw
+        .strip_prefix('[')
+        .and_then(|v| v.split_once(']'))
+        .map(|v| v.0)
+    {
+        return host.to_string();
+    }
+    if raw.parse::<SocketAddr>().is_ok() {
+        if let Ok(addr) = raw.parse::<SocketAddr>() {
+            return addr.ip().to_string();
+        }
+    }
+    raw.rsplit_once(':')
+        .map(|(host, _)| host.to_string())
+        .unwrap_or_else(|| raw.to_string())
 }
 
 pub(crate) async fn read_framed_packets(

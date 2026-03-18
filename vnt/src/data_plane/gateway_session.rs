@@ -55,7 +55,7 @@ impl GatewaySession {
         Self {
             endpoint,
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
-            channel: QuicChannel::new(endpoint),
+            channel: QuicChannel::new(endpoint, endpoint.ip().to_string()),
             started: Arc::new(AtomicCell::new(false)),
         }
     }
@@ -91,6 +91,13 @@ impl GatewaySession {
         guard.lease_secs_hint = grant.lease_secs;
         guard.grace_secs_hint = grant.grace_secs;
         guard.reauth_required = false;
+        drop(guard);
+        let server_name = if grant.gateway_server_name.is_empty() {
+            self.endpoint.ip().to_string()
+        } else {
+            grant.gateway_server_name.clone()
+        };
+        self.channel.update_server_name(server_name);
     }
 
     fn ticket_expire_unix_ms(&self) -> i64 {
