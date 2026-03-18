@@ -2,6 +2,7 @@ use crate::command::command_chart_b;
 use std::io;
 use std::io::Write;
 use std::net::UdpSocket;
+use std::sync::Arc;
 use vnt::core::Vnt;
 
 pub struct CommandServer {}
@@ -13,7 +14,7 @@ impl CommandServer {
 }
 
 impl CommandServer {
-    pub fn start(self, vnt: Vnt) -> io::Result<()> {
+    pub fn start(self, vnt: Arc<Vnt>) -> io::Result<()> {
         let udp = if let Ok(udp) = UdpSocket::bind("127.0.0.1:39271") {
             udp
         } else {

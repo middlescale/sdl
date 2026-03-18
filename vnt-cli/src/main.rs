@@ -1,5 +1,6 @@
 use common::callback;
 use console::style;
+use std::sync::Arc;
 use vnt::core::{Config, Vnt};
 mod root_check;
 fn main() {
@@ -39,7 +40,7 @@ fn main0(config: Config, _show_cmd: bool) {
         }
     }
     let vnt_util = match Vnt::new(config, callback::VntHandler {}) {
-        Ok(vnt) => vnt,
+        Ok(vnt) => Arc::new(vnt),
         Err(e) => {
             log::error!("vnt create error {:?}", e);
             println!("error: {:?}", e);
@@ -87,7 +88,7 @@ fn main0(config: Config, _show_cmd: bool) {
                 println!("======== input:list,info,route,all,stop,chart_a,chart_b[:ip] ========");
                 match std::io::stdin().read_line(&mut cmd) {
                     Ok(len) => {
-                        if !common::command::command_str(&cmd[..len], &vnt_util) {
+                        if !common::command::command_str(&cmd[..len], vnt_util.as_ref()) {
                             break;
                         }
                     }

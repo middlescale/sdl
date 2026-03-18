@@ -6,13 +6,13 @@ use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
-pub use conn::Vnt;
-pub use runtime_context::{RuntimeConfig, VntRuntime};
+pub use bootstrap::Vnt;
+pub use runtime::{RuntimeConfig, VntRuntime};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
-mod conn;
-mod runtime_context;
+mod bootstrap;
+mod runtime;
 
 pub const PUB_STUN: [&str; 4] = [
     "stun.miwifi.com",

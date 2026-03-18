@@ -100,7 +100,7 @@ impl UdpChannel {
     where
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     {
-        main_udp_listen(self.clone(), stop_manager, recv_handler)
+        listen(self.clone(), stop_manager, recv_handler)
     }
 
     fn normalize_send_addr(&self, addr: SocketAddr) -> SocketAddr {
@@ -163,7 +163,7 @@ fn bind_ipv4_udp(
     Ok(socket.into())
 }
 
-fn main_udp_listen<H>(
+fn listen<H>(
     udp_channel: UdpChannel,
     stop_manager: StopManager,
     recv_handler: H,
@@ -182,7 +182,7 @@ where
     thread::Builder::new()
         .name("mainUdp".into())
         .spawn(move || {
-            if let Err(e) = main_udp_listen0(udp_channel, poll, recv_handler) {
+            if let Err(e) = listen_loop(udp_channel, poll, recv_handler) {
                 log::error!("{:?}", e);
             }
             drop(waker);
@@ -191,7 +191,7 @@ where
     Ok(())
 }
 
-fn main_udp_listen0<H>(udp_channel: UdpChannel, mut poll: Poll, recv_handler: H) -> io::Result<()>
+fn listen_loop<H>(udp_channel: UdpChannel, mut poll: Poll, recv_handler: H) -> io::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
 {

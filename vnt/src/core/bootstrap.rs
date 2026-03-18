@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,16 +30,16 @@ use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{device_key_alg, load_or_create_device_public_key, StopManager};
 use crate::{nat, VntCallback};
 
-#[derive(Clone)]
 pub struct Vnt {
-    inner: Arc<VntInner>,
+    stop_manager: StopManager,
+    config: Config,
+    runtime: Arc<VntRuntime>,
 }
 
 impl Vnt {
     #[cfg(feature = "integrated_tun")]
     pub fn new<Call: VntCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
-        let inner = Arc::new(VntInner::new(config, callback)?);
-        Ok(Self { inner })
+        Vnt::init(config, callback, DeviceAdapter::default())
     }
     #[cfg(not(feature = "integrated_tun"))]
     pub fn new_device<Call: VntCallback, Device: DeviceWrite>(
@@ -48,44 +47,9 @@ impl Vnt {
         callback: Call,
         device: Device,
     ) -> anyhow::Result<Self> {
-        let inner = Arc::new(VntInner::new_device(config, callback, device)?);
-        Ok(Self { inner })
+        Vnt::init(config, callback, device)
     }
-}
-
-impl Deref for Vnt {
-    type Target = VntInner;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-pub struct VntInner {
-    stop_manager: StopManager,
-    config: Config,
-    runtime: Arc<VntRuntime>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    nat_test: NatTest,
-    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
-    peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-    client_secret_hash: Option<[u8; 16]>,
-}
-
-impl VntInner {
-    #[cfg(feature = "integrated_tun")]
-    pub fn new<Call: VntCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
-        VntInner::new_device0(config, callback, DeviceAdapter::default())
-    }
-    #[cfg(not(feature = "integrated_tun"))]
-    pub fn new_device<Call: VntCallback, Device: DeviceWrite>(
-        config: Config,
-        callback: Call,
-        device: Device,
-    ) -> anyhow::Result<Self> {
-        VntInner::new_device0(config, callback, device)
-    }
-    fn new_device0<Call: VntCallback, Device: DeviceWrite>(
+    fn init<Call: VntCallback, Device: DeviceWrite>(
         config: Config,
         callback: Call,
         device: Device,
@@ -283,16 +247,11 @@ impl VntInner {
             stop_manager,
             config,
             runtime,
-            current_device,
-            nat_test,
-            peer_state,
-            peer_nat_info_map,
-            client_secret_hash: runtime_config.client_secret_hash,
         })
     }
 }
 
-impl VntInner {
+impl Vnt {
     pub fn name(&self) -> &str {
         &self.config.name
     }
@@ -300,25 +259,29 @@ impl VntInner {
         self.config.password.is_some()
     }
     pub fn client_encrypt_hash(&self) -> Option<&[u8]> {
-        self.client_secret_hash.as_ref().map(|v| v.as_ref())
+        self.runtime
+            .config
+            .client_secret_hash
+            .as_ref()
+            .map(|v| v.as_ref())
     }
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.current_device.load()
+        self.runtime.current_device.load()
     }
     pub fn current_device_info(&self) -> Arc<AtomicCell<CurrentDeviceInfo>> {
-        self.current_device.clone()
+        self.runtime.current_device.clone()
     }
     pub fn peer_nat_info(&self, ip: &Ipv4Addr) -> Option<NatInfo> {
-        self.peer_nat_info_map.read().get(ip).cloned()
+        self.runtime.peer_nat_info_map.read().get(ip).cloned()
     }
     pub fn connection_status(&self) -> ConnectStatus {
-        self.current_device.load().status
+        self.runtime.current_device.load().status
     }
     pub fn nat_info(&self) -> NatInfo {
-        self.nat_test.nat_info()
+        self.runtime.nat_test.nat_info()
     }
     pub fn device_list(&self) -> Vec<PeerDeviceInfo> {
-        let device_list_lock = self.peer_state.lock();
+        let device_list_lock = self.runtime.peer_state.lock();
         let (_epoch, device_list) = device_list_lock.clone();
         drop(device_list_lock);
         device_list.into_values().collect()
@@ -327,7 +290,7 @@ impl VntInner {
         self.runtime.route_manager().best_route(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
-        self.current_device.load().is_gateway_vip(ip)
+        self.runtime.current_device.load().is_gateway_vip(ip)
     }
     pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
         self.runtime
@@ -338,7 +301,7 @@ impl VntInner {
         self.runtime.route_manager().snapshot_routes()
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
-        let current_device = self.current_device.load();
+        let current_device = self.runtime.current_device.load();
         self.runtime
             .route_manager()
             .snapshot_route_states(current_device.virtual_gateway)
@@ -384,7 +347,7 @@ impl VntInner {
     }
 }
 
-impl Drop for VntInner {
+impl Drop for Vnt {
     fn drop(&mut self) {
         self.stop();
     }
