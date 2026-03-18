@@ -186,12 +186,12 @@ pub fn command_list(vnt: &Vnt) -> Vec<DeviceItem> {
                 }
             } else if let Some(next_hop) = next_hop {
                 if info.is_gateway_vip(&next_hop) {
-                    "server-relay".to_string()
+                    "gateway-relay".to_string()
                 } else {
                     "client-relay".to_string()
                 }
             } else {
-                "server-relay".to_string()
+                "gateway-relay".to_string()
             };
             let rt = if route.rt < 0 {
                 "".to_string()
@@ -200,7 +200,7 @@ pub fn command_list(vnt: &Vnt) -> Vec<DeviceItem> {
             };
             (nat_traversal_type, rt)
         } else {
-            ("relay".to_string(), "".to_string())
+            ("gateway-relay".to_string(), "".to_string())
         };
         let status = format!("{:?}", peer.status);
         let client_secret = peer.client_secret;
