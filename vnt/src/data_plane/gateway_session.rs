@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -128,6 +128,12 @@ impl GatewaySession {
         let Some(packet) = self.maybe_build_connect_hello(current_device)? else {
             return Ok(());
         };
+        log::debug!(
+            "sending gateway connect hello endpoint={}, source={}, gateway={}",
+            self.endpoint,
+            current_device.virtual_ip,
+            current_device.virtual_gateway
+        );
         if let Err(e) = self.channel.send_packet(&packet) {
             self.state.lock().authenticated = false;
             return Err(e.into());
@@ -144,6 +150,14 @@ impl GatewaySession {
                 .max(guard.lease_expire_unix_ms)
                 .max(guard.ticket_expire_unix_ms);
             if !guard.authenticated || now_ms > expire_unix_ms {
+                log::debug!(
+                    "gateway relay unavailable endpoint={}, authenticated={}, now_ms={}, expire_unix_ms={}, session_id={}",
+                    self.endpoint,
+                    guard.authenticated,
+                    now_ms,
+                    expire_unix_ms,
+                    guard.session_id
+                );
                 return Err(io::Error::new(
                     io::ErrorKind::NotConnected,
                     "gateway relay is not authenticated",
@@ -160,6 +174,12 @@ impl GatewaySession {
     fn handle_connect_ack(&self, ack: &GatewayConnectAck) {
         let mut guard = self.state.lock();
         if guard.session_id != ack.session_id {
+            log::debug!(
+                "ignoring gateway connect ack for endpoint={} due to session mismatch local={} remote={}",
+                self.endpoint,
+                guard.session_id,
+                ack.session_id
+            );
             return;
         }
         guard.authenticated = ack.ok;
@@ -244,6 +264,14 @@ impl GatewaySession {
         packet.set_transport_protocol(service_packet::Protocol::GatewayConnectHello.into());
         packet.set_initial_ttl(MAX_TTL);
         packet.set_payload(&payload)?;
+        log::debug!(
+            "built gateway connect hello endpoint={}, device_id={}, session_id={}, reauth={}, ticket_available={}",
+            self.endpoint,
+            guard.device_id,
+            guard.session_id,
+            guard.reauth_required || !ticket_available,
+            ticket_available
+        );
         Ok(Some(packet))
     }
 }
@@ -349,6 +377,13 @@ impl GatewaySessions {
             log::info!("gateway relay disabled for virtual ip {virtual_ip}: no quic gateway addr");
             return;
         }
+        log::info!(
+            "gateway grant applied for virtual ip {} with endpoints {:?}, session_id={}, server_name={}",
+            virtual_ip,
+            parsed,
+            grant.session_id,
+            grant.gateway_server_name
+        );
         let runtime = self.runtime.lock().clone();
         let mut guard = self.sessions.lock();
         guard.retain(|addr, _| desired.contains(addr));
@@ -407,9 +442,19 @@ impl GatewaySessions {
             match session.send_relay(packet) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::NotConnected => {
+                    log::debug!(
+                        "gateway relay send skipped endpoint={}: {}",
+                        session.endpoint,
+                        e
+                    );
                     last_err = Some(e);
                 }
                 Err(e) => {
+                    log::warn!(
+                        "gateway relay send failed endpoint={}: {:?}",
+                        session.endpoint,
+                        e
+                    );
                     last_err = Some(e);
                 }
             }
@@ -422,6 +467,14 @@ impl GatewaySessions {
     pub fn handle_connect_ack(&self, from: SocketAddr, ack: &GatewayConnectAck) {
         if let Some(session) = self.sessions.lock().get(&from).cloned() {
             session.handle_connect_ack(ack);
+        } else {
+            log::debug!(
+                "received gateway connect ack from unknown endpoint={} session_id={} ok={} reason={}",
+                from,
+                ack.session_id,
+                ack.ok,
+                ack.reason
+            );
         }
     }
 }
@@ -440,7 +493,13 @@ fn parse_transport_endpoint(addr: &str) -> anyhow::Result<SocketAddr> {
         .unwrap_or(addr)
         .trim()
         .to_string();
-    Ok(SocketAddr::from_str(&normalized)?)
+    if let Ok(socket_addr) = SocketAddr::from_str(&normalized) {
+        return Ok(socket_addr);
+    }
+    normalized
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no socket address resolved for {normalized}"))
 }
 
 fn sanitize_worker_name(addr: SocketAddr) -> String {
@@ -448,4 +507,24 @@ fn sanitize_worker_name(addr: SocketAddr) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_transport_endpoint;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn parse_transport_endpoint_accepts_socket_addr() {
+        let endpoint = parse_transport_endpoint("quic://127.0.0.1:29900").unwrap();
+        assert_eq!(endpoint.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(endpoint.port(), 29900);
+    }
+
+    #[test]
+    fn parse_transport_endpoint_resolves_hostname() {
+        let endpoint = parse_transport_endpoint("quic://localhost:29900").unwrap();
+        assert_eq!(endpoint.port(), 29900);
+        assert!(endpoint.ip().is_loopback());
+    }
 }

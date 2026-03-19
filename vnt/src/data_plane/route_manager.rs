@@ -208,6 +208,9 @@ impl RouteManager {
                 }
             };
             for route in &routes {
+                if !route.route_key().protocol().is_udp() {
+                    continue;
+                }
                 if let Err(e) = self.send_by_key(sender, &net_packet, route.route_key()) {
                     log::warn!("heartbeat err={:?}", e)
                 }

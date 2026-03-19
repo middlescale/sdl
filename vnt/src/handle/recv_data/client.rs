@@ -33,6 +33,23 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     pub fn new(runtime: Arc<VntRuntime>, device: Device) -> Self {
         Self { device, runtime }
     }
+
+    fn send_reply_by_route<B: AsRef<[u8]>>(
+        &self,
+        packet: &NetPacket<B>,
+        route_key: RouteKey,
+    ) -> anyhow::Result<()> {
+        if route_key.protocol().is_udp() {
+            self.runtime
+                .udp_channel
+                .send_by_key(packet.buffer(), route_key)?;
+        } else if self.runtime.gateway_sessions.is_gateway_addr(route_key.addr) {
+            self.runtime.gateway_sessions.send_relay(packet)?;
+        } else {
+            return Err(anyhow!("unsupported reply route {:?}", route_key));
+        }
+        Ok(())
+    }
 }
 
 impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
@@ -103,9 +120,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 net_packet.set_destination(source);
                                 //不管加不加密，和接收到的数据长度都一致
                                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                                self.runtime
-                                    .udp_channel
-                                    .send_by_key(net_packet.buffer(), route_key)?;
+                                self.send_reply_by_route(&net_packet, route_key)?;
                                 return Ok(());
                             }
                         }
@@ -189,9 +204,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                self.runtime
-                    .udp_channel
-                    .send_by_key(net_packet.buffer(), route_key)?;
+                self.send_reply_by_route(&net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
@@ -227,9 +240,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
                 self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                self.runtime
-                    .udp_channel
-                    .send_by_key(net_packet.buffer(), route_key)?;
+                self.send_reply_by_route(&net_packet, route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
                 // context.route_table.add_route_if_absent(source, route);
@@ -269,9 +280,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
                     self.runtime.client_cipher.encrypt_ipv4(&mut packet)?;
-                    self.runtime
-                        .udp_channel
-                        .send_by_key(packet.buffer(), route_key)?;
+                    self.send_reply_by_route(&packet, route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
             },
