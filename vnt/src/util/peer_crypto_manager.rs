@@ -72,11 +72,6 @@ impl PeerCryptoManager {
     }
 
     pub fn send_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
-        if self.is_grace_active() {
-            if let Ok(cipher) = self.previous_cipher(peer_ip) {
-                return Ok(cipher);
-            }
-        }
         self.current_cipher(peer_ip)
     }
 
@@ -161,19 +156,13 @@ mod tests {
     }
 
     #[test]
-    fn rotate_prefers_previous_cipher_during_grace() {
+    fn rotate_keeps_sending_with_current_cipher() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerCryptoManager::new(1);
 
         manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
         manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(2))]));
 
-        assert_eq!(
-            manager.send_cipher(&peer).unwrap().key().unwrap(),
-            manager.previous_cipher(&peer).unwrap().key().unwrap()
-        );
-
-        *manager.grace_until.write() = Some(Instant::now() - Duration::from_secs(1));
         assert_eq!(
             manager.send_cipher(&peer).unwrap().key().unwrap(),
             manager.current_cipher(&peer).unwrap().key().unwrap()
