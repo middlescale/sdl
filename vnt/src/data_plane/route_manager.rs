@@ -13,7 +13,7 @@ use crate::handle::CurrentDeviceInfo;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol};
 use crate::transport::udp_channel::UdpChannel;
-use crate::util::StopManager;
+use crate::util::{PeerCryptoManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 
 const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
@@ -22,6 +22,8 @@ const ROUTE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 #[derive(Clone)]
 pub struct RouteManager {
     route_table: Arc<RouteTable>,
+    peer_crypto: Arc<PeerCryptoManager>,
+    peer_encrypt: bool,
     sender: Option<RouteSender>,
 }
 
@@ -46,17 +48,16 @@ impl RouteManager {
         udp_channel: UdpChannel,
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        client_cipher: Cipher,
+        peer_crypto: Arc<PeerCryptoManager>,
+        peer_encrypt: bool,
     ) -> anyhow::Result<Self> {
         let manager = Self {
             route_table,
+            peer_crypto,
+            peer_encrypt,
             sender: Some(RouteSender { udp_channel }),
         };
-        manager.start_heartbeat_loop(
-            stop_manager.clone(),
-            current_device.clone(),
-            client_cipher,
-        )?;
+        manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
         manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
         Ok(manager)
     }
@@ -64,6 +65,8 @@ impl RouteManager {
     pub fn new_detached(route_table: Arc<RouteTable>) -> Self {
         Self {
             route_table,
+            peer_crypto: Arc::new(PeerCryptoManager::new(0)),
+            peer_encrypt: true,
             sender: None,
         }
     }
@@ -191,7 +194,7 @@ impl RouteManager {
         StaleDirectRoute::Sleep(sleep_time)
     }
 
-    pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo, client_cipher: &Cipher) {
+    pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo) {
         let Some(sender) = &self.sender else {
             return;
         };
@@ -200,7 +203,21 @@ impl RouteManager {
             if current_device.is_gateway_vip(&dest_ip) {
                 continue;
             }
-            let net_packet = match heartbeat_packet_client(client_cipher, src_ip, dest_ip) {
+            let net_packet = match heartbeat_packet_client(
+                if self.peer_encrypt {
+                    match self.peer_crypto.current_cipher(&dest_ip) {
+                        Ok(cipher) => Some(cipher),
+                        Err(_) => {
+                            log::debug!("skip heartbeat without peer session cipher for {}", dest_ip);
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                },
+                src_ip,
+                dest_ip,
+            ) {
                 Ok(net_packet) => net_packet,
                 Err(e) => {
                     log::error!("heartbeat_packet err={:?}", e);
@@ -208,7 +225,7 @@ impl RouteManager {
                 }
             };
             for route in &routes {
-                if !route.route_key().protocol().is_udp() {
+                if !route.is_p2p() {
                     continue;
                 }
                 if let Err(e) = self.send_by_key(sender, &net_packet, route.route_key()) {
@@ -245,7 +262,6 @@ impl RouteManager {
         &self,
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        client_cipher: Cipher,
     ) -> anyhow::Result<()> {
         let route_manager = self.clone();
         thread::Builder::new()
@@ -266,7 +282,7 @@ impl RouteManager {
                     return;
                 }
                 while !stop_manager.is_stopped() {
-                    route_manager.send_heartbeats(current_device.load(), &client_cipher);
+                    route_manager.send_heartbeats(current_device.load());
                     if wait_for_stop(&stop_manager, ROUTE_HEARTBEAT_INTERVAL) {
                         break;
                     }
@@ -342,12 +358,14 @@ fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<V
 }
 
 fn heartbeat_packet_client(
-    client_cipher: &Cipher,
+    cipher: Option<Cipher>,
     src: Ipv4Addr,
     dest: Ipv4Addr,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
     let mut net_packet = heartbeat_packet(src, dest)?;
-    client_cipher.encrypt_ipv4(&mut net_packet)?;
+    if let Some(cipher) = cipher {
+        cipher.encrypt_ipv4(&mut net_packet)?;
+    }
     Ok(net_packet)
 }
 

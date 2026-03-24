@@ -18,12 +18,15 @@ use crate::handle::PeerDeviceInfo;
 use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
 use crate::nat::NatTest;
 use crate::proto::message::{
-    ClientStatusInfo, HandshakeRequest, PunchNatType, RefreshGatewayGrantRequest, RouteItem,
+    ClientStatusInfo, DeviceAuthChallenge, HandshakeRequest, PunchNatType,
+    RefreshGatewayGrantRequest, RouteItem,
 };
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::quic_channel::QuicChannel;
-use crate::util::{address_choose, dns_query_all, StopManager};
+use crate::util::{
+    address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
+};
 use crate::{ErrorInfo, VntCallback};
 use parking_lot::Mutex;
 
@@ -35,6 +38,7 @@ const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0,
 #[derive(Clone)]
 pub struct ControlSessionDeps {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_state: Arc<
         Mutex<(
             u16,
@@ -79,7 +83,7 @@ impl ControlSession {
     }
 
     pub fn send_handshake(&self) -> io::Result<()> {
-        let request_packet = handshake_request_packet(false)?;
+        let request_packet = handshake_request_packet()?;
         self.send_packet(&request_packet)
     }
 
@@ -243,16 +247,21 @@ impl ControlSession {
         if ip.is_none() {
             ip = Some(current_device.virtual_ip);
         }
+        let online_kx_pub = self
+            .deps
+            .peer_crypto
+            .ensure_online_session_key()
+            .public_key()
+            .to_vec();
         let packet = registrar::registration_request_packet(
             self.config.token.clone(),
             self.config.device_id.clone(),
             self.config.device_pub_key.clone(),
-            self.config.device_pub_key_alg.clone(),
+            online_kx_pub,
             self.config.name.clone(),
             ip,
             is_fast,
             allow_ip_change,
-            self.config.client_secret_hash.as_ref().map(|v| v.as_ref()),
         )?;
         self.send_packet(&packet)?;
         Ok(())
@@ -271,6 +280,24 @@ impl ControlSession {
             group.clone(),
             self.config.device_id.clone(),
             ticket.clone(),
+            self.config.device_pub_key.clone(),
+        )?;
+        self.send_packet(&packet)?;
+        Ok(())
+    }
+
+    pub fn send_device_auth_proof(&self, challenge: &DeviceAuthChallenge) -> anyhow::Result<()> {
+        let signature = build_device_auth_signature(
+            &self.config.device_id,
+            &self.config.device_pub_key,
+            &challenge.challenge_id,
+            &challenge.nonce,
+        )?;
+        let packet = registrar::device_auth_proof_packet(
+            challenge.challenge_id.clone(),
+            self.config.device_id.clone(),
+            self.config.device_pub_key.clone(),
+            signature,
         )?;
         self.send_packet(&packet)?;
         Ok(())
@@ -364,9 +391,29 @@ impl ControlSession {
     }
 }
 
-fn handshake_request_packet(secret: bool) -> io::Result<NetPacket<Vec<u8>>> {
+fn build_device_auth_signature(
+    device_id: &str,
+    device_pub_key: &[u8],
+    challenge_id: &str,
+    nonce: &[u8],
+) -> anyhow::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(
+        challenge_id.len() + device_id.len() + nonce.len() + device_pub_key.len() + 16,
+    );
+    append_len_prefixed(&mut payload, challenge_id.as_bytes());
+    append_len_prefixed(&mut payload, nonce);
+    append_len_prefixed(&mut payload, device_id.as_bytes());
+    append_len_prefixed(&mut payload, device_pub_key);
+    sign_device_payload(device_id, &payload)
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) {
+    buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    buf.extend_from_slice(data);
+}
+
+fn handshake_request_packet() -> io::Result<NetPacket<Vec<u8>>> {
     let mut request = HandshakeRequest::new();
-    request.secret = secret;
     request.version = crate::VNT_VERSION.to_string();
     request
         .capabilities
@@ -377,12 +424,9 @@ fn handshake_request_packet(secret: bool) -> io::Result<NetPacket<Vec<u8>>> {
     request
         .capabilities
         .push(CAPABILITY_GATEWAY_TICKET_V1.to_string());
-    let bytes = request.write_to_bytes().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("handshake_request_packet {:?}", e),
-        )
-    })?;
+    let bytes = request
+        .write_to_bytes()
+        .map_err(|e| io::Error::other(format!("handshake_request_packet {:?}", e)))?;
     let buf = vec![0u8; HEAD_LEN + bytes.len()];
     let mut net_packet = NetPacket::new(buf)?;
     net_packet.set_default_version();

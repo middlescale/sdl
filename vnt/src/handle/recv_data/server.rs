@@ -18,8 +18,8 @@ use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
-    DeviceAuthAck, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult,
-    PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
+    DeviceAuthAck, DeviceAuthChallenge, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck,
+    PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -121,18 +121,15 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
                     ip_turn_packet::Protocol::Ipv4 => {
                         let ipv4 = IpV4Packet::new(net_packet.payload())?;
-                        match ipv4.protocol() {
-                            ipv4::protocol::Protocol::Icmp => {
-                                if ipv4.destination_ip() == current_device.virtual_ip {
-                                    let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
-                                    if icmp_packet.kind() == Kind::EchoReply {
-                                        //网关ip ping的回应
-                                        self.device.write(net_packet.payload())?;
-                                        return Ok(());
-                                    }
-                                }
+                        if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
+                            && ipv4.destination_ip() == current_device.virtual_ip
+                        {
+                            let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
+                            if icmp_packet.kind() == Kind::EchoReply {
+                                //网关ip ping的回应
+                                self.device.write(net_packet.payload())?;
+                                return Ok(());
                             }
-                            _ => {}
                         }
                     }
                     ip_turn_packet::Protocol::WGIpv4 => {}
@@ -259,12 +256,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         match service_packet::Protocol::from(net_packet.transport_protocol()) {
             service_packet::Protocol::RegistrationResponse => {
                 let response = RegistrationResponse::parse_from_bytes(net_packet.payload())
-                    .map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("RegistrationResponse {:?}", e),
-                        )
-                    })?;
+                    .map_err(|e| io::Error::other(format!("RegistrationResponse {:?}", e)))?;
                 if response.error_code != 0 {
                     let reason = if response.error_message.is_empty() {
                         "registration rejected by control".to_string()
@@ -421,24 +413,13 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
             }
             service_packet::Protocol::PushDeviceList => {
-                let response = DeviceList::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("PushDeviceList {:?}", e))
-                })?;
+                let response = DeviceList::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
                 self.set_device_info_list(response.device_info_list, response.epoch as _);
             }
-            service_packet::Protocol::SecretHandshakeResponse => {
-                log::info!("SecretHandshakeResponse");
-                if self.runtime.config.auth_only {
-                    self.send_device_auth(route_key)?;
-                } else {
-                    //加密握手结束，发送注册数据
-                    self.register(current_device, route_key)?;
-                }
-            }
             service_packet::Protocol::DeviceAuthAck => {
-                let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("DeviceAuthAck {:?}", e))
-                })?;
+                let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DeviceAuthAck {:?}", e)))?;
                 if !ack.ok {
                     println!("auth device failed: {}", ack.reason);
                     if self.runtime.config.auth_only {
@@ -462,11 +443,16 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.register(current_device, route_key)?;
                 }
             }
+            service_packet::Protocol::DeviceAuthChallenge => {
+                let challenge = DeviceAuthChallenge::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DeviceAuthChallenge {:?}", e)))?;
+                self.runtime
+                    .control_session
+                    .send_device_auth_proof(&challenge)?;
+            }
             service_packet::Protocol::PunchStart => {
-                let punch_start =
-                    PunchStart::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                        io::Error::new(io::ErrorKind::Other, format!("PunchStart {:?}", e))
-                    })?;
+                let punch_start = PunchStart::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("PunchStart {:?}", e)))?;
                 let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
                 let deadline_unix_ms = if punch_start.deadline_unix_ms > 0 {
                     punch_start.deadline_unix_ms
@@ -523,9 +509,9 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     accepted,
                     reason,
                 );
-                let bytes = ack.write_to_bytes().map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("PunchAck {:?}", e))
-                })?;
+                let bytes = ack
+                    .write_to_bytes()
+                    .map_err(|e| io::Error::other(format!("PunchAck {:?}", e)))?;
                 self.send_service_packet(
                     current_device,
                     service_packet::Protocol::PunchAck,
@@ -547,10 +533,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::RefreshGatewayGrantResponse => {
                 let response = RefreshGatewayGrantResponse::parse_from_bytes(net_packet.payload())
                     .map_err(|e| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("RefreshGatewayGrantResponse {:?}", e),
-                        )
+                        io::Error::other(format!("RefreshGatewayGrantResponse {:?}", e))
                     })?;
                 if !response.has_update {
                     log::info!("gateway grant refresh skipped: {}", response.reason);
@@ -563,10 +546,8 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 log::info!("gateway grant refreshed for {}", current_device.virtual_ip);
             }
             service_packet::Protocol::GatewayConnectAck => {
-                let ack =
-                    GatewayConnectAck::parse_from_bytes(net_packet.payload()).map_err(|e| {
-                        io::Error::new(io::ErrorKind::Other, format!("GatewayConnectAck {:?}", e))
-                    })?;
+                let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
                 self.runtime
                     .gateway_sessions
                     .handle_connect_ack(route_key.addr, &ack);
@@ -581,6 +562,15 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         Ok(())
     }
     fn set_device_info_list(&self, device_info_list: Vec<proto::message::DeviceInfo>, epoch: u16) {
+        let current_epoch = self.runtime.peer_state.lock().0;
+        if is_stale_epoch(current_epoch, epoch) {
+            log::info!(
+                "ignore stale device list: current_epoch={}, incoming_epoch={}",
+                current_epoch,
+                epoch
+            );
+            return;
+        }
         let ip_list: Vec<PeerDeviceInfo> = device_info_list
             .into_iter()
             .map(|info| {
@@ -588,25 +578,58 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Ipv4Addr::from(info.virtual_ip),
                     info.name,
                     info.device_status as u8,
-                    info.client_secret,
-                    info.client_secret_hash,
                     info.wireguard,
+                    info.device_id,
+                    info.device_pub_key,
+                    info.online_kx_pub,
                 )
             })
             .collect();
+        let mut peer_session_ciphers = std::collections::HashMap::with_capacity(ip_list.len());
+        let local_online_session_key = self.runtime.peer_crypto.online_session_key();
+        for peer_info in &ip_list {
+            let Some(local_online_session_key) = local_online_session_key.as_ref() else {
+                log::warn!("missing local online session key, skip deriving peer session ciphers");
+                break;
+            };
+            match crate::util::derive_peer_session_key(
+                local_online_session_key,
+                &peer_info.online_kx_pub,
+                &self.runtime.config.token,
+            )
+            .and_then(crate::cipher::Cipher::new_key)
+            {
+                Ok(cipher) => {
+                    peer_session_ciphers.insert(peer_info.virtual_ip, cipher);
+                }
+                Err(err) => {
+                    log::warn!(
+                        "derive peer session cipher failed peer={} device_id={} err={:?}",
+                        peer_info.virtual_ip,
+                        peer_info.device_id,
+                        err
+                    );
+                }
+            }
+        }
         {
             let mut dev = self.runtime.peer_state.lock();
             //这里可能会收到旧的消息，但是随着时间推移总会收到新的
             dev.0 = epoch;
             dev.1.clear();
-            for info in ip_list.clone() {
-                dev.1.insert(info.virtual_ip, info);
+            for peer_info in ip_list.clone() {
+                dev.1.insert(peer_info.virtual_ip, peer_info);
             }
         }
+        self.runtime
+            .peer_crypto
+            .rotate_peer_session_ciphers(peer_session_ciphers);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()
-                .map(|v| PeerClientInfo::new(v.virtual_ip, v.name, v.status, v.client_secret))
+                .map(|peer_info| {
+                    PeerClientInfo::new(peer_info.virtual_ip, peer_info.name, peer_info.status)
+                })
                 .collect(),
         );
     }
@@ -654,6 +677,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     dev.0 = 0;
                     drop(dev);
                 }
+                self.runtime.peer_crypto.clear_all();
                 let mut current_device = self.runtime.current_device.load();
                 while !current_device.is_server_addr(route_key.addr) {
                     let mut next = current_device;
@@ -739,6 +763,13 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         Ok(())
     }
+}
+
+fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
+    if current_epoch == 0 || current_epoch == incoming_epoch {
+        return false;
+    }
+    current_epoch.wrapping_sub(incoming_epoch) < (u16::MAX / 2)
 }
 
 fn build_punch_ack(

@@ -233,21 +233,14 @@ pub struct PeerClientInfo {
     pub virtual_ip: Ipv4Addr,
     pub name: String,
     pub status: PeerDeviceStatus,
-    pub client_secret: bool,
 }
 
 impl PeerClientInfo {
-    pub fn new(
-        virtual_ip: Ipv4Addr,
-        name: String,
-        status: PeerDeviceStatus,
-        client_secret: bool,
-    ) -> Self {
+    pub fn new(virtual_ip: Ipv4Addr, name: String, status: PeerDeviceStatus) -> Self {
         Self {
             virtual_ip,
             name,
             status,
-            client_secret,
         }
     }
 }
@@ -255,8 +248,8 @@ impl PeerClientInfo {
 impl Display for PeerClientInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format!(
-            "ip={} ,name={} ,status={:?}, client_secret={}",
-            self.virtual_ip, self.name, self.status, self.client_secret
+            "ip={} ,name={} ,status={:?}",
+            self.virtual_ip, self.name, self.status
         ))
     }
 }

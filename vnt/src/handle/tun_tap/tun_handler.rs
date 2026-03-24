@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::{io, thread};
 use tun_rs::SyncDevice;
 
-use crate::cipher::Cipher;
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
@@ -19,9 +18,8 @@ use crate::handle::tun_tap::DeviceStop;
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
-use crate::protocol::ip_turn_packet::BroadcastPacket;
-use crate::protocol::{ip_turn_packet, NetPacket, MAX_TTL};
-use crate::util::StopManager;
+use crate::protocol::{ip_turn_packet, NetPacket};
+use crate::util::{PeerCryptoManager, StopManager};
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;
@@ -45,8 +43,8 @@ pub fn start(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    client_cipher: Cipher,
     peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> io::Result<()> {
@@ -60,8 +58,8 @@ pub fn start(
                 current_device,
                 gateway_sessions,
                 ip_route,
-                client_cipher,
                 peer_state,
+                peer_crypto,
                 compressor,
                 device_stop,
             ) {
@@ -73,11 +71,12 @@ pub fn start(
 }
 
 fn broadcast(
-    sender: &DataChannel,
+    channel: &DataChannel,
     gateway_sessions: &GatewaySessions,
-    net_packet: &mut NetPacket<&mut [u8]>,
+    net_packet: &NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
     peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_crypto: &PeerCryptoManager,
 ) -> anyhow::Result<()> {
     let list: Vec<Ipv4Addr> = peer_state
         .lock()
@@ -89,52 +88,47 @@ fn broadcast(
     if list.is_empty() {
         return Ok(());
     }
-    const MAX_COUNT: usize = 8;
-    let mut p2p_ips = Vec::with_capacity(8);
-    let mut relay = false;
-    let mut overflow = false;
-    for (index, peer_ip) in list.into_iter().enumerate() {
-        if index > MAX_COUNT {
-            overflow = true;
-            break;
-        }
-        if let Some(route) = sender.direct_route(&peer_ip) {
-            if sender.send_p2p_route(&net_packet, route).is_ok() {
-                p2p_ips.push(peer_ip);
-                continue;
-            }
-        }
-        relay = true;
-    }
-    if !overflow && !relay {
-        //全部p2p,不需要服务器中转
-        return Ok(());
-    }
     if current_device.status.offline() {
         //离线的不再转发
         return Ok(());
     }
-    if p2p_ips.is_empty() {
-        //都没有p2p则直接由服务器转发
-        gateway_sessions.send_relay(&net_packet)?;
-        return Ok(());
+    for peer_ip in list {
+        let mut peer_buf = vec![0u8; net_packet.data_len() + ENCRYPTION_RESERVED];
+        peer_buf[..net_packet.data_len()].copy_from_slice(net_packet.buffer());
+        let mut peer_packet = NetPacket::new_encrypt(peer_buf)?;
+        peer_packet.set_destination(peer_ip);
+        if channel.peer_encrypt_enabled() {
+            let cipher = match peer_crypto.send_cipher(&peer_ip) {
+                Ok(cipher) => cipher,
+                Err(err) => {
+                    log::debug!(
+                        "skip broadcast without peer session cipher for {}: {:?}",
+                        peer_ip,
+                        err
+                    );
+                    continue;
+                }
+            };
+            cipher.encrypt_ipv4(&mut peer_packet)?;
+        }
+
+        if let Some(route) = channel.direct_route(&peer_ip) {
+            if let Err(err) = channel.send_p2p_route(&peer_packet, route) {
+                if channel.allows_gateway_relay() {
+                    log::debug!(
+                        "p2p broadcast send failed for {}, fallback relay: {:?}",
+                        peer_ip,
+                        err
+                    );
+                    gateway_sessions.send_relay(&peer_packet)?;
+                } else {
+                    return Err(err.into());
+                }
+            }
+        } else if channel.allows_gateway_relay() {
+            gateway_sessions.send_relay(&peer_packet)?;
+        }
     }
-
-    let buf = vec![0u8; 12 + 1 + p2p_ips.len() * 4 + net_packet.data_len() + ENCRYPTION_RESERVED];
-    //剩余的发送到服务端，需要告知哪些已发送过
-    let mut server_packet = NetPacket::new_encrypt(buf)?;
-    server_packet.set_default_version();
-    server_packet.set_initial_ttl(MAX_TTL);
-    server_packet.set_source(net_packet.source());
-    //使用对应的目的地址
-    server_packet.set_destination(net_packet.destination());
-    server_packet.set_protocol(protocol::Protocol::IpTurn);
-    server_packet.set_transport_protocol(ip_turn_packet::Protocol::Ipv4Broadcast.into());
-
-    let mut broadcast = BroadcastPacket::unchecked(server_packet.payload_mut());
-    broadcast.set_address(&p2p_ips)?;
-    broadcast.set_data(net_packet.buffer())?;
-    gateway_sessions.send_relay(&server_packet)?;
     Ok(())
 }
 
@@ -151,8 +145,8 @@ pub(crate) fn handle(
     current_device: CurrentDeviceInfo,
     gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
-    client_cipher: &Cipher,
     peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
@@ -163,7 +157,7 @@ pub(crate) fn handle(
     let src_ip = ipv4_packet.source_ip();
     let dest_ip = ipv4_packet.destination_ip();
     if src_ip == dest_ip {
-        return icmp(&device_writer, ipv4_packet);
+        return icmp(device_writer, ipv4_packet);
     }
     let src_ip = ipv4_packet.source_ip();
     let mut dest_ip = ipv4_packet.destination_ip();
@@ -179,20 +173,21 @@ pub(crate) fn handle(
         gateway_sessions.send_relay(&net_packet)?;
         return Ok(());
     }
-    if !dest_ip.is_multicast() && !dest_ip.is_broadcast() && current_device.broadcast_ip != dest_ip
+    if !Ipv4Addr::is_multicast(&dest_ip)
+        && !dest_ip.is_broadcast()
+        && current_device.broadcast_ip != dest_ip
+        && current_device.not_in_network(dest_ip)
     {
-        if current_device.not_in_network(dest_ip) {
-            if let Some(r_dest_ip) = ip_route.route(&dest_ip) {
-                //路由的目标不能是自己
-                if r_dest_ip == src_ip {
-                    return Ok(());
-                }
-                //需要修改目的地址
-                dest_ip = r_dest_ip;
-                net_packet.set_destination(r_dest_ip);
-            } else {
+        if let Some(r_dest_ip) = ip_route.route(&dest_ip) {
+            //路由的目标不能是自己
+            if r_dest_ip == src_ip {
                 return Ok(());
             }
+            //需要修改目的地址
+            dest_ip = r_dest_ip;
+            net_packet.set_destination(r_dest_ip);
+        } else {
+            return Ok(());
         }
     }
 
@@ -216,18 +211,38 @@ pub(crate) fn handle(
     };
     if is_broadcast {
         // 广播 发送到直连目标
-        client_cipher.encrypt_ipv4(&mut net_packet)?;
         broadcast(
             data_channel,
             gateway_sessions,
-            &mut net_packet,
+            &net_packet,
             &current_device,
             peer_state,
+            peer_crypto,
         )?;
         return Ok(());
     }
 
-    client_cipher.encrypt_ipv4(&mut net_packet)?;
-    data_channel.send_to_peer(&net_packet, &dest_ip)?;
+    if data_channel.peer_encrypt_enabled() {
+        let cipher = peer_crypto.send_cipher(&dest_ip)?;
+        cipher.encrypt_ipv4(&mut net_packet)?;
+    }
+    if let Some(route) = data_channel.direct_route(&dest_ip) {
+        if let Err(err) = data_channel.send_p2p_route(&net_packet, route) {
+            if data_channel.allows_gateway_relay() {
+                log::debug!("p2p send failed for {}, fallback relay: {:?}", dest_ip, err);
+                gateway_sessions.send_relay(&net_packet)?;
+            } else {
+                return Err(err.into());
+            }
+        }
+    } else if data_channel.allows_gateway_relay() {
+        gateway_sessions.send_relay(&net_packet)?;
+    } else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("peer route not found: {}", dest_ip),
+        )
+        .into());
+    }
     Ok(())
 }

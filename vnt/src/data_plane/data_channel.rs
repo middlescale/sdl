@@ -2,6 +2,7 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
+use crate::cipher::CipherModel;
 use crate::core::VntRuntime;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::use_channel_type::UseChannelType;
@@ -29,6 +30,20 @@ impl DataChannel {
         } else {
             runtime.route_manager().direct_route(vip)
         }
+    }
+
+    pub fn allows_gateway_relay(&self) -> bool {
+        self.runtime
+            .upgrade()
+            .map(|runtime| !runtime.route_manager().use_channel_type().is_only_p2p())
+            .unwrap_or(false)
+    }
+
+    pub fn peer_encrypt_enabled(&self) -> bool {
+        self.runtime
+            .upgrade()
+            .map(|runtime| runtime.config.cipher_model != CipherModel::None)
+            .unwrap_or(false)
     }
 
     pub fn send_to_peer<B: AsRef<[u8]>>(

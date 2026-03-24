@@ -25,7 +25,6 @@ default-feature = ["aes_gcm", "aes_cbc", "aes_ecb", "sm4_cbc", "chacha20_poly130
 
 openssl = ["vnt/openssl", "common/openssl"]
 openssl-vendored = ["vnt/openssl-vendored", "common/openssl-vendored"]
-ring-cipher = ["vnt/ring-cipher", "common/ring-cipher"]
 aes_cbc = ["vnt/aes_cbc", "common/aes_cbc"]
 aes_ecb = ["vnt/aes_ecb", "common/aes_ecb"]
 sm4_cbc = ["vnt/sm4_cbc", "common/sm4_cbc"]

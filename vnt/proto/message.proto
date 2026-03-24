@@ -13,10 +13,6 @@ message HandshakeResponse {
     string key_finger = 4;
     repeated string capabilities = 5;
 }
-message SecretHandshakeRequest {
-    string token = 1;
-    bytes key = 2;
-}
 message RegistrationRequest {
     string token = 1;
     string device_id = 2;
@@ -25,10 +21,8 @@ message RegistrationRequest {
     string version = 5;
     fixed32 virtual_ip = 6;
     bool allow_ip_change = 7;
-    bool client_secret = 8;
-    bytes client_secret_hash = 9;
     bytes device_pub_key = 10;
-    string device_pub_key_alg = 11;
+    bytes online_kx_pub = 11;
 }
 
 message RegistrationResponse {
@@ -110,9 +104,6 @@ message GatewayConnectHello {
     bytes ticket = 4;
     bytes nonce = 5;
     int64 client_time_unix_ms = 6;
-    bytes device_pub_key = 7;
-    string device_pub_key_alg = 8;
-    bytes device_signature = 9;
     bool reauth = 10;
 }
 message GatewayConnectAck {
@@ -130,6 +121,20 @@ message DeviceAuthRequest {
     string group = 2;
     string device_id = 3;
     string ticket = 4;
+    bytes device_pub_key = 5;
+}
+message DeviceAuthChallenge {
+    string challenge_id = 1;
+    bytes nonce = 2;
+    int64 expire_unix_ms = 3;
+    bool reauth_required = 4;
+    string reason = 5;
+}
+message DeviceAuthProof {
+    string challenge_id = 1;
+    string device_id = 2;
+    bytes device_pub_key = 3;
+    bytes signature = 4;
 }
 message DeviceAuthAck {
     bool ok = 1;
@@ -137,14 +142,17 @@ message DeviceAuthAck {
     string user_id = 3;
     string group = 4;
     string device_id = 5;
+    int64 auth_expire_unix_ms = 6;
+    bool reauth_required = 7;
 }
 message DeviceInfo {
     string name = 1;
     fixed32 virtual_ip = 2;
     uint32 device_status = 3;
-    bool client_secret = 4;
-    bytes client_secret_hash = 5;
     bool wireguard = 6;
+    string device_id = 7;
+    bytes device_pub_key = 8;
+    bytes online_kx_pub = 9;
 }
 
 message DeviceList {

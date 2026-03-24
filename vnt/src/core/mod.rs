@@ -35,12 +35,10 @@ pub struct Config {
     pub stun_server: Vec<String>,
     pub in_ips: Vec<(u32, u32, Ipv4Addr)>,
     pub out_ips: Vec<(u32, u32)>,
-    pub password: Option<String>,
     pub mtu: Option<u32>,
     pub protocol: ConnectProtocol,
     pub ip: Option<Ipv4Addr>,
     pub cipher_model: CipherModel,
-    pub finger: bool,
     pub punch_model: PunchModel,
     pub ports: Option<Vec<u16>>,
     pub latency_first: bool,
@@ -88,20 +86,18 @@ impl Config {
             vec![],
             vec![],
             None,
-            None,
             ip,
+            #[cfg(feature = "aes_gcm")]
+            CipherModel::AesGcm,
+            #[cfg(not(feature = "aes_gcm"))]
             CipherModel::None,
-            false,
             PunchModel::All,
             ports,
             false,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(not(target_os = "android"))]
             nic,
             UseChannelType::All,
             None,
             0,
-            #[cfg(feature = "port_mapping")]
             vec![],
             Compressor::None,
             false,
@@ -124,22 +120,18 @@ impl Config {
         mut stun_server: Vec<String>,
         mut in_ips: Vec<(u32, u32, Ipv4Addr)>,
         out_ips: Vec<(u32, u32)>,
-        password: Option<String>,
         mtu: Option<u32>,
         ip: Option<Ipv4Addr>,
         cipher_model: CipherModel,
-        finger: bool,
         punch_model: PunchModel,
         ports: Option<Vec<u16>>,
         latency_first: bool,
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(not(target_os = "android"))]
         device_name: Option<String>,
         use_channel_type: UseChannelType,
         packet_loss_rate: Option<f64>,
         packet_delay: u32,
         // 例如 [udp:127.0.0.1:80->10.26.0.10:8080,tcp:127.0.0.1:80->10.26.0.10:8080]
-        #[cfg(feature = "port_mapping")] port_mapping_list: Vec<String>,
+        port_mapping_list: Vec<String>,
         compressor: Compressor,
         enable_traffic: bool,
         local_dev: Option<String>,
@@ -167,6 +159,12 @@ impl Config {
         }
         if name.is_empty() || name.len() > 128 {
             return Err(anyhow!("name too long"));
+        }
+        if !cipher_model.is_runtime_supported() {
+            return Err(anyhow!(
+                "unsupported runtime cipher model '{}', only aes_gcm or none are allowed",
+                cipher_model
+            ));
         }
         let mut server_address_str = server_address_str.to_lowercase();
         let _query_dns = true;
@@ -201,9 +199,13 @@ impl Config {
         }
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = crate::port_mapping::convert(port_mapping_list)?;
+        #[cfg(not(feature = "port_mapping"))]
+        let _ = port_mapping_list;
+        #[cfg(not(feature = "integrated_tun"))]
+        let _ = device_name;
 
         for (dest, mask, _) in &mut in_ips {
-            *dest = *mask & *dest;
+            *dest &= *mask;
         }
         in_ips.sort_by(|(dest1, _, _), (dest2, _, _)| dest2.cmp(dest1));
         let (local_interface, local_ipv4) = if let Some(local_dev) = local_dev {
@@ -226,12 +228,10 @@ impl Config {
             stun_server,
             in_ips,
             out_ips,
-            password,
             mtu,
             protocol,
             ip,
             cipher_model,
-            finger,
             punch_model,
             ports,
             latency_first,
@@ -252,31 +252,5 @@ impl Config {
             auth_ticket,
             auth_only: false,
         })
-    }
-}
-
-impl Config {
-    pub fn password_hash(&self) -> Option<[u8; 16]> {
-        if let Some(p) = self.password.as_ref() {
-            match self.cipher_model {
-                CipherModel::Xor => {
-                    let key = crate::cipher::simple_hash(&format!("Xor{}{}", p, self.token));
-                    Some(key[16..].try_into().unwrap())
-                }
-                CipherModel::None => None,
-                #[cfg(cipher)]
-                _ => {
-                    use sha2::Digest;
-                    let mut hasher = sha2::Sha256::new();
-                    hasher.update(self.cipher_model.to_string().as_bytes());
-                    hasher.update(p.as_bytes());
-                    hasher.update(self.token.as_bytes());
-                    let key: [u8; 32] = hasher.finalize().into();
-                    Some(key[16..].try_into().unwrap())
-                }
-            }
-        } else {
-            None
-        }
     }
 }

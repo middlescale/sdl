@@ -6,11 +6,11 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 
-use crate::cipher::Cipher;
 use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::{NatInfo, NatType, Punch};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{control_packet, NetPacket, Protocol};
+use crate::util::PeerCryptoManager;
 
 struct PunchSenders {
     sender_self: SyncSender<(Ipv4Addr, NatInfo)>,
@@ -103,7 +103,8 @@ impl PunchCoordinator {
 
 pub fn spawn_punch_workers(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    client_cipher: Cipher,
+    peer_crypto: Arc<PeerCryptoManager>,
+    peer_encrypt: bool,
     coordinator: PunchCoordinator,
     punch: Punch,
 ) {
@@ -116,12 +117,20 @@ pub fn spawn_punch_workers(
     let f = |receiver: Receiver<(Ipv4Addr, NatInfo)>| {
         let punch = punch.clone();
         let current_device = current_device.clone();
-        let client_cipher = client_cipher.clone();
+        let peer_crypto = peer_crypto.clone();
+        let peer_encrypt = peer_encrypt;
         let punch_record = punch_record.clone();
         thread::Builder::new()
             .name("punch".into())
             .spawn(move || {
-                punch_start(receiver, punch, current_device, client_cipher, punch_record);
+                punch_start(
+                    receiver,
+                    punch,
+                    current_device,
+                    peer_crypto,
+                    peer_encrypt,
+                    punch_record,
+                );
             })
             .expect("punch");
     };
@@ -135,7 +144,8 @@ fn punch_start(
     receiver: Receiver<(Ipv4Addr, NatInfo)>,
     mut punch: Punch,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    client_cipher: Cipher,
+    peer_crypto: Arc<PeerCryptoManager>,
+    peer_encrypt: bool,
     punch_record: Arc<Mutex<HashMap<Ipv4Addr, usize>>>,
 ) {
     while let Ok((peer_ip, nat_info)) = receiver.recv() {
@@ -158,9 +168,18 @@ fn punch_start(
         };
         log::info!("第{}次发起打洞,目标:{:?},{:?} ", count, peer_ip, nat_info);
 
-        if let Err(e) = client_cipher.encrypt_ipv4(&mut packet) {
-            log::error!("{:?}", e);
-            continue;
+        if peer_encrypt {
+            let Ok(cipher) = peer_crypto.current_cipher(&peer_ip) else {
+                log::debug!(
+                    "skip punch request without peer session cipher for {}",
+                    peer_ip
+                );
+                continue;
+            };
+            if let Err(e) = cipher.encrypt_ipv4(&mut packet) {
+                log::error!("{:?}", e);
+                continue;
+            }
         }
         if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count) {
             log::warn!("{:?}", e)

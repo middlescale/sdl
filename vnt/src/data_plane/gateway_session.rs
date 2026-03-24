@@ -249,9 +249,6 @@ impl GatewaySession {
             ticket: guard.ticket.clone(),
             nonce,
             client_time_unix_ms: now_ms,
-            device_pub_key: vec![],
-            device_pub_key_alg: String::new(),
-            device_signature: vec![],
             reauth: guard.reauth_required || !ticket_available,
             ..Default::default()
         };

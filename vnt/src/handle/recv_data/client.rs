@@ -21,7 +21,6 @@ use crate::protocol::{
     control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
 };
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-
 /// 处理来源于客户端的包
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
@@ -34,6 +33,31 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         Self { device, runtime }
     }
 
+    fn decrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
+        &self,
+        peer_ip: &Ipv4Addr,
+        net_packet: &mut NetPacket<B>,
+    ) -> anyhow::Result<()> {
+        if !net_packet.is_encrypt() {
+            return Ok(());
+        }
+        self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet)
+    }
+
+    fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
+        &self,
+        peer_ip: &Ipv4Addr,
+        net_packet: &mut NetPacket<B>,
+    ) -> anyhow::Result<()> {
+        if self.runtime.config.cipher_model == crate::cipher::CipherModel::None {
+            return Ok(());
+        }
+        self.runtime
+            .peer_crypto
+            .send_cipher(peer_ip)?
+            .encrypt_ipv4(net_packet)
+    }
+
     fn send_reply_by_route<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
@@ -43,7 +67,11 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             self.runtime
                 .udp_channel
                 .send_by_key(packet.buffer(), route_key)?;
-        } else if self.runtime.gateway_sessions.is_gateway_addr(route_key.addr) {
+        } else if self
+            .runtime
+            .gateway_sessions
+            .is_gateway_addr(route_key.addr)
+        {
             self.runtime.gateway_sessions.send_relay(packet)?;
         } else {
             return Err(anyhow!("unsupported reply route {:?}", route_key));
@@ -60,10 +88,17 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        self.runtime.client_cipher.decrypt_ipv4(&mut net_packet)?;
-        self.runtime
-            .route_manager()
-            .touch_path(&net_packet.source(), &route_key);
+        let source = net_packet.source();
+        if self.runtime.peer_info(&source).is_none() {
+            log::debug!(
+                "drop packet from unknown peer {} via {:?}",
+                source,
+                route_key
+            );
+            return Ok(());
+        }
+        self.decrypt_by_route(&source, &mut net_packet)?;
+        self.runtime.route_manager().touch_path(&source, &route_key);
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -105,27 +140,23 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             ip_turn_packet::Protocol::Ipv4 => {
                 let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
-                match ipv4.protocol() {
-                    ipv4::protocol::Protocol::Icmp => {
-                        if ipv4.destination_ip() == destination {
-                            let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
-                            if icmp_packet.kind() == Kind::EchoRequest {
-                                //开启ping
-                                icmp_packet.set_kind(Kind::EchoReply);
-                                icmp_packet.update_checksum();
-                                ipv4.set_source_ip(destination);
-                                ipv4.set_destination_ip(source);
-                                ipv4.update_checksum();
-                                net_packet.set_source(destination);
-                                net_packet.set_destination(source);
-                                //不管加不加密，和接收到的数据长度都一致
-                                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
-                                self.send_reply_by_route(&net_packet, route_key)?;
-                                return Ok(());
-                            }
-                        }
+                if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
+                    && ipv4.destination_ip() == destination
+                {
+                    let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
+                    if icmp_packet.kind() == Kind::EchoRequest {
+                        //开启ping
+                        icmp_packet.set_kind(Kind::EchoReply);
+                        icmp_packet.update_checksum();
+                        ipv4.set_source_ip(destination);
+                        ipv4.set_destination_ip(source);
+                        ipv4.update_checksum();
+                        net_packet.set_source(destination);
+                        net_packet.set_destination(source);
+                        self.encrypt_by_route(&source, &mut net_packet)?;
+                        self.send_reply_by_route(&net_packet, route_key)?;
+                        return Ok(());
                     }
-                    _ => {}
                 }
                 // ip代理只关心实际目标
                 let real_dest = ipv4.destination_ip();
@@ -203,7 +234,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
-                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
+                self.encrypt_by_route(&source, &mut net_packet)?;
                 self.send_reply_by_route(&net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
@@ -239,7 +270,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
-                self.runtime.client_cipher.encrypt_ipv4(&mut net_packet)?;
+                self.encrypt_by_route(&source, &mut net_packet)?;
                 self.send_reply_by_route(&net_packet, route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
@@ -279,7 +310,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
-                    self.runtime.client_cipher.encrypt_ipv4(&mut packet)?;
+                    self.encrypt_by_route(&source, &mut packet)?;
                     self.send_reply_by_route(&packet, route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
@@ -387,7 +418,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     punch_packet.set_source(current_device.virtual_ip());
                     punch_packet.set_destination(source);
                     punch_packet.set_payload(&bytes)?;
-                    self.runtime.client_cipher.encrypt_ipv4(&mut punch_packet)?;
+                    self.encrypt_by_route(&source, &mut punch_packet)?;
                     if self
                         .runtime
                         .punch_coordinator

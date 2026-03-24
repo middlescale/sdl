@@ -6,7 +6,6 @@ use std::time::Duration;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-use crate::cipher::Cipher;
 use crate::control::{ControlSession, ControlSessionDeps};
 use crate::core::{Config, RuntimeConfig, VntRuntime};
 use crate::data_plane::data_channel::DataChannel;
@@ -27,7 +26,7 @@ use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{device_key_alg, load_or_create_device_public_key, StopManager};
+use crate::util::{load_or_create_device_signing_key, PeerCryptoManager, StopManager};
 use crate::{nat, VntCallback};
 
 pub struct Vnt {
@@ -55,14 +54,8 @@ impl Vnt {
         device: Device,
     ) -> anyhow::Result<Self> {
         log::info!("config: {:?}", config);
-        let finger = if config.finger {
-            Some(config.token.clone())
-        } else {
-            None
-        };
-        //客户端对称加密
-        let client_cipher =
-            Cipher::new_password(config.cipher_model, config.password.clone(), finger)?;
+        let device_signing_key = Arc::new(load_or_create_device_signing_key(&config.device_id)?);
+        let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
         let current_device = Arc::new(AtomicCell::new(CurrentDeviceInfo::new0(
             config.server_address,
@@ -82,11 +75,9 @@ impl Vnt {
             name: config.name.clone(),
             token: config.token.clone(),
             ip: config.ip,
-            client_secret_hash: config.password_hash(),
-            server_secret: false,
+            cipher_model: config.cipher_model,
             device_id: config.device_id.clone(),
-            device_pub_key: load_or_create_device_public_key(&config.device_id)?,
-            device_pub_key_alg: device_key_alg().to_string(),
+            device_pub_key,
             server_addr: config.server_address_str.clone(),
             name_servers: config.name_servers.clone(),
             mtu: config.mtu.unwrap_or(1420),
@@ -112,7 +103,6 @@ impl Vnt {
             stop_manager.clone(),
             config.port_mapping_list.clone(),
         )?;
-        //通道上下文
         let data_plane_stats = DataPlaneStats::new(config.enable_traffic);
         let udp_channel = UdpChannel::bind(&config, data_plane_stats.clone())?;
         let local_ipv6 = nat::local_ipv6();
@@ -133,6 +123,7 @@ impl Vnt {
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
         let punch_coordinator = PunchCoordinator::new();
         let gateway_sessions = GatewaySessions::new(current_device.clone());
+        let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
         let route_table = Arc::new(RouteTable::new(
@@ -144,7 +135,8 @@ impl Vnt {
             udp_channel.clone(),
             stop_manager.clone(),
             current_device.clone(),
-            client_cipher.clone(),
+            peer_crypto.clone(),
+            config.cipher_model != crate::cipher::CipherModel::None,
         )?;
         let control_session = ControlSession::new(
             QuicChannel::new(
@@ -154,6 +146,7 @@ impl Vnt {
             runtime_config.clone(),
             ControlSessionDeps {
                 current_device: current_device.clone(),
+                peer_crypto: peer_crypto.clone(),
                 peer_state: peer_state.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 data_plane_stats: data_plane_stats.clone(),
@@ -171,8 +164,8 @@ impl Vnt {
                     current_device.clone(),
                     gateway_sessions.clone(),
                     external_route.clone(),
-                    client_cipher.clone(),
                     peer_state.clone(),
+                    peer_crypto.clone(),
                     config.compressor,
                     device.clone().into_device_adapter(),
                 )
@@ -181,12 +174,13 @@ impl Vnt {
             VntRuntime {
                 config: runtime_config.clone(),
                 current_device: current_device.clone(),
+                device_signing_key: device_signing_key.clone(),
+                peer_crypto: peer_crypto.clone(),
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),
                 peer_nat_info_map: peer_nat_info_map.clone(),
                 external_route: external_route.clone(),
                 out_external_route: out_external_route.clone(),
-                client_cipher: client_cipher.clone(),
                 control_session: control_session.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 route_manager: route_manager.clone(),
@@ -223,7 +217,8 @@ impl Vnt {
         );
         spawn_punch_workers(
             current_device.clone(),
-            client_cipher.clone(),
+            peer_crypto.clone(),
+            config.cipher_model != crate::cipher::CipherModel::None,
             punch_coordinator.clone(),
             punch.clone(),
         );
@@ -258,16 +253,6 @@ impl Vnt {
     pub fn name(&self) -> &str {
         &self.config.name
     }
-    pub fn client_encrypt(&self) -> bool {
-        self.config.password.is_some()
-    }
-    pub fn client_encrypt_hash(&self) -> Option<&[u8]> {
-        self.runtime
-            .config
-            .client_secret_hash
-            .as_ref()
-            .map(|v| v.as_ref())
-    }
     pub fn current_device(&self) -> CurrentDeviceInfo {
         self.runtime.current_device.load()
     }
@@ -287,7 +272,7 @@ impl Vnt {
         let device_list_lock = self.runtime.peer_state.lock();
         let (_epoch, device_list) = device_list_lock.clone();
         drop(device_list_lock);
-        device_list.into_values().collect()
+        device_list.into_values().collect::<Vec<_>>()
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
         self.runtime.route_manager().best_route(ip)

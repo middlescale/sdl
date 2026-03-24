@@ -24,13 +24,11 @@ pub struct FileConfig {
     pub dns: Vec<String>,
     pub in_ips: Vec<String>,
     pub out_ips: Vec<String>,
-    pub password: Option<String>,
     pub mtu: Option<u32>,
     pub tcp: bool,
     pub ip: Option<String>,
     pub use_channel: String,
     pub cipher_model: Option<String>,
-    pub finger: bool,
     pub punch_model: String,
     pub ports: Option<Vec<u16>>,
     pub cmd: bool,
@@ -66,13 +64,11 @@ impl Default for FileConfig {
             dns: vec![],
             in_ips: vec![],
             out_ips: vec![],
-            password: None,
             mtu: None,
             tcp: false,
             ip: None,
             use_channel: "all".to_string(),
             cipher_model: None,
-            finger: false,
             punch_model: "all".to_string(),
             ports: None,
             cmd: false,
@@ -123,9 +119,7 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool
         CipherModel::from_str(&v).map_err(|e| anyhow!("{}", e))?
     } else {
         #[cfg(not(feature = "aes_gcm"))]
-        if file_conf.password.is_some() {
-            Err(anyhow!("cipher_model undefined"))?
-        } else {
+        {
             CipherModel::None
         }
         #[cfg(feature = "aes_gcm")]
@@ -140,6 +134,10 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool
     } else {
         Compressor::None
     };
+    #[cfg(not(feature = "port_mapping"))]
+    let port_mapping_list: Vec<String> = vec![];
+    #[cfg(feature = "port_mapping")]
+    let port_mapping_list = file_conf.mapping;
     let config = Config::new(
         #[cfg(target_os = "windows")]
         #[cfg(feature = "integrated_tun")]
@@ -152,21 +150,17 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool
         file_conf.stun_server,
         in_ips,
         out_ips,
-        file_conf.password,
         file_conf.mtu,
         virtual_ip,
         cipher_model,
-        file_conf.finger,
         punch_model,
         file_conf.ports,
         file_conf.latency_first,
-        #[cfg(feature = "integrated_tun")]
         file_conf.device_name,
         use_channel_type,
         file_conf.packet_loss,
         file_conf.packet_delay,
-        #[cfg(feature = "port_mapping")]
-        file_conf.mapping,
+        port_mapping_list,
         compressor,
         !file_conf.disable_stats,
         file_conf.local_dev,

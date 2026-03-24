@@ -2,8 +2,6 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use anyhow::anyhow;
-#[cfg(cipher)]
-use sha2::Digest;
 
 #[cfg(feature = "aes_cbc")]
 use crate::cipher::aes_cbc::AesCbcCipher;
@@ -18,8 +16,6 @@ use crate::cipher::chacha20_poly1305::ChaCha20Poly1305Cipher;
 #[cfg(feature = "sm4_cbc")]
 use crate::cipher::sm4_cbc::Sm4CbcCipher;
 use crate::cipher::xor::XORCipher;
-#[cfg(cipher)]
-use crate::cipher::Finger;
 use crate::protocol::NetPacket;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -62,6 +58,19 @@ impl Display for CipherModel {
     }
 }
 
+impl CipherModel {
+    pub fn is_runtime_supported(self) -> bool {
+        #[cfg(feature = "aes_gcm")]
+        {
+            matches!(self, CipherModel::AesGcm | CipherModel::None)
+        }
+        #[cfg(not(feature = "aes_gcm"))]
+        {
+            matches!(self, CipherModel::None)
+        }
+    }
+}
+
 impl FromStr for CipherModel {
     type Err = String;
 
@@ -80,6 +89,7 @@ impl FromStr for CipherModel {
             #[cfg(feature = "sm4_cbc")]
             "sm4_cbc" => Ok(CipherModel::Sm4Cbc),
             "xor" => Ok(CipherModel::Xor),
+            "none" => Ok(CipherModel::None),
             _ => {
                 let mut enums = String::new();
                 #[cfg(feature = "aes_gcm")]
@@ -92,7 +102,7 @@ impl FromStr for CipherModel {
                 enums.push_str("/aes_ecb");
                 #[cfg(feature = "sm4_cbc")]
                 enums.push_str("/sm4_cbc");
-                enums.push_str("/xor");
+                enums.push_str("/xor/none");
                 Err(format!("not match '{}', enum:{}", s, &enums[1..]))
             }
         }
@@ -118,104 +128,14 @@ pub enum Cipher {
 }
 
 impl Cipher {
-    pub fn new_password(
-        model: CipherModel,
-        password: Option<String>,
-        token: Option<String>,
-    ) -> anyhow::Result<Self> {
-        if let Some(password) = password {
-            #[cfg(cipher)]
-            let key: [u8; 32] = {
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(password.as_bytes());
-                hasher.finalize().into()
-            };
-            match model {
-                #[cfg(feature = "aes_gcm")]
-                CipherModel::AesGcm => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    if password.len() < 8 {
-                        let aes = AesGcmCipher::new_128(key[..16].try_into().unwrap(), finger);
-                        Ok(Cipher::AesGcm((aes, key[..16].to_vec())))
-                    } else {
-                        let aes = AesGcmCipher::new_256(key, finger);
-                        Ok(Cipher::AesGcm((aes, key.to_vec())))
-                    }
-                }
-                #[cfg(feature = "chacha20_poly1305")]
-                CipherModel::Chacha20Poly1305 => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    let chacha = ChaCha20Poly1305Cipher::new_256(key, finger);
-                    Ok(Cipher::Chacha20Poly1305(chacha))
-                }
-                #[cfg(feature = "chacha20_poly1305")]
-                CipherModel::Chacha20 => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    let chacha = ChaCha20Cipher::new_256(key, finger);
-                    Ok(Cipher::Chacha20(chacha))
-                }
-                #[cfg(feature = "aes_cbc")]
-                CipherModel::AesCbc => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    if password.len() < 8 {
-                        let aes = AesCbcCipher::new_128(key[..16].try_into().unwrap(), finger);
-                        Ok(Cipher::AesCbc(aes))
-                    } else {
-                        let aes = AesCbcCipher::new_256(key, finger);
-                        Ok(Cipher::AesCbc(aes))
-                    }
-                }
-                #[cfg(feature = "aes_ecb")]
-                CipherModel::AesEcb => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    if password.len() < 8 {
-                        let aes = AesEcbCipher::new_128(key[..16].try_into().unwrap(), finger);
-                        Ok(Cipher::AesEcb(aes))
-                    } else {
-                        let aes = AesEcbCipher::new_256(key, finger);
-                        Ok(Cipher::AesEcb(aes))
-                    }
-                }
-                #[cfg(feature = "sm4_cbc")]
-                CipherModel::Sm4Cbc => {
-                    let finger = token.map(|token| Finger::new(&token));
-                    let aes = Sm4CbcCipher::new_128(key[..16].try_into().unwrap(), finger);
-                    Ok(Cipher::Sm4Cbc(aes))
-                }
-                CipherModel::Xor => {
-                    if token.is_some() {
-                        Err(anyhow::anyhow!(
-                            "'finger' and 'xor' cannot be used simultaneously"
-                        ))?
-                    }
-                    Ok(Cipher::Xor(XORCipher::new_256(
-                        crate::cipher::xor::simple_hash(&password),
-                    )))
-                }
-                CipherModel::None => Ok(Cipher::None),
-            }
-        } else {
-            Ok(Cipher::None)
-        }
-    }
     #[cfg(not(feature = "aes_gcm"))]
-    pub fn new_key(_key: [u8; 32], _token: String) -> anyhow::Result<Self> {
+    pub fn new_key(_key: [u8; 32]) -> anyhow::Result<Self> {
         Err(anyhow!("key error"))
     }
     #[cfg(feature = "aes_gcm")]
-    pub fn new_key(key: [u8; 32], token: String) -> anyhow::Result<Self> {
-        let finger = Some(Finger::new(&token));
-        match key.len() {
-            16 => {
-                let aes = AesGcmCipher::new_128(key[..16].try_into().unwrap(), finger);
-                Ok(Cipher::AesGcm((aes, key[..16].to_vec())))
-            }
-            32 => {
-                let aes = AesGcmCipher::new_256(key, finger);
-                Ok(Cipher::AesGcm((aes, key.to_vec())))
-            }
-            _ => Err(anyhow!("key error")),
-        }
+    pub fn new_key(key: [u8; 32]) -> anyhow::Result<Self> {
+        let aes = AesGcmCipher::new_256(key);
+        Ok(Cipher::AesGcm((aes, key.to_vec())))
     }
     pub fn decrypt_ipv4<B: AsRef<[u8]> + AsMut<[u8]>>(
         &self,
@@ -261,56 +181,6 @@ impl Cipher {
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.encrypt_ipv4(net_packet),
             Cipher::Xor(xor) => xor.encrypt_ipv4(net_packet),
-            Cipher::None => Ok(()),
-        }
-    }
-    #[cfg(not(cipher))]
-    pub fn check_finger<B: AsRef<[u8]> + AsMut<[u8]>>(
-        &self,
-        _net_packet: &NetPacket<B>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    #[cfg(cipher)]
-    pub fn check_finger<B: AsRef<[u8]>>(&self, net_packet: &NetPacket<B>) -> anyhow::Result<()> {
-        match self {
-            #[cfg(feature = "aes_gcm")]
-            Cipher::AesGcm((aes_gcm, _)) => aes_gcm
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            #[cfg(feature = "chacha20_poly1305")]
-            Cipher::Chacha20Poly1305(chacha20poly1305) => chacha20poly1305
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            #[cfg(feature = "chacha20_poly1305")]
-            Cipher::Chacha20(chacha20) => chacha20
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            #[cfg(feature = "aes_cbc")]
-            Cipher::AesCbc(aes_cbc) => aes_cbc
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            #[cfg(feature = "aes_ecb")]
-            Cipher::AesEcb(aes_ecb) => aes_ecb
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            #[cfg(feature = "sm4_cbc")]
-            Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc
-                .finger
-                .as_ref()
-                .map(|f| f.check_finger(net_packet))
-                .unwrap_or(Ok(())),
-            Cipher::Xor(_) => Ok(()),
             Cipher::None => Ok(()),
         }
     }

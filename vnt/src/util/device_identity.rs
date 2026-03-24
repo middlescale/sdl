@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Context};
-use ed25519_dalek::SigningKey;
+use curve25519_dalek::montgomery::MontgomeryPoint;
+use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand::rngs::OsRng;
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 const DEVICE_KEY_LEN: usize = 32;
@@ -11,6 +14,13 @@ pub fn device_key_alg() -> &'static str {
 }
 
 pub fn load_or_create_device_public_key(device_id: &str) -> anyhow::Result<Vec<u8>> {
+    Ok(load_or_create_device_signing_key(device_id)?
+        .verifying_key()
+        .to_bytes()
+        .to_vec())
+}
+
+pub fn load_or_create_device_signing_key(device_id: &str) -> anyhow::Result<SigningKey> {
     let key_path = resolve_device_key_path(device_id)?;
     let signing_key = if key_path.exists() {
         let key_bytes = std::fs::read(&key_path)
@@ -35,7 +45,69 @@ pub fn load_or_create_device_public_key(device_id: &str) -> anyhow::Result<Vec<u
         }
         signing_key
     };
-    Ok(signing_key.verifying_key().to_bytes().to_vec())
+    Ok(signing_key)
+}
+
+pub fn sign_device_payload(device_id: &str, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let signing_key = load_or_create_device_signing_key(device_id)?;
+    let signature: Signature = signing_key.sign(payload);
+    Ok(signature.to_bytes().to_vec())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OnlineSessionKeyMaterial {
+    private_key: [u8; 32],
+    public_key: [u8; 32],
+}
+
+impl OnlineSessionKeyMaterial {
+    pub fn generate() -> Self {
+        let mut private_key = [0u8; 32];
+        OsRng.fill_bytes(&mut private_key);
+        let public_key = MontgomeryPoint::mul_base_clamped(private_key).to_bytes();
+        Self {
+            private_key,
+            public_key,
+        }
+    }
+
+    pub fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+}
+
+pub fn derive_peer_session_key(
+    online_session_key: &OnlineSessionKeyMaterial,
+    peer_online_kx_pub: &[u8],
+    group: &str,
+) -> anyhow::Result<[u8; 32]> {
+    let peer_pub_key: [u8; 32] = peer_online_kx_pub
+        .try_into()
+        .map_err(|_| anyhow!("invalid peer online key length"))?;
+    let peer_point = MontgomeryPoint(peer_pub_key);
+
+    let shared = peer_point
+        .mul_clamped(online_session_key.private_key)
+        .to_bytes();
+    if shared.iter().all(|byte| *byte == 0) {
+        return Err(anyhow!("invalid peer shared secret"));
+    }
+
+    let local_pub_key = online_session_key.public_key();
+    let (first_pub, second_pub) = if local_pub_key.as_slice() <= peer_online_kx_pub {
+        (local_pub_key.as_slice(), peer_online_kx_pub)
+    } else {
+        (peer_online_kx_pub, local_pub_key.as_slice())
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"vnt-peer-session-v2");
+    hasher.update((group.len() as u32).to_be_bytes());
+    hasher.update(group.as_bytes());
+    hasher.update(shared);
+    hasher.update(first_pub);
+    hasher.update(second_pub);
+    Ok(hasher.finalize().into())
 }
 
 fn resolve_device_key_path(device_id: &str) -> anyhow::Result<PathBuf> {
@@ -58,4 +130,50 @@ fn resolve_device_key_path(device_id: &str) -> anyhow::Result<PathBuf> {
         .join(".vnt")
         .join("identity")
         .join(format!("{safe_device_id}.key")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{derive_peer_session_key, OnlineSessionKeyMaterial};
+
+    #[test]
+    fn derive_peer_session_key_is_symmetric() {
+        let alice = OnlineSessionKeyMaterial::generate();
+        let bob = OnlineSessionKeyMaterial::generate();
+        let token = "ms.net";
+
+        let alice_key = derive_peer_session_key(&alice, &bob.public_key(), token)
+            .expect("derive alice session key");
+        let bob_key = derive_peer_session_key(&bob, &alice.public_key(), token)
+            .expect("derive bob session key");
+
+        assert_eq!(alice_key, bob_key);
+    }
+
+    #[test]
+    fn online_session_key_is_random_per_generation() {
+        let first = OnlineSessionKeyMaterial::generate();
+        let second = OnlineSessionKeyMaterial::generate();
+        assert_ne!(first.public_key(), second.public_key());
+    }
+
+    #[test]
+    fn derive_peer_session_key_rejects_invalid_peer_key_length() {
+        let alice = OnlineSessionKeyMaterial::generate();
+        let err = derive_peer_session_key(&alice, &[1, 2, 3], "ms.net").unwrap_err();
+        assert!(err.to_string().contains("invalid peer online key length"));
+    }
+
+    #[test]
+    fn derive_peer_session_key_changes_with_group() {
+        let alice = OnlineSessionKeyMaterial::generate();
+        let bob = OnlineSessionKeyMaterial::generate();
+
+        let first = derive_peer_session_key(&alice, &bob.public_key(), "group-a")
+            .expect("derive key for group-a");
+        let second = derive_peer_session_key(&alice, &bob.public_key(), "group-b")
+            .expect("derive key for group-b");
+
+        assert_ne!(first, second);
+    }
 }

@@ -23,7 +23,6 @@ sys-locale = "0.3.1"
 default = []
 openssl = ["vnt/openssl"]
 openssl-vendored = ["vnt/openssl-vendored"]
-ring-cipher = ["vnt/ring-cipher"]
 aes_cbc = ["vnt/aes_cbc"]
 aes_ecb = ["vnt/aes_ecb"]
 sm4_cbc = ["vnt/sm4_cbc"]

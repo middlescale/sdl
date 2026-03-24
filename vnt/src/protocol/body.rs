@@ -1,7 +1,8 @@
 use std::{fmt, io};
 
 pub const ENCRYPTION_RESERVED: usize = 16 + 32 + 12;
-pub const AES_GCM_ENCRYPTION_RESERVED: usize = 32;
+pub const AES_GCM_NONCE_RESERVED: usize = 12;
+pub const AES_GCM_ENCRYPTION_RESERVED: usize = TAG_RESERVED + AES_GCM_NONCE_RESERVED;
 pub const RSA_ENCRYPTION_RESERVED: usize = 32;
 
 pub const RANDOM_RESERVED: usize = 4;
@@ -177,6 +178,82 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> AEADSecretBody<B> {
             end -= FINGER_RESERVED;
         }
         self.buffer.as_mut()[end - TAG_RESERVED..end].copy_from_slice(tag);
+        Ok(())
+    }
+}
+
+/* aes-gcm加密数据体
+  0                                            15                                              31
+  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ |                                          数据体                                              |
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ |                                          tag(32)                                            |
+ |                                          tag(32)                                            |
+ |                                          tag(32)                                            |
+ |                                          tag(32)                                            |
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ |                                         nonce(96)                                           |
+ |                                         nonce(96)                                           |
+ |                                         nonce(96)                                           |
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
+pub struct AesGcmSecretBody<B> {
+    buffer: B,
+}
+
+impl<B: AsRef<[u8]>> AesGcmSecretBody<B> {
+    pub fn new(buffer: B) -> io::Result<AesGcmSecretBody<B>> {
+        let len = buffer.as_ref().len();
+        let min_len = TAG_RESERVED + AES_GCM_NONCE_RESERVED;
+        if len < min_len || len > 65535 - 20 - 8 - 12 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("AesGcmSecretBody length overflow {}", len),
+            ));
+        }
+        Ok(AesGcmSecretBody { buffer })
+    }
+
+    pub fn data(&self) -> &[u8] {
+        let end = self.buffer.as_ref().len() - TAG_RESERVED - AES_GCM_NONCE_RESERVED;
+        &self.buffer.as_ref()[..end]
+    }
+
+    pub fn tag(&self) -> &[u8] {
+        let end = self.buffer.as_ref().len() - AES_GCM_NONCE_RESERVED;
+        &self.buffer.as_ref()[end - TAG_RESERVED..end]
+    }
+
+    pub fn nonce(&self) -> &[u8] {
+        &self.buffer.as_ref()[self.buffer.as_ref().len() - AES_GCM_NONCE_RESERVED..]
+    }
+}
+
+impl<B: AsRef<[u8]> + AsMut<[u8]>> AesGcmSecretBody<B> {
+    pub fn data_mut(&mut self) -> &mut [u8] {
+        let end = self.buffer.as_ref().len() - TAG_RESERVED - AES_GCM_NONCE_RESERVED;
+        &mut self.buffer.as_mut()[..end]
+    }
+
+    pub fn set_tag(&mut self, tag: &[u8]) -> io::Result<()> {
+        if tag.len() != TAG_RESERVED {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "tag.len != 16"));
+        }
+        let end = self.buffer.as_ref().len() - AES_GCM_NONCE_RESERVED;
+        self.buffer.as_mut()[end - TAG_RESERVED..end].copy_from_slice(tag);
+        Ok(())
+    }
+
+    pub fn set_nonce(&mut self, nonce: &[u8]) -> io::Result<()> {
+        if nonce.len() != AES_GCM_NONCE_RESERVED {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "nonce.len != 12",
+            ));
+        }
+        let start = self.buffer.as_ref().len() - AES_GCM_NONCE_RESERVED;
+        self.buffer.as_mut()[start..].copy_from_slice(nonce);
         Ok(())
     }
 }

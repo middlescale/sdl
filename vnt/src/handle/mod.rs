@@ -25,9 +25,10 @@ pub struct PeerDeviceInfo {
     pub virtual_ip: Ipv4Addr,
     pub name: String,
     pub status: PeerDeviceStatus,
-    pub client_secret: bool,
-    pub client_secret_hash: Vec<u8>,
     pub wireguard: bool,
+    pub device_id: String,
+    pub device_pub_key: Vec<u8>,
+    pub online_kx_pub: Vec<u8>,
 }
 
 impl PeerDeviceInfo {
@@ -35,17 +36,19 @@ impl PeerDeviceInfo {
         virtual_ip: Ipv4Addr,
         name: String,
         status: u8,
-        client_secret: bool,
-        client_secret_hash: Vec<u8>,
         wireguard: bool,
+        device_id: String,
+        device_pub_key: Vec<u8>,
+        online_kx_pub: Vec<u8>,
     ) -> Self {
         Self {
             virtual_ip,
             name,
             status: PeerDeviceStatus::from(status),
-            client_secret,
-            client_secret_hash,
             wireguard,
+            device_id,
+            device_pub_key,
+            online_kx_pub,
         }
     }
 }

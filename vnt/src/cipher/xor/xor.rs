@@ -75,7 +75,7 @@ impl XORCipher {
 
 #[test]
 fn test_xor() {
-    let d = XORCipher::new_256(simple_hash("password"));
+    let d = XORCipher::new_256(simple_hash("test-key"));
     let mut p = NetPacket::new_encrypt([0; 1000]).unwrap();
     let src = p.buffer().to_vec();
     d.encrypt_ipv4(&mut p).unwrap();
