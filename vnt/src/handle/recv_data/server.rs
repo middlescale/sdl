@@ -810,11 +810,20 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
     let peer_ip = Ipv4Addr::from(punch_start.target);
     let mut public_ips = Vec::new();
     let mut public_ports = Vec::new();
+    let mut local_ipv4: Option<Ipv4Addr> = None;
     let mut ipv6: Option<Ipv6Addr> = None;
     let mut use_tcp = false;
     for ep in &punch_start.peer_endpoints {
         if ep.ip != 0 {
-            public_ips.push(Ipv4Addr::from(ep.ip));
+            let ip = Ipv4Addr::from(ep.ip);
+            if crate::nat::is_ipv4_global(&ip) {
+                public_ips.push(ip);
+            } else if local_ipv4.is_none() {
+                // Control-triggered PunchStart only carries endpoint ip:port pairs. In private
+                // networks (e.g. Docker bridge CI), keep the first non-global IPv4 as the local
+                // candidate so punch workers still have a reachable direct target to probe.
+                local_ipv4 = Some(ip);
+            }
         }
         if ep.port <= u16::MAX as u32 && ep.port > 0 {
             public_ports.push(ep.port as u16);
@@ -839,7 +848,7 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
             public_ips,
             public_ports.clone(),
             0,
-            None,
+            local_ipv4,
             ipv6,
             public_ports,
             0,
@@ -879,6 +888,22 @@ mod tests {
         assert_eq!(nat_info.public_ports, vec![10001, 10002]);
         assert_eq!(nat_info.ipv6(), Some(ipv6));
         assert_eq!(nat_info.punch_model, PunchModel::IPv4Tcp);
+    }
+
+    #[test]
+    fn build_peer_nat_info_from_punch_start_keeps_private_ipv4_as_local_candidate() {
+        let mut start = PunchStart::new();
+        start.target = u32::from(Ipv4Addr::new(10, 26, 0, 3));
+        let mut ep = PunchEndpoint::new();
+        ep.ip = u32::from(Ipv4Addr::new(172, 18, 0, 7));
+        ep.port = 10001;
+        start.peer_endpoints.push(ep);
+
+        let (_peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
+        assert!(nat_info.public_ips.is_empty());
+        assert_eq!(nat_info.local_ipv4(), Some(Ipv4Addr::new(172, 18, 0, 7)));
+        assert_eq!(nat_info.public_ports, vec![10001]);
+        assert_eq!(nat_info.udp_ports, vec![10001]);
     }
 
     #[test]
