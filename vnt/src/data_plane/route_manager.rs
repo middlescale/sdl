@@ -10,8 +10,9 @@ use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::handle::CurrentDeviceInfo;
+use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
-use crate::protocol::{NetPacket, Protocol};
+use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
 use crate::util::{PeerCryptoManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
@@ -345,7 +346,7 @@ fn wait_for_stop(stop_manager: &StopManager, duration: Duration) -> bool {
 }
 
 fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<Vec<u8>>> {
-    let mut net_packet = NetPacket::new(vec![0u8; 12 + 4])?;
+    let mut net_packet = NetPacket::new(vec![0u8; HEAD_LEN + 4])?;
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Control);
     net_packet.set_transport_protocol(crate::protocol::control_packet::Protocol::Ping.into());
@@ -362,7 +363,20 @@ fn heartbeat_packet_client(
     src: Ipv4Addr,
     dest: Ipv4Addr,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
-    let mut net_packet = heartbeat_packet(src, dest)?;
+    let mut net_packet = if cipher.is_some() {
+        let mut net_packet = NetPacket::new_encrypt(vec![0u8; HEAD_LEN + 4 + ENCRYPTION_RESERVED])?;
+        net_packet.set_default_version();
+        net_packet.set_protocol(Protocol::Control);
+        net_packet.set_transport_protocol(crate::protocol::control_packet::Protocol::Ping.into());
+        net_packet.set_initial_ttl(5);
+        net_packet.set_source(src);
+        net_packet.set_destination(dest);
+        let mut ping = PingPacket::new(net_packet.payload_mut())?;
+        ping.set_time(crate::handle::now_time() as u16);
+        net_packet
+    } else {
+        heartbeat_packet(src, dest)?
+    };
     if let Some(cipher) = cipher {
         cipher.encrypt_ipv4(&mut net_packet)?;
     }
@@ -372,9 +386,11 @@ fn heartbeat_packet_client(
 #[cfg(test)]
 mod tests {
     use super::{RouteManager, StaleDirectRoute};
+    use crate::cipher::Cipher;
     use crate::data_plane::route::Route;
     use crate::data_plane::route_table::RouteTable;
     use crate::data_plane::use_channel_type::UseChannelType;
+    use crate::protocol::Protocol;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
@@ -388,6 +404,24 @@ mod tests {
             metric,
             10,
         )
+    }
+
+    #[test]
+    fn heartbeat_packet_client_reserves_room_for_peer_encryption() {
+        let cipher = Cipher::new_key([7; 32]).expect("cipher");
+        let mut packet = super::heartbeat_packet_client(
+            Some(cipher.clone()),
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 2),
+        )
+        .expect("heartbeat packet");
+        assert!(packet.is_encrypt());
+        cipher.decrypt_ipv4(&mut packet).expect("decrypt heartbeat");
+        assert_eq!(packet.protocol(), Protocol::Control);
+        assert_eq!(
+            packet.transport_protocol(),
+            crate::protocol::control_packet::Protocol::Ping.into()
+        );
     }
 
     #[test]
