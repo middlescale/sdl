@@ -2,13 +2,11 @@ syntax = "proto3";
 
 message HandshakeRequest {
     string version = 1;
-    bool secret = 2;
     string key_finger = 3;
     repeated string capabilities = 4;
 }
 message HandshakeResponse {
     string version = 1;
-    bool secret = 2;
     bytes public_key = 3;
     string key_finger = 4;
     repeated string capabilities = 5;
