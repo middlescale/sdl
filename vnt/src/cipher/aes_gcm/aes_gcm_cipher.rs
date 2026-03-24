@@ -38,6 +38,7 @@ impl AesGcmCipher {
         let mut aad = [0u8; 12];
         aad.copy_from_slice(net_packet.head());
         aad[0] |= 0x80;
+        aad[3] &= 0xF0;
         aad
     }
 
@@ -147,4 +148,21 @@ fn test_aes_gcm_uses_unique_nonce() {
     d.encrypt_ipv4(&mut p2).unwrap();
 
     assert_ne!(p1.payload(), p2.payload());
+}
+
+#[test]
+fn test_aes_gcm_ignores_mutable_ttl_nibble_in_aad() {
+    let d = AesGcmCipher::new_256([9; 32]);
+    let mut p =
+        NetPacket::new_encrypt([0; 13 + crate::protocol::body::ENCRYPTION_RESERVED]).unwrap();
+    p.head_mut()
+        .copy_from_slice(&[0x80, 4, 1, 0x65, 10, 0, 0, 1, 10, 0, 0, 2]);
+
+    d.encrypt_ipv4(&mut p).unwrap();
+    p.set_ttl(4);
+    d.decrypt_ipv4(&mut p).unwrap();
+
+    assert!(!p.is_encrypt());
+    assert_eq!(p.origin_ttl(), 6);
+    assert_eq!(p.ttl(), 4);
 }
