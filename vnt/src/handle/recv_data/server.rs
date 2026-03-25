@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
 use packet::icmp::{icmp, Kind};
@@ -236,15 +238,73 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         code: PunchResultCode,
         reason: &str,
     ) -> anyhow::Result<()> {
-        let result = build_punch_result(session_id, source, target, attempt, code, reason);
-        let bytes = result
-            .write_to_bytes()
-            .map_err(|e| anyhow!("PunchResult {:?}", e))?;
-        self.send_service_packet(
-            current_device,
-            service_packet::Protocol::PunchResult,
-            &bytes,
+        let _ = current_device;
+        send_punch_result_via_control(
+            &self.runtime.control_session,
+            session_id,
+            source,
+            target,
+            attempt,
+            code,
+            reason,
         )
+    }
+
+    fn spawn_punch_session_watchdog(&self, peer_ip: Ipv4Addr, session: ActivePunchSession) {
+        let runtime = self.runtime.clone();
+        let sessions = self.punch_active_sessions.clone();
+        thread::Builder::new()
+            .name(format!("punchWatchdog-{peer_ip}"))
+            .spawn(move || loop {
+                let now_ms = crate::handle::now_time() as i64;
+                let outcome = {
+                    let mut guard = sessions.lock();
+                    let Some(active) = guard.get(&peer_ip).copied() else {
+                        return;
+                    };
+                    if active.session_id != session.session_id || active.attempt != session.attempt
+                    {
+                        return;
+                    }
+                    if runtime.route_manager().direct_path_count(&peer_ip) > 0 {
+                        guard.remove(&peer_ip);
+                        Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
+                    } else if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
+                        guard.remove(&peer_ip);
+                        Some((PunchResultCode::PunchResultTimeout, "deadline exceeded"))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((code, reason)) = outcome {
+                    if let Err(err) = send_punch_result_via_control(
+                        &runtime.control_session,
+                        session.session_id,
+                        session.source,
+                        session.target,
+                        session.attempt,
+                        code,
+                        reason,
+                    ) {
+                        log::warn!(
+                            "send punch result from watchdog failed peer={} session_id={} attempt={} err={:?}",
+                            peer_ip,
+                            session.session_id,
+                            session.attempt,
+                            err
+                        );
+                    }
+                    return;
+                }
+                let sleep = if session.deadline_unix_ms > 0 {
+                    let remaining = session.deadline_unix_ms.saturating_sub(now_ms) as u64;
+                    Duration::from_millis(remaining.clamp(1, 200))
+                } else {
+                    Duration::from_millis(200)
+                };
+                thread::sleep(sleep);
+            })
+            .expect("punch watchdog");
     }
 
     fn service(
@@ -464,18 +524,16 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     };
                     crate::handle::now_time() as i64 + timeout_ms as i64
                 };
+                let session = ActivePunchSession {
+                    session_id: punch_start.session_id,
+                    source: u32::from(current_device.virtual_ip),
+                    target: punch_start.target,
+                    attempt: punch_start.attempt,
+                    deadline_unix_ms,
+                };
                 let replaced = {
                     let mut sessions = self.punch_active_sessions.lock();
-                    let prev = sessions.insert(
-                        peer_ip,
-                        ActivePunchSession {
-                            session_id: punch_start.session_id,
-                            source: u32::from(current_device.virtual_ip),
-                            target: punch_start.target,
-                            attempt: punch_start.attempt,
-                            deadline_unix_ms,
-                        },
-                    );
+                    let prev = sessions.insert(peer_ip, session);
                     match prev {
                         Some(prev)
                             if prev.session_id != punch_start.session_id
@@ -528,6 +586,8 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         PunchResultCode::PunchResultFailed,
                         reason,
                     )?;
+                } else {
+                    self.spawn_punch_session_watchdog(peer_ip, session);
                 }
             }
             service_packet::Protocol::RefreshGatewayGrantResponse => {
@@ -804,6 +864,23 @@ fn build_punch_result(
     result.code = protobuf::EnumOrUnknown::new(code);
     result.reason = reason.to_string();
     result
+}
+
+fn send_punch_result_via_control(
+    control_session: &crate::control::ControlSession,
+    session_id: u64,
+    source: u32,
+    target: u32,
+    attempt: u32,
+    code: PunchResultCode,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let result = build_punch_result(session_id, source, target, attempt, code, reason);
+    let bytes = result
+        .write_to_bytes()
+        .map_err(|e| anyhow!("PunchResult {:?}", e))?;
+    control_session.send_service_payload(service_packet::Protocol::PunchResult, &bytes)?;
+    Ok(())
 }
 
 fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, NatInfo) {
