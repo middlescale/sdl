@@ -7,6 +7,7 @@ use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
 
 pub mod client;
 pub mod entity;
+mod ipc;
 pub mod server;
 pub mod service_state;
 

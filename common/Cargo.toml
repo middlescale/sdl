@@ -19,6 +19,7 @@ getopts = "0.2.21"
 gethostname = "0.4.3"
 uuid = { version = "1.8.0", features = ["v4"] }
 sys-locale = "0.3.1"
+interprocess = "2.4.0"
 
 [features]
 default = []

@@ -1,40 +1,14 @@
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::str::FromStr;
-use std::time::Duration;
 
 use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::ipc;
 
-pub struct CommandClient {
-    buf: Vec<u8>,
-    udp: UdpSocket,
-}
+pub struct CommandClient;
 
 impl CommandClient {
     pub fn new() -> io::Result<Self> {
-        let port = read_command_port().unwrap_or_else(|e| {
-            log::warn!("read_command_port:{:?}", e);
-            39271
-        });
-        let udp = UdpSocket::bind("127.0.0.1:0")?;
-        udp.set_read_timeout(Some(Duration::from_secs(5)))?;
-        udp.connect(SocketAddr::V4(SocketAddrV4::new(
-            Ipv4Addr::new(127, 0, 0, 1),
-            port,
-        )))?;
-        Ok(Self {
-            udp,
-            buf: vec![0; 65536 * 8],
-        })
-    }
-}
-fn read_command_port() -> io::Result<u16> {
-    let path_buf = crate::cli::app_home()?.join("command-port");
-    let port = std::fs::read_to_string(path_buf)?;
-    match u16::from_str(&port) {
-        Ok(port) => Ok(port),
-        Err(_) => Err(io::Error::other("'command-port' file error")),
+        Ok(Self)
     }
 }
 
@@ -75,21 +49,23 @@ impl CommandClient {
         let cmd = format!("auth:{}", serde_json::to_string(&cmd).unwrap());
         self.send_string_cmd(cmd.as_bytes())
     }
-    fn send_cmd<'a, V: Deserialize<'a>>(&'a mut self, cmd: &[u8]) -> io::Result<V> {
-        self.udp.send(cmd)?;
-        let len = self.udp.recv(&mut self.buf)?;
-        match serde_yaml::from_slice::<V>(&self.buf[..len]) {
+    fn send_cmd<V: DeserializeOwned>(&mut self, cmd: &[u8]) -> io::Result<V> {
+        let mut stream = ipc::connect_stream()?;
+        ipc::write_frame(&mut stream, cmd)?;
+        let response = ipc::read_frame(&mut stream)?;
+        match serde_yaml::from_slice::<V>(&response) {
             Ok(val) => Ok(val),
             Err(e) => {
                 log::error!(
                     "send_cmd {:?} {:?},{:?}",
                     std::str::from_utf8(cmd),
-                    std::str::from_utf8(&self.buf[..len]),
+                    std::str::from_utf8(&response),
                     e
                 );
                 Err(io::Error::other(format!(
                     "data error {:?} buf_len={}",
-                    e, len
+                    e,
+                    response.len()
                 )))
             }
         }
