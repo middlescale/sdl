@@ -200,7 +200,7 @@ impl Vnt {
                 #[cfg(feature = "integrated_tun")]
                 suspended,
                 #[cfg(feature = "integrated_tun")]
-                tun_lifecycle: Mutex::new(()),
+                tun_lifecycle: Arc::new(Mutex::new(())),
                 #[cfg(feature = "integrated_tun")]
                 tun_device_helper,
             }
