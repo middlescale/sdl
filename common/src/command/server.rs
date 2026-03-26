@@ -27,8 +27,8 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn info(&self) -> io::Result<Info>;
     fn chart_a(&self) -> io::Result<ChartA>;
     fn chart_b(&self, input: Option<&str>) -> io::Result<ChartB>;
-    fn start_runtime(&self) -> io::Result<String>;
-    fn stop_runtime(&self) -> io::Result<String>;
+    fn resume_runtime(&self) -> io::Result<String>;
+    fn suspend_runtime(&self) -> io::Result<String>;
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String>;
     fn auth(&self, auth: AuthCommand) -> io::Result<String>;
 }
@@ -88,10 +88,11 @@ where
             .unwrap_or_else(|e| format!("error {:?}", e)),
         "chart_a" => serde_yaml::to_string(&handler.chart_a()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
-        "start" => serde_yaml::to_string(&handler.start_runtime()?)
+        "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
-        "stop" => {
-            serde_yaml::to_string(&handler.stop_runtime()?).unwrap_or_else(|e| format!("error {:?}", e))
+        "suspend" => {
+            serde_yaml::to_string(&handler.suspend_runtime()?)
+                .unwrap_or_else(|e| format!("error {:?}", e))
         }
         _ => {
             if let Some(ip) = cmd.strip_prefix("chart_b") {
@@ -122,7 +123,7 @@ where
                 }
             } else {
                 format!(
-                    "command '{}' not found.  Try to enter: 'route'/'list'/'stop' \n",
+                    "command '{}' not found.  Try to enter: 'route'/'list'/'resume'/'suspend' \n",
                     cmd
                 )
             }

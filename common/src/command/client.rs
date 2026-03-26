@@ -39,8 +39,8 @@ fn read_command_port() -> io::Result<u16> {
 }
 
 impl CommandClient {
-    pub fn start(&mut self) -> io::Result<String> {
-        self.send_string_cmd(b"start")
+    pub fn resume(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"resume")
     }
     pub fn list(&mut self) -> io::Result<Vec<DeviceItem>> {
         self.send_cmd(b"list")
@@ -102,7 +102,7 @@ impl CommandClient {
             Ok(value)
         }
     }
-    pub fn stop(&mut self) -> io::Result<String> {
-        self.send_string_cmd(b"stop")
+    pub fn suspend(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"suspend")
     }
 }

@@ -23,17 +23,17 @@ sudo vnt-service -k <token> -n <name> -s <server>
 sudo vnt-service -f /path/to/config.yaml
 ```
 
-`vnt-service` 负责带参数启动；`vnt start` 只负责恢复已经存在的本地 service runtime，不再接受启动参数。
+`vnt-service` 负责带参数启动；`vnt resume` 只负责恢复已经存在的本地 service runtime，不再接受启动参数。
 
 如果 `vnt-service` 已经在本机启动过，那么：
 
-- `vnt stop`：只停止当前 runtime，保留 `vnt-service` 进程
-- `vnt start`：不带 service 参数时，按已保存配置恢复 runtime
+- `vnt suspend`：只挂起当前 runtime 的本地收发，不退出 `vnt-service` 进程
+- `vnt resume`：不带 service 参数时，恢复已存在的 runtime；如果 runtime 已退出，则按保存配置重建
 
 ### 前端命令示例
 
 ```bash
-vnt start
+vnt resume
 vnt list
 vnt list --json
 vnt info --json
@@ -41,12 +41,12 @@ vnt route --json
 vnt auth <user-id> <group> <ticket>
 vnt channel_change --type relay
 vnt channel_change --json
-vnt stop
+vnt suspend
 ```
 
 - `vnt-service ...`：按参数或配置文件启动 daemon
-- `vnt start`：当本地 service 已存在且处于 stopped 状态时，恢复收发服务
-- `vnt stop`：停止当前收发服务，但不退出 `vnt-service` 进程
+- `vnt resume`：恢复本地收发服务；优先恢复已有 runtime
+- `vnt suspend`：挂起本地收发服务，但保留内存中的 runtime 状态
 - `vnt list/info/route`：查询当前本地服务状态
 - `vnt auth ...`：向本地 `vnt-service` 提交设备认证
 - control 服务器地址由 `vnt-service ... -s <server>` 决定
@@ -262,22 +262,12 @@ token: xxx #组网token
 
 关闭流量统计
 
-### --list
+### 本地前端命令
 
-在后台运行时,查看其他设备列表
+后台交互和状态查询请使用新的前端子命令：
 
-### --all
-
-在后台运行时,查看其他设备完整信息
-
-### --info
-
-在后台运行时,查看当前设备信息
-
-### --route
-
-在后台运行时,查看数据转发路径
-
-### --stop
-
-停止后台运行
+- `vnt list`
+- `vnt info`
+- `vnt route`
+- `vnt suspend`
+- `vnt resume`

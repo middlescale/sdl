@@ -331,6 +331,7 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let virtual_ip = Ipv4Addr::from(response.virtual_ip);
                 let virtual_netmask = Ipv4Addr::from(response.virtual_netmask);
                 let virtual_gateway = Ipv4Addr::from(response.virtual_gateway);
+                #[cfg_attr(feature = "integrated_tun", allow(unused_variables))]
                 let virtual_network =
                     Ipv4Addr::from(response.virtual_ip & response.virtual_netmask);
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
@@ -375,90 +376,28 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
                             log::info!("ip发生变化,old:{:?},response={:?}", old, response);
                         }
-                        let device_config = crate::handle::callback::DeviceConfig::new(
-                            #[cfg(feature = "integrated_tun")]
-                            #[cfg(target_os = "windows")]
-                            self.runtime.config.tap,
-                            #[cfg(feature = "integrated_tun")]
-                            #[cfg(any(
-                                target_os = "windows",
-                                target_os = "linux",
-                                target_os = "macos"
-                            ))]
-                            self.runtime.config.device_name.clone(),
-                            self.runtime.config.mtu,
-                            virtual_ip,
-                            virtual_netmask,
-                            virtual_gateway,
-                            virtual_network,
-                            self.runtime.external_route.to_route(),
-                        );
                         #[cfg(not(feature = "integrated_tun"))]
-                        self.callback.create_device(device_config);
+                        {
+                            let device_config = crate::handle::callback::DeviceConfig::new(
+                                self.runtime.config.mtu,
+                                virtual_ip,
+                                virtual_netmask,
+                                virtual_gateway,
+                                virtual_network,
+                                self.runtime.external_route.to_route(),
+                            );
+                            self.callback.create_device(device_config);
+                        }
                         #[cfg(feature = "integrated_tun")]
                         {
-                            self.runtime.tun_device_helper.stop();
-                            #[cfg(any(
-                                target_os = "windows",
-                                target_os = "linux",
-                                target_os = "macos"
-                            ))]
-                            match crate::tun_tap_device::create_device(
-                                device_config,
-                                &self.callback,
-                            ) {
-                                Ok(device) => {
-                                    let tun_info = crate::handle::callback::DeviceInfo::new(
-                                        device.name().unwrap_or("unknown".into()),
-                                        "".into(),
-                                    );
-                                    log::info!("tun信息{:?}", tun_info);
-                                    self.callback.create_tun(tun_info);
-                                    self.runtime.tun_device_helper.start(device)?;
-                                }
-                                Err(e) => {
-                                    log::error!("{:?}", e);
-                                    self.callback.error(e);
-                                }
-                            }
-                            #[cfg(target_os = "android")]
+                            if let Err(e) =
+                                self.runtime.sync_tun_with_current_device(&self.callback)
                             {
-                                let device_config = crate::handle::callback::DeviceConfig::new(
-                                    self.runtime.config.mtu,
-                                    virtual_ip,
-                                    virtual_netmask,
-                                    virtual_gateway,
-                                    virtual_network,
-                                    self.runtime.external_route.to_route(),
-                                );
-                                let device_fd = self.callback.generate_tun(device_config);
-                                if device_fd == 0 {
-                                    self.callback.error(ErrorInfo::new_msg(
-                                        ErrorType::FailedToCreateDevice,
-                                        "device_fd == 0".into(),
-                                    ));
-                                } else {
-                                    match tun_rs::platform::Device::from_fd(device_fd as _) {
-                                        Ok(device) => {
-                                            if let Err(e) = self
-                                                .runtime
-                                                .tun_device_helper
-                                                .start(Arc::new(device))
-                                            {
-                                                self.callback.error(ErrorInfo::new_msg(
-                                                    ErrorType::FailedToCreateDevice,
-                                                    format!("{:?}", e),
-                                                ));
-                                            }
-                                        }
-                                        Err(e) => {
-                                            self.callback.error(ErrorInfo::new_msg(
-                                                ErrorType::FailedToCreateDevice,
-                                                format!("{:?}", e),
-                                            ));
-                                        }
-                                    }
-                                }
+                                log::error!("{:?}", e);
+                                self.callback.error(ErrorInfo::new_msg(
+                                    ErrorType::FailedToCreateDevice,
+                                    format!("{:?}", e),
+                                ));
                             }
                         }
                     }

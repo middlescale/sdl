@@ -29,6 +29,11 @@ use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{load_or_create_device_signing_key, PeerCryptoManager, StopManager};
 use crate::{nat, VntCallback};
 
+#[derive(Clone)]
+struct NullCallback;
+
+impl VntCallback for NullCallback {}
+
 pub struct Vnt {
     stop_manager: StopManager,
     config: Config,
@@ -159,6 +164,8 @@ impl Vnt {
         let runtime = Arc::new_cyclic(|weak_runtime| {
             let data_channel = DataChannel::new(weak_runtime.clone());
             #[cfg(feature = "integrated_tun")]
+            let suspended = Arc::new(AtomicCell::new(false));
+            #[cfg(feature = "integrated_tun")]
             let tun_device_helper = {
                 TunDeviceHelper::new(
                     stop_manager.clone(),
@@ -190,6 +197,10 @@ impl Vnt {
                 udp_channel: udp_channel.clone(),
                 data_channel,
                 punch_coordinator: punch_coordinator.clone(),
+                #[cfg(feature = "integrated_tun")]
+                suspended,
+                #[cfg(feature = "integrated_tun")]
+                tun_lifecycle: Mutex::new(()),
                 #[cfg(feature = "integrated_tun")]
                 tun_device_helper,
             }
@@ -338,6 +349,37 @@ impl Vnt {
     }
     pub fn down_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
         self.runtime.data_plane_stats.down_traffic_history()
+    }
+    pub fn suspend(&self) -> anyhow::Result<()> {
+        #[cfg(feature = "integrated_tun")]
+        {
+            self.runtime.suspend();
+            return Ok(());
+        }
+        #[cfg(not(feature = "integrated_tun"))]
+        {
+            anyhow::bail!("suspend requires integrated_tun support")
+        }
+    }
+    pub fn resume(&self) -> anyhow::Result<()> {
+        #[cfg(feature = "integrated_tun")]
+        {
+            return self.runtime.resume(&NullCallback);
+        }
+        #[cfg(not(feature = "integrated_tun"))]
+        {
+            anyhow::bail!("resume requires integrated_tun support")
+        }
+    }
+    pub fn is_suspended(&self) -> bool {
+        #[cfg(feature = "integrated_tun")]
+        {
+            return self.runtime.is_suspended();
+        }
+        #[cfg(not(feature = "integrated_tun"))]
+        {
+            false
+        }
     }
     pub fn stop(&self) {
         self.stop_manager.stop()

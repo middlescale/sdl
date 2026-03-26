@@ -48,7 +48,7 @@ impl ServiceManager {
         match runtime {
             Some(vnt) if !vnt.is_stopped() => Ok(vnt),
             _ => Err(io::Error::other(
-                "service runtime is stopped, run `vnt start` to resume it",
+                "service runtime is unavailable, run `vnt resume` or restart `vnt-service`",
             )),
         }
     }
@@ -87,21 +87,60 @@ impl ServiceManager {
         }
     }
 
-    fn start_service_runtime(self: &Arc<Self>) -> anyhow::Result<String> {
+    fn spawn_service_runtime(self: &Arc<Self>) -> anyhow::Result<Arc<Vnt>> {
         if let Some(runtime) = self.runtime.lock().unwrap().clone() {
             if !runtime.is_stopped() {
-                self.mutate_state(|state| state.runtime_running = true);
-                return Ok("service already running".to_string());
+                self.mutate_state(|state| {
+                    state.runtime_running = true;
+                    state.runtime_suspended = runtime.is_suspended();
+                });
+                return Ok(runtime);
             }
         }
         let config = self.current_config();
         let callback = ServiceCallback::new(Arc::downgrade(self));
         let vnt = Arc::new(Vnt::new(config, callback)?);
-        *self.runtime.lock().unwrap() = Some(vnt);
+        *self.runtime.lock().unwrap() = Some(vnt.clone());
         self.mutate_state(|state| {
             state.runtime_running = true;
+            state.runtime_suspended = false;
         });
-        Ok("service started".to_string())
+        Ok(vnt)
+    }
+
+    fn resume_service_runtime(self: &Arc<Self>) -> anyhow::Result<String> {
+        let runtime = self.spawn_service_runtime()?;
+        if runtime.is_suspended() {
+            runtime.resume()?;
+            self.mutate_state(|state| {
+                state.runtime_running = true;
+                state.runtime_suspended = false;
+            });
+            Ok("service resumed".to_string())
+        } else {
+            self.mutate_state(|state| {
+                state.runtime_running = true;
+                state.runtime_suspended = false;
+            });
+            Ok("service already resumed".to_string())
+        }
+    }
+
+    fn suspend_service_runtime(&self) -> anyhow::Result<String> {
+        let runtime = self.current_runtime()?;
+        if runtime.is_suspended() {
+            self.mutate_state(|state| {
+                state.runtime_running = true;
+                state.runtime_suspended = true;
+            });
+            return Ok("service already suspended".to_string());
+        }
+        runtime.suspend()?;
+        self.mutate_state(|state| {
+            state.runtime_running = true;
+            state.runtime_suspended = true;
+        });
+        Ok("service suspended".to_string())
     }
 
     fn stop_service_runtime(&self) -> anyhow::Result<String> {
@@ -109,10 +148,16 @@ impl ServiceManager {
         if let Some(vnt) = runtime {
             vnt.stop();
             let _ = vnt.wait_timeout(Duration::from_secs(10));
-            self.mutate_state(|state| state.runtime_running = false);
+            self.mutate_state(|state| {
+                state.runtime_running = false;
+                state.runtime_suspended = false;
+            });
             Ok("service stopped".to_string())
         } else {
-            self.mutate_state(|state| state.runtime_running = false);
+            self.mutate_state(|state| {
+                state.runtime_running = false;
+                state.runtime_suspended = false;
+            });
             Ok("service already stopped".to_string())
         }
     }
@@ -139,7 +184,13 @@ impl CommandHandler for ServiceCommandHandler {
 
     fn info(&self) -> io::Result<Info> {
         match self.0.current_runtime() {
-            Ok(vnt) => Ok(common::command::command_info(vnt.as_ref())),
+            Ok(vnt) => {
+                let mut info = common::command::command_info(vnt.as_ref());
+                if vnt.is_suspended() {
+                    info.connect_status = "Suspended".to_string();
+                }
+                Ok(info)
+            }
             Err(_) => Ok(self.0.stopped_info()),
         }
     }
@@ -159,16 +210,16 @@ impl CommandHandler for ServiceCommandHandler {
         Ok(common::command::command_chart_b(vnt.as_ref(), &input))
     }
 
-    fn start_runtime(&self) -> io::Result<String> {
+    fn resume_runtime(&self) -> io::Result<String> {
         self.0
-            .start_service_runtime()
-            .map_err(|e| io::Error::other(format!("start runtime failed: {e:?}")))
+            .resume_service_runtime()
+            .map_err(|e| io::Error::other(format!("resume runtime failed: {e:?}")))
     }
 
-    fn stop_runtime(&self) -> io::Result<String> {
+    fn suspend_runtime(&self) -> io::Result<String> {
         self.0
-            .stop_service_runtime()
-            .map_err(|e| io::Error::other(format!("stop runtime failed: {e:?}")))
+            .suspend_service_runtime()
+            .map_err(|e| io::Error::other(format!("suspend runtime failed: {e:?}")))
     }
 
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String> {
@@ -216,6 +267,7 @@ impl ServiceCallback {
     fn clear_error_state(&self) {
         self.mutate_state(|state| {
             state.runtime_running = true;
+            state.runtime_suspended = false;
             state.auth_pending = false;
             state.last_error = None;
         });
@@ -272,6 +324,7 @@ impl VntCallback for ServiceCallback {
         let auth_pending = Self::is_auth_pending_message(&message);
         self.mutate_state(|state| {
             state.runtime_running = true;
+            state.runtime_suspended = false;
             state.auth_pending = auth_pending;
             state.last_error = Some(message.clone());
         });
@@ -301,7 +354,10 @@ impl VntCallback for ServiceCallback {
     }
 
     fn stop(&self) {
-        self.mutate_state(|state| state.runtime_running = false);
+        self.mutate_state(|state| {
+            state.runtime_running = false;
+            state.runtime_suspended = false;
+        });
         println!("stopped");
     }
 }
@@ -329,6 +385,7 @@ pub fn run_service(config: Config, show_cmd: bool) -> i32 {
     let manager = Arc::new(ServiceManager::new(config.clone()));
     manager.mutate_state(|state| {
         state.runtime_running = false;
+        state.runtime_suspended = false;
         state.auth_pending = false;
         state.last_error = None;
     });
@@ -342,7 +399,7 @@ pub fn run_service(config: Config, show_cmd: bool) -> i32 {
     }
     if let Err(e) = manager
         .clone()
-        .start_service_runtime()
+        .resume_service_runtime()
         .context("initial service start failed")
     {
         log::error!("vnt create error {:?}", e);
@@ -396,7 +453,7 @@ pub fn run_service(config: Config, show_cmd: bool) -> i32 {
         std::thread::spawn(move || loop {
             let mut cmd = String::new();
             println!(
-                "======== input:start,list,info,route,all,stop,chart_a,chart_b[:ip],channel_change:<relay|p2p|auto> ========"
+                "======== input:resume,list,info,route,all,suspend,chart_a,chart_b[:ip],channel_change:<relay|p2p|auto> ========"
             );
             match std::io::stdin().read_line(&mut cmd) {
                 Ok(_) => {
@@ -410,12 +467,12 @@ pub fn run_service(config: Config, show_cmd: bool) -> i32 {
                     }
                     match common::command::client::CommandClient::new() {
                         Ok(mut client) => {
-                            let result = if cmd == "start" {
-                                client.start().map(|out| {
+                            let result = if cmd == "resume" {
+                                client.resume().map(|out| {
                                     println!("{}", out);
                                 })
-                            } else if cmd == "stop" {
-                                client.stop().map(|out| {
+                            } else if cmd == "suspend" {
+                                client.suspend().map(|out| {
                                     println!("{}", out);
                                 })
                             } else if let Some(value) = cmd.strip_prefix("channel_change:") {

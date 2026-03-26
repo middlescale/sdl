@@ -2,12 +2,12 @@ use common::command::client::CommandClient;
 use common::console_out;
 
 fn print_usage() {
-    println!("vnt <start|list|info|route|stop|auth|channel-change> [options]");
-    println!("  vnt start [--json]                    # 恢复本地收发服务");
+    println!("vnt <resume|list|info|route|suspend|auth|channel-change> [options]");
+    println!("  vnt resume [--json]                   # 恢复本地收发服务");
     println!("  vnt list [--json]");
     println!("  vnt info [--json]");
     println!("  vnt route [--json]");
-    println!("  vnt stop [--json]                     # 停止本地收发服务");
+    println!("  vnt suspend [--json]                  # 挂起本地收发服务");
     println!("  vnt auth [--json] <user-id> <group> <ticket>");
     println!("  vnt channel-change [--type <relay|p2p|auto>] [--json]");
     println!("  vnt channel_change [--type <relay|p2p|auto>] [--json]");
@@ -21,11 +21,11 @@ pub fn run() -> i32 {
     }
     let command = args[1].as_str();
     match command {
-        "start" => handle_start(&args[0], &args[2..]),
+        "resume" => handle_resume(&args[2..]),
         "list" => handle_list(&args[2..]),
         "info" => handle_info(&args[2..]),
         "route" => handle_route(&args[2..]),
-        "stop" => handle_stop(&args[2..]),
+        "suspend" => handle_suspend(&args[2..]),
         "auth" => handle_auth(&args[2..]),
         "channel-change" | "channel_change" => handle_channel_change(&args[2..]),
         _ => {
@@ -39,7 +39,7 @@ fn has_json_flag(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--json")
 }
 
-fn handle_start(_program: &str, args: &[String]) -> i32 {
+fn handle_resume(args: &[String]) -> i32 {
     let json = has_json_flag(args);
     let filtered: Vec<String> = args
         .iter()
@@ -47,7 +47,8 @@ fn handle_start(_program: &str, args: &[String]) -> i32 {
         .cloned()
         .collect();
     if !filtered.is_empty() {
-        let message = "vnt start does not accept service arguments; start the daemon with `vnt-service ...`";
+        let message =
+            "vnt resume does not accept service arguments; start the daemon with `vnt-service ...`";
         if json {
             println!(
                 "{}",
@@ -62,7 +63,7 @@ fn handle_start(_program: &str, args: &[String]) -> i32 {
         }
         return 1;
     }
-    match CommandClient::new().and_then(|mut client| client.start()) {
+    match CommandClient::new().and_then(|mut client| client.resume()) {
         Ok(result) => {
             if json {
                 println!(
@@ -90,7 +91,7 @@ fn handle_start(_program: &str, args: &[String]) -> i32 {
                 );
             } else {
                 eprintln!(
-                    "start error: {}. start the daemon first with `vnt-service ...`",
+                    "resume error: {}. start the daemon first with `vnt-service ...`",
                     e
                 );
             }
@@ -185,9 +186,9 @@ fn handle_route(args: &[String]) -> i32 {
     }
 }
 
-fn handle_stop(args: &[String]) -> i32 {
+fn handle_suspend(args: &[String]) -> i32 {
     if has_json_flag(args) {
-        match CommandClient::new().and_then(|mut client| client.stop()) {
+        match CommandClient::new().and_then(|mut client| client.suspend()) {
             Ok(result) => {
                 println!(
                     "{}",
@@ -196,18 +197,18 @@ fn handle_stop(args: &[String]) -> i32 {
                 0
             }
             Err(e) => {
-                eprintln!("stop error: {}", e);
+                eprintln!("suspend error: {}", e);
                 1
             }
         }
     } else {
-        match CommandClient::new().and_then(|mut client| client.stop()) {
+        match CommandClient::new().and_then(|mut client| client.suspend()) {
             Ok(result) => {
                 println!("{}", result);
                 0
             }
             Err(e) => {
-                eprintln!("stop error: {}", e);
+                eprintln!("suspend error: {}", e);
                 1
             }
         }

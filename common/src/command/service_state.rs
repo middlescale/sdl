@@ -3,8 +3,10 @@ use std::io;
 use std::io::Write;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default)]
 pub struct LocalServiceState {
     pub runtime_running: bool,
+    pub runtime_suspended: bool,
     pub auth_pending: bool,
     pub last_error: Option<String>,
 }
