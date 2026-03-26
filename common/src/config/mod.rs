@@ -6,7 +6,7 @@ use crate::identifier;
 pub use file_config::read_config;
 
 #[cfg(not(feature = "file_config"))]
-pub fn read_config(_file_path: &str) -> anyhow::Result<(vnt::core::Config, Vec<String>, bool)> {
+pub fn read_config(_file_path: &str) -> anyhow::Result<(vnt::core::Config, bool)> {
     unimplemented!()
 }
 

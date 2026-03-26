@@ -2,6 +2,7 @@
 name = "vnt-cli"
 version = "1.2.16"
 edition = "2021"
+autobins = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,6 +12,7 @@ common = { path = "../common", default-features = false, features = ["integrated
 log = "0.4.17"
 anyhow = "1.0.82"
 console = "0.15.2"
+serde_json = "1.0"
 
 [target.'cfg(any(target_os = "linux",target_os = "macos"))'.dependencies]
 sudo = "0.6.0"
@@ -38,6 +40,15 @@ quic = ["vnt/quic", "common/quic"]
 log = ["common/log"]
 command = ["common/command"]
 file_config = ["common/file_config"]
+
+[[bin]]
+name = "vnt"
+path = "src/bin/vnt.rs"
+
+[[bin]]
+name = "vnt-service"
+path = "src/bin/vnt-service.rs"
+
 [build-dependencies]
 rand = "0.8.5"
 chrono = "0.4.23"

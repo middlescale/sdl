@@ -1,109 +1,14 @@
 use std::collections::HashSet;
-use std::io;
 use vnt::core::Vnt;
+use vnt::data_plane::use_channel_type::UseChannelType;
 use vnt::transport::connect_protocol::ConnectProtocol;
 
 use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
-use crate::console_out;
 
 pub mod client;
 pub mod entity;
 pub mod server;
-
-pub enum CommandEnum {
-    Route,
-    List,
-    All,
-    Info,
-    ChartA,
-    ChartB(String),
-    Stop,
-}
-
-pub fn command_str(cmd: &str, vnt: &Vnt) -> bool {
-    if cmd.is_empty() {
-        return false;
-    }
-    let cmd = cmd.to_lowercase();
-    let cmd = cmd.trim();
-    match cmd {
-        "list" => {
-            let list = command_list(&vnt);
-            console_out::console_device_list(list);
-        }
-        "info" => {
-            let info = command_info(&vnt);
-            console_out::console_info(info);
-        }
-        "route" => {
-            let route = command_route(&vnt);
-            console_out::console_route_table(route);
-        }
-        "all" => {
-            let list = command_list(&vnt);
-            console_out::console_device_list_all(list);
-        }
-        "chart_a" => {
-            let chart = command_chart_a(&vnt);
-            console_out::console_chart_a(chart);
-        }
-        "stop" => {
-            let _ = vnt.stop();
-            return false;
-        }
-        _ => {}
-    }
-    if let Some(ip) = cmd.strip_prefix("chart_b") {
-        let chart = if ip.is_empty() {
-            command_chart_b(&vnt, &vnt.current_device().virtual_gateway.to_string())
-        } else {
-            command_chart_b(&vnt, &ip[1..])
-        };
-        console_out::console_chart_b(chart);
-    }
-    println!();
-    return true;
-}
-
-pub fn command(cmd: CommandEnum) {
-    if let Err(e) = command_(cmd) {
-        println!("cmd: {:?}", e);
-    }
-}
-
-fn command_(cmd: CommandEnum) -> io::Result<()> {
-    let mut command_client = client::CommandClient::new()?;
-    match cmd {
-        CommandEnum::Route => {
-            let list = command_client.route()?;
-            console_out::console_route_table(list);
-        }
-        CommandEnum::List => {
-            let list = command_client.list()?;
-            console_out::console_device_list(list);
-        }
-        CommandEnum::All => {
-            let list = command_client.list()?;
-            console_out::console_device_list_all(list);
-        }
-        CommandEnum::Info => {
-            let info = command_client.info()?;
-            console_out::console_info(info);
-        }
-        CommandEnum::ChartA => {
-            let chart = command_client.chart_a()?;
-            console_out::console_chart_a(chart);
-        }
-        CommandEnum::ChartB(input) => {
-            let chart = command_client.chart_b(&input)?;
-            console_out::console_chart_b(chart);
-        }
-        CommandEnum::Stop => {
-            command_client.stop()?;
-        }
-    }
-    Ok(())
-}
+pub mod service_state;
 
 pub fn command_route(vnt: &Vnt) -> Vec<RouteItem> {
     let route_table = vnt.route_table();
@@ -219,6 +124,7 @@ pub fn command_list(vnt: &Vnt) -> Vec<DeviceItem> {
 }
 
 pub fn command_info(vnt: &Vnt) -> Info {
+    let service_state = service_state::read_service_state().unwrap_or_default();
     let config = vnt.config();
     let current_device = vnt.current_device();
     let nat_info = vnt.nat_info();
@@ -227,6 +133,11 @@ pub fn command_info(vnt: &Vnt) -> Info {
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
     let connect_status = format!("{:?}", vnt.connection_status());
+    let channel_policy = match vnt.use_channel_type() {
+        UseChannelType::Relay => "relay".to_string(),
+        UseChannelType::P2p => "p2p".to_string(),
+        UseChannelType::All => "auto".to_string(),
+    };
     let relay_server = if current_device.control_server.port() == 0 {
         config.server_address_str.clone()
     } else {
@@ -261,6 +172,9 @@ pub fn command_info(vnt: &Vnt) -> Info {
         virtual_gateway,
         virtual_netmask,
         connect_status,
+        auth_pending: service_state.auth_pending,
+        channel_policy,
+        last_error: service_state.last_error,
         relay_server,
         nat_type,
         public_ips,
@@ -277,8 +191,10 @@ pub fn command_info(vnt: &Vnt) -> Info {
 pub fn command_chart_a(vnt: &Vnt) -> ChartA {
     let disable_stats = !vnt.config().enable_traffic;
     if disable_stats {
-        let mut chart = ChartA::default();
-        chart.disable_stats = true;
+        let chart = ChartA {
+            disable_stats: true,
+            ..Default::default()
+        };
         return chart;
     }
     let (up_total, up_map) = vnt.up_stream_all().unwrap_or_default();
@@ -295,8 +211,10 @@ pub fn command_chart_a(vnt: &Vnt) -> ChartA {
 pub fn command_chart_b(vnt: &Vnt, input_str: &str) -> ChartB {
     let disable_stats = !vnt.config().enable_traffic;
     if disable_stats {
-        let mut chart = ChartB::default();
-        chart.disable_stats = true;
+        let chart = ChartB {
+            disable_stats: true,
+            ..Default::default()
+        };
         return chart;
     }
     let (_, up_map) = vnt.up_stream_history().unwrap_or_default();

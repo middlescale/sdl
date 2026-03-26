@@ -20,7 +20,19 @@ pub fn console_info(status: Info) {
         println!("Connection status: {}", style(status.connect_status).red());
     }
 
+    println!(
+        "Auth pending: {}",
+        if status.auth_pending {
+            style("true").yellow()
+        } else {
+            style("false").green()
+        }
+    );
     println!("NAT type: {}", style(status.nat_type).green());
+    println!("Channel policy: {}", style(status.channel_policy).green());
+    if let Some(last_error) = &status.last_error {
+        println!("Last error: {}", style(last_error).red());
+    }
     println!("Relay server: {}", style(status.relay_server).green());
     println!(
         "Udp listen: {}",

@@ -34,16 +34,14 @@ fn read_command_port() -> io::Result<u16> {
     let port = std::fs::read_to_string(path_buf)?;
     match u16::from_str(&port) {
         Ok(port) => Ok(port),
-        Err(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "'command-port' file error",
-            ));
-        }
+        Err(_) => Err(io::Error::other("'command-port' file error")),
     }
 }
 
 impl CommandClient {
+    pub fn start(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"start")
+    }
     pub fn list(&mut self) -> io::Result<Vec<DeviceItem>> {
         self.send_cmd(b"list")
     }
@@ -64,6 +62,19 @@ impl CommandClient {
         };
         self.send_cmd(cmd.as_bytes())
     }
+    pub fn channel_change(&mut self, input: &str) -> io::Result<String> {
+        let cmd = format!("channel_change:{}", input.trim());
+        self.send_string_cmd(cmd.as_bytes())
+    }
+    pub fn auth(&mut self, user_id: &str, group: &str, ticket: &str) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "user_id": user_id,
+            "group": group,
+            "ticket": ticket,
+        });
+        let cmd = format!("auth:{}", serde_json::to_string(&cmd).unwrap());
+        self.send_string_cmd(cmd.as_bytes())
+    }
     fn send_cmd<'a, V: Deserialize<'a>>(&'a mut self, cmd: &[u8]) -> io::Result<V> {
         self.udp.send(cmd)?;
         let len = self.udp.recv(&mut self.buf)?;
@@ -76,17 +87,22 @@ impl CommandClient {
                     std::str::from_utf8(&self.buf[..len]),
                     e
                 );
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("data error {:?} buf_len={}", e, len),
-                ))
+                Err(io::Error::other(format!(
+                    "data error {:?} buf_len={}",
+                    e, len
+                )))
             }
         }
     }
-    pub fn stop(&self) -> io::Result<String> {
-        self.udp.send(b"stop")?;
-        let mut buf = [0; 10240];
-        let len = self.udp.recv(&mut buf)?;
-        Ok(String::from_utf8(buf[..len].to_vec()).unwrap())
+    fn send_string_cmd(&mut self, cmd: &[u8]) -> io::Result<String> {
+        let value: String = self.send_cmd(cmd)?;
+        if value.starts_with("error ") {
+            Err(io::Error::other(value))
+        } else {
+            Ok(value)
+        }
+    }
+    pub fn stop(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"stop")
     }
 }

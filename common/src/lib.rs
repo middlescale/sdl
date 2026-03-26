@@ -3,7 +3,7 @@ pub mod args_parse;
 pub mod command;
 pub mod config;
 #[cfg(feature = "command")]
-mod console_out;
+pub mod console_out;
 pub mod identifier;
 
 pub mod cli;

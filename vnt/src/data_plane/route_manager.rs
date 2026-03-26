@@ -73,7 +73,11 @@ impl RouteManager {
     }
 
     pub fn use_channel_type(&self) -> UseChannelType {
-        self.route_table.use_channel_type
+        self.route_table.use_channel_type()
+    }
+
+    pub fn set_use_channel_type(&self, use_channel_type: UseChannelType) {
+        self.route_table.set_use_channel_type(use_channel_type);
     }
 
     pub fn latency_first(&self) -> bool {
@@ -209,7 +213,10 @@ impl RouteManager {
                     match self.peer_crypto.current_cipher(&dest_ip) {
                         Ok(cipher) => Some(cipher),
                         Err(_) => {
-                            log::debug!("skip heartbeat without peer session cipher for {}", dest_ip);
+                            log::debug!(
+                                "skip heartbeat without peer session cipher for {}",
+                                dest_ip
+                            );
                             continue;
                         }
                     }

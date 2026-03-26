@@ -14,16 +14,33 @@ type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
 pub struct RouteTable {
     pub(crate) route_table: RwLock<RouteMap>,
     pub(crate) latency_first: bool,
-    pub(crate) use_channel_type: UseChannelType,
+    pub(crate) use_channel_type: AtomicCell<UseChannelType>,
 }
 
 impl RouteTable {
     pub(crate) fn new(use_channel_type: UseChannelType, latency_first: bool) -> Self {
         Self {
             route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
-            use_channel_type,
+            use_channel_type: AtomicCell::new(use_channel_type),
             latency_first,
         }
+    }
+
+    pub fn use_channel_type(&self) -> UseChannelType {
+        self.use_channel_type.load()
+    }
+
+    pub fn set_use_channel_type(&self, use_channel_type: UseChannelType) {
+        self.use_channel_type.store(use_channel_type);
+        let mut route_table = self.route_table.write();
+        for routes in route_table.values_mut() {
+            routes.retain(|(route, _)| match use_channel_type {
+                UseChannelType::Relay => !route.is_p2p(),
+                UseChannelType::P2p => route.is_p2p(),
+                UseChannelType::All => true,
+            });
+        }
+        route_table.retain(|_, routes| !routes.is_empty());
     }
 
     pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -35,7 +52,7 @@ impl RouteTable {
     }
 
     fn add_route_(&self, vip: Ipv4Addr, route: Route, only_if_absent: bool) {
-        match self.use_channel_type {
+        match self.use_channel_type() {
             UseChannelType::Relay if route.is_p2p() => return,
             UseChannelType::P2p if !route.is_p2p() => return,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::All => {}

@@ -1,6 +1,4 @@
 use crate::args_parse::{ips_parse, out_ips_parse};
-#[cfg(feature = "command")]
-use crate::command;
 use crate::{config, generated_serial_number};
 use anyhow::anyhow;
 use console::style;
@@ -39,7 +37,11 @@ pub fn app_home() -> io::Result<PathBuf> {
     Ok(path)
 }
 
-pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>> {
+pub fn parse_args_config() -> anyhow::Result<Option<(Config, bool)>> {
+    parse_args_config_from(std::env::args().collect())
+}
+
+pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Config, bool)>> {
     #[cfg(feature = "log")]
     {
         if let Err(e) = log4rs::init_file("log4rs.yaml", Default::default()) {
@@ -47,7 +49,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             log::warn!("log4rs init failed, fallback to env_logger: {:?}", e);
         }
     }
-    let args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
     let mut opts = Options::new();
     opts.optopt("k", "", "组网标识", "<token>");
@@ -74,20 +75,10 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
     opts.optopt("", "packet-delay", "延迟", "<packet-delay>");
     opts.optmulti("", "dns", "dns", "<dns>");
     opts.optmulti("", "mapping", "mapping", "<mapping>");
-    opts.optmulti("", "vnt-mapping", "vnt-mapping", "<mapping>");
     opts.optopt("f", "", "配置文件", "<conf>");
     opts.optopt("", "compressor", "压缩算法", "<lz4>");
     opts.optopt("", "local-dev", "指定本地ipv4网卡名称", "<NAME>");
     opts.optflag("", "disable-stats", "关闭流量统计");
-    //"后台运行时,查看其他设备列表"
-    opts.optflag("", "add", "后台运行时,添加地址");
-    opts.optflag("", "list", "后台运行时,查看其他设备列表");
-    opts.optflag("", "all", "后台运行时,查看其他设备完整信息");
-    opts.optflag("", "info", "后台运行时,查看当前设备信息");
-    opts.optflag("", "route", "后台运行时,查看数据转发路径");
-    opts.optflag("", "chart_a", "后台运行时,查看流量统计");
-    opts.optopt("", "chart_b", "后台运行时,查看流量统计", "<IP>");
-    opts.optflag("", "stop", "停止后台运行");
     opts.optflag("h", "help", "帮助");
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -101,35 +92,8 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
         return Ok(None);
     }
 
-    #[cfg(feature = "command")]
-    if matches.opt_present("list") {
-        command::command(command::CommandEnum::List);
-        return Ok(None);
-    } else if matches.opt_present("info") {
-        command::command(command::CommandEnum::Info);
-        return Ok(None);
-    } else if matches.opt_present("stop") {
-        command::command(command::CommandEnum::Stop);
-        return Ok(None);
-    } else if matches.opt_present("route") {
-        command::command(command::CommandEnum::Route);
-        return Ok(None);
-    } else if matches.opt_present("all") {
-        command::command(command::CommandEnum::All);
-        return Ok(None);
-    }
-    #[cfg(feature = "command")]
-    if matches.opt_present("chart_a") {
-        command::command(command::CommandEnum::ChartA);
-        return Ok(None);
-    }
-    #[cfg(feature = "command")]
-    if let Some(v) = matches.opt_str("chart_b") {
-        command::command(command::CommandEnum::ChartB(v));
-        return Ok(None);
-    }
     let conf = matches.opt_str("f");
-    let (config, vnt_link_config, cmd) = if conf.is_some() {
+    let (config, cmd) = if conf.is_some() {
         match config::read_config(&conf.unwrap()) {
             Ok(c) => c,
             Err(e) => {
@@ -210,8 +174,8 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             None
         };
         let virtual_ip: Option<String> = matches.opt_get("ip").unwrap();
-        let virtual_ip =
-            virtual_ip.map(|v| Ipv4Addr::from_str(&v).expect(&format!("'--ip {}' error", v)));
+        let virtual_ip = virtual_ip
+            .map(|v| Ipv4Addr::from_str(&v).unwrap_or_else(|_| panic!("'--ip {}' error", v)));
         if let Some(virtual_ip) = virtual_ip {
             if virtual_ip.is_unspecified() || virtual_ip.is_broadcast() || virtual_ip.is_multicast()
             {
@@ -265,7 +229,6 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             .unwrap_or(0);
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = matches.opt_strs("mapping");
-        let vnt_mapping_list = matches.opt_strs("vnt-mapping");
         let local_dev: Option<String> = matches.opt_get("local-dev").unwrap();
 
         let disable_stats = matches.opt_present("disable-stats");
@@ -306,7 +269,7 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
             None,
             None,
         )?;
-        (config, vnt_mapping_list, cmd)
+        (config, cmd)
     };
     println!("version {}", vnt::VNT_VERSION);
     println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
@@ -315,7 +278,7 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, Vec<String>, bool)>
         vnt::VNT_VERSION,
         generated_serial_number::SERIAL_NUMBER
     );
-    Ok(Some((config, vnt_link_config, cmd)))
+    Ok(Some((config, cmd)))
 }
 
 fn get_description(key: &str, language: &str) -> String {

@@ -7,7 +7,7 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Vnt;
-pub use runtime::{RuntimeConfig, VntRuntime};
+pub use runtime::{AuthRequestConfig, RuntimeConfig, VntRuntime};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
@@ -59,7 +59,6 @@ pub struct Config {
     pub auth_user_id: Option<String>,
     pub auth_group: Option<String>,
     pub auth_ticket: Option<String>,
-    pub auth_only: bool,
 }
 
 impl Config {
@@ -250,7 +249,6 @@ impl Config {
             auth_user_id,
             auth_group,
             auth_ticket,
-            auth_only: false,
         })
     }
 }

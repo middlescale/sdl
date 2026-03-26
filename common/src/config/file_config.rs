@@ -39,7 +39,6 @@ pub struct FileConfig {
     #[cfg(feature = "port_mapping")]
     pub mapping: Vec<String>,
     pub compressor: Option<String>,
-    pub vnt_mapping: Vec<String>,
     pub disable_stats: bool,
     pub local_dev: Option<String>,
 }
@@ -79,14 +78,13 @@ impl Default for FileConfig {
             #[cfg(feature = "port_mapping")]
             mapping: vec![],
             compressor: None,
-            vnt_mapping: vec![],
             disable_stats: false,
             local_dev: None,
         }
     }
 }
 
-pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool)> {
+pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool)> {
     let conf = std::fs::read_to_string(file_path)?;
     let file_conf = match serde_yaml::from_str::<FileConfig>(&conf) {
         Ok(val) => val,
@@ -169,5 +167,5 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, Vec<String>, bool
         None,
     )?;
 
-    Ok((config, file_conf.vnt_mapping, file_conf.cmd))
+    Ok((config, file_conf.cmd))
 }

@@ -22,6 +22,13 @@ use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
 use crate::util::PeerCryptoManager;
 
+#[derive(Clone, Debug, Default)]
+pub struct AuthRequestConfig {
+    pub user_id: Option<String>,
+    pub group: Option<String>,
+    pub ticket: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     pub name: String,
@@ -40,10 +47,7 @@ pub struct RuntimeConfig {
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
     pub default_interface: crate::transport::socket::LocalInterface,
-    pub auth_user_id: Option<String>,
-    pub auth_group: Option<String>,
-    pub auth_ticket: Option<String>,
-    pub auth_only: bool,
+    pub auth_request: Arc<RwLock<AuthRequestConfig>>,
 }
 
 #[derive(Clone)]

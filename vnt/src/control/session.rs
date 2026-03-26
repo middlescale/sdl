@@ -268,10 +268,11 @@ impl ControlSession {
     }
 
     pub fn send_device_auth_request(&self) -> anyhow::Result<()> {
+        let auth_request = self.config.auth_request.read();
         let (Some(user_id), Some(group), Some(ticket)) = (
-            self.config.auth_user_id.as_ref(),
-            self.config.auth_group.as_ref(),
-            self.config.auth_ticket.as_ref(),
+            auth_request.user_id.as_ref(),
+            auth_request.group.as_ref(),
+            auth_request.ticket.as_ref(),
         ) else {
             anyhow::bail!("auth-device requires user/group/ticket");
         };

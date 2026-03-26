@@ -7,7 +7,7 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::control::{ControlSession, ControlSessionDeps};
-use crate::core::{Config, RuntimeConfig, VntRuntime};
+use crate::core::{runtime::AuthRequestConfig, Config, RuntimeConfig, VntRuntime};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route::{Route, RouteKey};
@@ -71,6 +71,11 @@ impl Vnt {
         let default_interface = config.local_interface.clone();
 
         //基础信息
+        let auth_request = Arc::new(RwLock::new(AuthRequestConfig {
+            user_id: config.auth_user_id.clone(),
+            group: config.auth_group.clone(),
+            ticket: config.auth_ticket.clone(),
+        }));
         let runtime_config = RuntimeConfig {
             name: config.name.clone(),
             token: config.token.clone(),
@@ -88,10 +93,7 @@ impl Vnt {
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
             default_interface: default_interface.clone(),
-            auth_user_id: config.auth_user_id.clone(),
-            auth_group: config.auth_group.clone(),
-            auth_ticket: config.auth_ticket.clone(),
-            auth_only: config.auth_only,
+            auth_request: auth_request.clone(),
         };
         // 服务停止管理器
         let stop_manager = {
@@ -287,6 +289,31 @@ impl Vnt {
     }
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.runtime.route_manager().snapshot_routes()
+    }
+    pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
+        self.runtime.route_manager().use_channel_type()
+    }
+    pub fn set_use_channel_type(
+        &self,
+        use_channel_type: crate::data_plane::use_channel_type::UseChannelType,
+    ) {
+        self.runtime
+            .route_manager()
+            .set_use_channel_type(use_channel_type);
+    }
+    pub fn request_device_auth(
+        &self,
+        user_id: String,
+        group: String,
+        ticket: String,
+    ) -> anyhow::Result<()> {
+        {
+            let mut auth_request = self.runtime.config.auth_request.write();
+            auth_request.user_id = Some(user_id);
+            auth_request.group = Some(group);
+            auth_request.ticket = Some(ticket);
+        }
+        self.runtime.control_session.send_device_auth_request()
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
         let current_device = self.runtime.current_device.load();

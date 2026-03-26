@@ -99,12 +99,8 @@ impl<Call: VntCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             let handshake_info =
                 HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {
-                if self.runtime.config.auth_only {
-                    self.send_device_auth(route_key)?;
-                } else {
-                    //没有加密，则发送注册请求
-                    self.register(current_device, route_key)?;
-                }
+                //没有加密，则发送注册请求
+                self.register(current_device, route_key)?;
             }
 
             return Ok(());
@@ -323,11 +319,14 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     } else {
                         response.error_message.clone()
                     };
-                    return Err(anyhow!(
-                        "RegistrationResponse error_code={}, reason={}",
-                        response.error_code,
-                        reason
+                    self.callback.error(ErrorInfo::new_msg(
+                        ErrorType::Unknown,
+                        format!(
+                            "registration rejected: code={}, reason={}",
+                            response.error_code, reason
+                        ),
                     ));
+                    return Ok(());
                 }
                 let virtual_ip = Ipv4Addr::from(response.virtual_ip);
                 let virtual_netmask = Ipv4Addr::from(response.virtual_netmask);
@@ -482,26 +481,19 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .map_err(|e| io::Error::other(format!("DeviceAuthAck {:?}", e)))?;
                 if !ack.ok {
                     println!("auth device failed: {}", ack.reason);
-                    if self.runtime.config.auth_only {
-                        self.callback.error(ErrorInfo::new_msg(
-                            ErrorType::Unknown,
-                            format!("auth device failed: {}", ack.reason),
-                        ));
-                        self.callback.stop();
-                    }
+                    self.callback.error(ErrorInfo::new_msg(
+                        ErrorType::Unknown,
+                        format!("auth device failed: {}", ack.reason),
+                    ));
                     return Ok(());
                 }
                 self.device_auth_ok.store(true);
-                if self.runtime.config.auth_only {
-                    println!(
-                        "auth device success: user={} group={} device={}",
-                        ack.user_id, ack.group, ack.device_id
-                    );
-                    self.callback.success();
-                    self.callback.stop();
-                } else {
-                    self.register(current_device, route_key)?;
-                }
+                println!(
+                    "auth device success: user={} group={} device={}",
+                    ack.user_id, ack.group, ack.device_id
+                );
+                self.callback.success();
+                self.register(current_device, route_key)?;
             }
             service_packet::Protocol::DeviceAuthChallenge => {
                 let challenge = DeviceAuthChallenge::parse_from_bytes(net_packet.payload())
@@ -706,10 +698,6 @@ impl<Call: VntCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         self.runtime
             .control_session
             .send_registration_request(false, false)?;
-        Ok(())
-    }
-    fn send_device_auth(&self, _route_key: RouteKey) -> anyhow::Result<()> {
-        self.runtime.control_session.send_device_auth_request()?;
         Ok(())
     }
     fn error(

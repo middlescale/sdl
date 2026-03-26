@@ -2,24 +2,62 @@
 
 体积小，可以在服务器、路由器等环境使用
 
-## 独立设备认证命令
+## 当前推荐入口
 
-`vnt-auth-device` 是单独可执行命令，用于设备认证，不走 `vnt-cli --auth-device`。
+当前推荐把 VNT 拆成：
 
-用法：
+- `vnt-service`：常驻后端，负责启动网络 runtime、TUN 和本地控制接口
+- `vnt`：前端命令，负责调用本地服务并输出结果
+
+### `vnt-service` 启动方式
+
+`vnt-service` 的参数可以有两种来源：
+
+- 直接在命令行里指定
+- 通过 `-f <config.yaml>` 指定配置文件
+
+示例：
 
 ```bash
-vnt-auth-device [-s <server>] <user-id> <group> <ticket>
+sudo vnt-service -k <token> -n <name> -s <server>
+sudo vnt-service -f /path/to/config.yaml
 ```
 
-- `-s` 可选，表示 control 服务器地址
-- 默认地址：`quic://controlmiddlescale.net:433`
+`vnt-service` 负责带参数启动；`vnt start` 只负责恢复已经存在的本地 service runtime，不再接受启动参数。
 
-构建：
+如果 `vnt-service` 已经在本机启动过，那么：
+
+- `vnt stop`：只停止当前 runtime，保留 `vnt-service` 进程
+- `vnt start`：不带 service 参数时，按已保存配置恢复 runtime
+
+### 前端命令示例
 
 ```bash
-cargo build -p vnt-cli --bin vnt-auth-device
+vnt start
+vnt list
+vnt list --json
+vnt info --json
+vnt route --json
+vnt auth <user-id> <group> <ticket>
+vnt channel_change --type relay
+vnt channel_change --json
+vnt stop
 ```
+
+- `vnt-service ...`：按参数或配置文件启动 daemon
+- `vnt start`：当本地 service 已存在且处于 stopped 状态时，恢复收发服务
+- `vnt stop`：停止当前收发服务，但不退出 `vnt-service` 进程
+- `vnt list/info/route`：查询当前本地服务状态
+- `vnt auth ...`：向本地 `vnt-service` 提交设备认证
+- control 服务器地址由 `vnt-service ... -s <server>` 决定
+- 如果设备处于待认证状态，可用 `vnt info --json` 查看 `auth_pending` 和 `last_error`
+
+### 权限说明
+
+- `vnt-service` 需要管理员/root权限
+- Linux/macOS 下请显式使用 `sudo vnt-service ...`
+- Windows 下请使用管理员权限启动
+- `vnt-service` 检测到权限不足时只会提示，不会自动弹出 sudo 密码框
 
 ## 详细参数说明
 
