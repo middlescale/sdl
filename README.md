@@ -1,4 +1,7 @@
-#  VNT
+# VNT
+
+> Planned public branding: **SDL (Software Defined LAN)**.
+> In the current transition phase, the repository and binaries still use the historical `vnt` name, while the product direction is an overlay LAN built across WAN/Internet.
 
 ## Middlescale 版 vnt
 
@@ -12,6 +15,15 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 `make push` 也是上传 debug 版
 
 `make release`是 build release
+
+### 项目定位（当前阶段）
+
+- 当前代码名仍为 `vnt`，但产品定位更接近 **SDL / Software Defined LAN**，而不是传统意义上的 SD-WAN。
+- 目标是通过控制面、认证、P2P/relay 和 overlay 数据面，把分散在 WAN / Internet / NAT 后的节点组织成统一的 LAN 体验。
+- 因此后续文档会逐步使用：
+  - `SDL`
+  - `Software Defined LAN`
+  - `overlay LAN`
 
 ### 状态上报说明（当前实现）
 

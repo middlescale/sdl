@@ -9,6 +9,8 @@
 - `vnt-service`：常驻后端，负责启动网络 runtime、TUN 和本地控制接口
 - `vnt`：前端命令，负责调用本地服务并输出结果
 
+从产品定位上，这套结构更接近 **SDL (Software Defined LAN)**：通过控制面与 overlay 数据面，把分散在 WAN / Internet 上的节点组织成统一的 LAN 体验。当前文档会逐步从 `VNT` 过渡到 `SDL` 品牌表述，但命令名暂时仍保持 `vnt` / `vnt-service` 兼容。
+
 ### `vnt-service` 启动方式
 
 `vnt-service` 的参数可以有两种来源：
