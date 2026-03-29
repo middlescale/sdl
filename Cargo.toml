@@ -1,5 +1,6 @@
 [workspace]
-members = ["vnt", "common", "vnt-cli"]
+resolver = "2"
+members = ["sdl", "sdl-cli", "sdl-packet"]
 
 [profile.release]
 opt-level = 'z'

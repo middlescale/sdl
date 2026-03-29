@@ -1,9 +1,8 @@
-# VNT
+# SDL
 
 > Planned public branding: **SDL (Software Defined LAN)**.
-> In the current transition phase, the repository and binaries still use the historical `vnt` name, while the product direction is an overlay LAN built across WAN/Internet.
 
-## Middlescale 版 vnt
+## Middlescale 版 SDL
 
 * fixed:
 Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个方法在类Unix系统不同用
@@ -18,7 +17,7 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 
 ### 项目定位（当前阶段）
 
-- 当前代码名仍为 `vnt`，但产品定位更接近 **SDL / Software Defined LAN**，而不是传统意义上的 SD-WAN。
+- 当前工作区和二进制已切到 `sdl` / `sdl-service`，产品定位是 **SDL / Software Defined LAN**，而不是传统意义上的 SD-WAN。
 - 目标是通过控制面、认证、P2P/relay 和 overlay 数据面，把分散在 WAN / Internet / NAT 后的节点组织成统一的 LAN 体验。
 - 因此后续文档会逐步使用：
   - `SDL`
@@ -39,17 +38,17 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 前提条件:安装rust编译环境([install rust](https://www.rust-lang.org/zh-CN/tools/install))
 
 ```
-到项目根目录下执行 cargo build -p vnt-cli
+到项目根目录下执行 cargo build -p sdl-cli
 
 也可按需编译，将得到更小的二进制文件，使用--no-default-features排除默认features
 
-cargo build -p vnt-cli --no-default-features
+cargo build -p sdl-cli --no-default-features
 ```
 
 服务端地址协议当前仅支持 `quic://`，例如：
 
 ```
-./vnt-cli -k <token> -d <device_id> -s quic://control.example.com:4433
+./target/debug/sdl-service -k <token> -d <device_id> -s quic://control.example.com:4433
 ```
 
 features说明

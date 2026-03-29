@@ -42,47 +42,47 @@ jobs:
         include:
           - TARGET: i686-unknown-linux-musl # test in an alpine container on a mac
             OS: ubuntu-latest
-            FEATURES: openssl-vendored,wss
+            FEATURES: openssl-vendored
           - TARGET: x86_64-unknown-linux-musl # test in an alpine container on a mac
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: aarch64-unknown-linux-musl # tested on aws t4g.nano in alpine container
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: armv7-unknown-linux-musleabihf # raspberry pi 2-3-4, not tested
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: armv7-unknown-linux-musleabi # raspberry pi 2-3-4, not tested
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: arm-unknown-linux-musleabihf # raspberry pi 0-1, not tested
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: arm-unknown-linux-musleabi # raspberry pi 0-1, not tested
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: x86_64-apple-darwin # tested on a mac, is not properly signed so there are security warnings
             OS: macos-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: aarch64-apple-darwin # tested on a mac, is not properly signed so there are security warnings
             OS: macos-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: i686-pc-windows-msvc # tested on a windows machine
             OS: windows-2019
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: x86_64-pc-windows-msvc # tested on a windows machine
             OS: windows-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: mipsel-unknown-linux-musl # openwrt
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
           - TARGET: mips-unknown-linux-musl # openwrt
             OS: ubuntu-latest
-            FEATURES: wss
+            FEATURES: default-feature
     # needs: test
     runs-on: ${{ matrix.OS }}
     env:
-      NAME: vnt-cli # change with the name of your project
+      NAME: sdl-cli
       TARGET: ${{ matrix.TARGET }}
       OS: ${{ matrix.OS }}
       FEATURES: ${{ matrix.FEATURES }}
@@ -212,49 +212,41 @@ jobs:
       - name: Install rust target
         if: ${{ ! startsWith(matrix.TARGET, 'mips') }}
         run: rustup target add $TARGET
-      - name: Run build vn-link-cli
+      - name: Run build sdl-cli
         run: |
           if [[ $TARGET =~ ^mips.*$ ]]; then
-            cargo +nightly build --package vn-link-cli --release --verbose --target $TARGET -Z build-std=std,panic_abort --features $FEATURES
+            cargo +nightly build --package sdl-cli --release --verbose --target $TARGET -Z build-std=std,panic_abort --features $FEATURES
           else
-            cargo build --package vn-link-cli --release --verbose --target $TARGET --features $FEATURES
-          fi
-      - name: Run build vnt-cli
-        run: |
-          if [[ $TARGET =~ ^mips.*$ ]]; then
-            cargo +nightly build --package vnt-cli --release --verbose --target $TARGET -Z build-std=std,panic_abort --features $FEATURES
-          else
-            cargo build --package vnt-cli --release --verbose --target $TARGET --features $FEATURES
+            cargo build --package sdl-cli --release --verbose --target $TARGET --features $FEATURES
           fi
       - name: List target
         run: find ./target
       - name: Compress
         run: |
           mkdir -p ./artifacts
-          # windows is the only OS using a different convention for executable file name
           if [[ $OS =~ ^windows.*$ ]]; then
-              EXEC_VNT_CLI=vnt-cli.exe
-              EXEC_VN_LINK_CLI=vn-link-cli.exe
+              EXEC_SDL=sdl.exe
+              EXEC_SDL_SERVICE=sdl-service.exe
           else
-              EXEC_VNT_CLI=vnt-cli
-              EXEC_VN_LINK_CLI=vn-link-cli
+              EXEC_SDL=sdl
+              EXEC_SDL_SERVICE=sdl-service
           fi
           if [[ $GITHUB_REF_TYPE =~ ^tag$ ]]; then
             TAG=$GITHUB_REF_NAME
           else
             TAG=$GITHUB_SHA
           fi
-          mv ./target/$TARGET/release/$EXEC_VNT_CLI ./artifacts/$EXEC_VNT_CLI
-          mv ./target/$TARGET/release/$EXEC_VN_LINK_CLI ./artifacts/$EXEC_VN_LINK_CLI
+          mv ./target/$TARGET/release/$EXEC_SDL ./artifacts/$EXEC_SDL
+          mv ./target/$TARGET/release/$EXEC_SDL_SERVICE ./artifacts/$EXEC_SDL_SERVICE
           mv ./README ./artifacts/README.txt
           cd ./artifacts
-          tar -czf vnt-$TARGET-$TAG.tar.gz *
+          tar -czf sdl-$TARGET-$TAG.tar.gz *
           mkdir upload_file
-          mv vnt-$TARGET-$TAG.tar.gz ./upload_file/
+          mv sdl-$TARGET-$TAG.tar.gz ./upload_file/
       - name: Archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vnt-cli-${{ matrix.TARGET }}
+          name: sdl-cli-${{ matrix.TARGET }}
           path: |
             ./artifacts/upload_file
   # deploys to github releases on tag

@@ -1,0 +1,56 @@
+use crate::core::SdlRuntime;
+use crate::data_plane::route::RouteKey;
+use crate::handle::recv_data::PacketHandler;
+use crate::handle::CurrentDeviceInfo;
+use crate::protocol::{NetPacket, Protocol};
+use anyhow::Context;
+use std::sync::Arc;
+
+/// 处理客户端中转包
+#[derive(Clone)]
+pub struct TurnPacketHandler {
+    runtime: Arc<SdlRuntime>,
+}
+
+impl TurnPacketHandler {
+    pub fn new(runtime: Arc<SdlRuntime>) -> Self {
+        Self { runtime }
+    }
+}
+
+impl PacketHandler for TurnPacketHandler {
+    fn handle(
+        &self,
+        mut net_packet: NetPacket<&mut [u8]>,
+        _extend: NetPacket<&mut [u8]>,
+        route_key: RouteKey,
+        _current_device: &CurrentDeviceInfo,
+    ) -> anyhow::Result<()> {
+        // 增加了一跳
+        let ttl = net_packet.tick_ttl();
+        if ttl > 0 {
+            if matches!(net_packet.protocol(), Protocol::Service | Protocol::Error) {
+                // 不转发控制面服务包
+                return Ok(());
+            }
+            let destination = net_packet.destination();
+            if let Some(route) = self.runtime.route_manager().best_route(&destination) {
+                if route.addr == route_key.addr {
+                    //防止环路
+                    log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());
+                    return Ok(());
+                }
+                if route.metric <= ttl {
+                    return self
+                        .runtime
+                        .udp_channel
+                        .send_by_key(net_packet.buffer(), route.route_key())
+                        .context("转发失败");
+                }
+            }
+            //其他没有路由的不转发
+        }
+        log::info!("没有路由 {:?},{:?}", route_key, net_packet.head());
+        Ok(())
+    }
+}

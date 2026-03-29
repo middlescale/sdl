@@ -241,28 +241,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
-version = "1.2.16"
-dependencies = [
- "anyhow",
- "chrono",
- "console",
- "env_logger",
- "gethostname",
- "getopts",
- "interprocess",
- "log",
- "log4rs",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "serde_yaml",
- "sys-locale",
- "uuid",
- "vnt",
-]
-
-[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1333,13 +1311,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "packet"
-version = "0.1.0"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1899,6 +1870,88 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
+name = "sdl"
+version = "1.2.16"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "bytes",
+ "cbc",
+ "cfg_aliases",
+ "chacha20",
+ "chacha20poly1305",
+ "crossbeam-epoch",
+ "crossbeam-queue",
+ "crossbeam-utils",
+ "curve25519-dalek",
+ "dns-parser",
+ "ecb",
+ "ed25519-dalek",
+ "fnv",
+ "gethostname",
+ "http_req",
+ "igd",
+ "libc",
+ "libloading",
+ "libsm",
+ "log",
+ "lz4_flex",
+ "mio 0.8.11",
+ "network-interface",
+ "openssl-sys",
+ "parking_lot",
+ "protobuf",
+ "protobuf-codegen",
+ "protoc-bin-vendored",
+ "quinn",
+ "rand 0.8.5",
+ "rustls",
+ "rustls-native-certs",
+ "sdl-packet",
+ "sha2",
+ "socket2 0.5.10",
+ "stun-format",
+ "thiserror 1.0.69",
+ "tokio",
+ "tun-rs",
+ "windows-sys 0.59.0",
+ "zstd",
+]
+
+[[package]]
+name = "sdl-cli"
+version = "1.2.16"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "console",
+ "env_logger",
+ "gethostname",
+ "getopts",
+ "interprocess",
+ "log",
+ "log4rs",
+ "rand 0.8.5",
+ "sdl",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "signal-hook",
+ "sudo",
+ "sys-locale",
+ "uuid",
+ "winapi",
+]
+
+[[package]]
+name = "sdl-packet"
+version = "0.1.0"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2456,73 +2509,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vnt"
-version = "1.2.16"
-dependencies = [
- "aes",
- "aes-gcm",
- "anyhow",
- "bytes",
- "cbc",
- "cfg_aliases",
- "chacha20",
- "chacha20poly1305",
- "crossbeam-epoch",
- "crossbeam-queue",
- "crossbeam-utils",
- "curve25519-dalek",
- "dns-parser",
- "ecb",
- "ed25519-dalek",
- "fnv",
- "gethostname",
- "http_req",
- "igd",
- "libc",
- "libloading",
- "libsm",
- "log",
- "lz4_flex",
- "mio 0.8.11",
- "network-interface",
- "openssl-sys",
- "packet",
- "parking_lot",
- "protobuf",
- "protobuf-codegen",
- "protoc-bin-vendored",
- "quinn",
- "rand 0.8.5",
- "rustls",
- "rustls-native-certs",
- "sha2",
- "socket2 0.5.10",
- "stun-format",
- "thiserror 1.0.69",
- "tokio",
- "tun-rs",
- "windows-sys 0.59.0",
- "zstd",
-]
-
-[[package]]
-name = "vnt-cli"
-version = "1.2.16"
-dependencies = [
- "anyhow",
- "chrono",
- "common",
- "console",
- "log",
- "rand 0.8.5",
- "serde_json",
- "signal-hook",
- "sudo",
- "vnt",
- "winapi",
-]
 
 [[package]]
 name = "wasi"
