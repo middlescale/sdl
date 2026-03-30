@@ -23,7 +23,8 @@ use crate::proto::message::{
 };
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
-use crate::transport::quic_channel::QuicChannel;
+use crate::transport::control_addr::parse_control_address;
+use crate::transport::http3_channel::Http3Channel;
 use crate::util::{
     address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
 };
@@ -53,13 +54,13 @@ pub struct ControlSessionDeps {
 
 #[derive(Clone)]
 pub struct ControlSession {
-    channel: QuicChannel,
+    channel: Http3Channel,
     config: RuntimeConfig,
     deps: ControlSessionDeps,
 }
 
 impl ControlSession {
-    pub fn new(channel: QuicChannel, config: RuntimeConfig, deps: ControlSessionDeps) -> Self {
+    pub fn new(channel: Http3Channel, config: RuntimeConfig, deps: ControlSessionDeps) -> Self {
         Self {
             channel,
             config,
@@ -75,10 +76,10 @@ impl ControlSession {
         let current_device = self.current_device();
         self.channel
             .update_server_addr(current_device.control_server);
-        self.channel
-            .update_server_name(crate::transport::quic_channel::extract_server_name(
-                &self.config.server_addr,
-            ));
+        if let Ok(control_addr) = parse_control_address(&self.config.server_addr) {
+            self.channel
+                .update_server_name(control_addr.server_name().to_string());
+        }
         self.channel.send_packet(packet)
     }
 
@@ -470,15 +471,22 @@ fn resolve_control_addr(
 ) -> CurrentDeviceInfo {
     let mut current_dev = current_device.load();
     let default_interface = &config.default_interface;
+    let control_addr = match parse_control_address(&config.server_addr) {
+        Ok(control_addr) => control_addr,
+        Err(e) => {
+            log::error!("控制地址解析失败:{:?},addr={}", e, config.server_addr);
+            return current_dev;
+        }
+    };
     match dns_query_all(
-        &config.server_addr,
+        control_addr.authority(),
         config.name_servers.clone(),
         default_interface,
     ) {
         Ok(addrs) => {
             log::info!(
                 "domain {} dns {:?} addr {:?}",
-                config.server_addr,
+                control_addr.authority(),
                 config.name_servers,
                 addrs
             );
@@ -500,12 +508,16 @@ fn resolve_control_addr(
                     }
                 }
                 Err(e) => {
-                    log::error!("域名地址选择失败:{:?},domain={}", e, config.server_addr);
+                    log::error!(
+                        "域名地址选择失败:{:?},domain={}",
+                        e,
+                        control_addr.authority()
+                    );
                 }
             }
         }
         Err(e) => {
-            log::error!("域名解析失败:{:?},domain={}", e, config.server_addr);
+            log::error!("域名解析失败:{:?},domain={}", e, control_addr.authority());
         }
     }
     current_dev

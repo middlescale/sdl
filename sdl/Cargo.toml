@@ -36,6 +36,10 @@ crossbeam-queue = "0.3.11"
 anyhow = "1.0.82"
 dns-parser = "0.8.0"
 ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
+futures-util = "0.3"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+http = "1.4.0"
 
 tokio = { version = "1.37.0", features = ["full"] }
 
@@ -47,7 +51,7 @@ igd = { version = "0.12.1", optional = true }
 rustls = { version = "0.23.0", features = [
     "ring",
 ], default-features = false, optional = true }
-quinn = { version = "0.11.6", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }
+quinn = { version = "0.11.7", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }
 rustls-native-certs = { version = "0.8.1", optional = true }
 
 network-interface = "2.0.0"

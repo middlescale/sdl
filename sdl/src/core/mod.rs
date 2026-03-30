@@ -3,6 +3,7 @@ use crate::compression::Compressor;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::nat::punch::PunchModel;
 use crate::transport::connect_protocol::ConnectProtocol;
+use crate::transport::control_addr::parse_control_address;
 use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
@@ -165,7 +166,7 @@ impl Config {
                 cipher_model
             ));
         }
-        let mut server_address_str = server_address_str.to_lowercase();
+        let server_address_str = server_address_str.trim().to_string();
         let _query_dns = true;
         let protocol = ConnectProtocol::QUIC;
         if server_address_str.starts_with("udp://")
@@ -173,25 +174,23 @@ impl Config {
             || server_address_str.starts_with("ws://")
             || server_address_str.starts_with("wss://")
             || server_address_str.starts_with("http://")
-            || server_address_str.starts_with("https://")
         {
             Err(anyhow!(
-                "only quic:// is supported for sdl-control connection currently"
+                "sdl-control connection must use https://host[:port]/control"
             ))?;
         }
-        if let Some(s) = server_address_str.strip_prefix("quic://") {
-            server_address_str = s.to_string();
-        }
+        let control_addr = parse_control_address(&server_address_str)?;
         #[cfg(not(feature = "quic"))]
         {
             let _ = protocol;
+            let _ = control_addr;
             Err(anyhow!("Quic not supported"))?;
         }
 
         let mut server_address = "0.0.0.0:0".parse().unwrap();
         if _query_dns {
             server_address = address_choose(dns_query_all(
-                &server_address_str,
+                control_addr.authority(),
                 name_servers.clone(),
                 &LocalInterface::default(),
             )?)?;

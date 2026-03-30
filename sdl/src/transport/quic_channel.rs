@@ -341,7 +341,10 @@ where
     }
 }
 
-fn consume_pending_frames<F>(pending: &mut Vec<u8>, on_packet: &mut F) -> anyhow::Result<()>
+pub(crate) fn consume_pending_frames<F>(
+    pending: &mut Vec<u8>,
+    on_packet: &mut F,
+) -> anyhow::Result<()>
 where
     F: FnMut(Vec<u8>),
 {

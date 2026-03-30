@@ -81,7 +81,7 @@ sdl suspend
 
 ### -s `<server>`
 
-注册和中继服务器地址，注册和转发数据，以'TXT:'开头表示解析TXT记录，TXT记录内容必须是'host:port'形式的服务器地址
+注册和中继服务器地址，控制面使用 `https://host[:port]/control`；以`TXT:`开头时表示先解析 TXT 记录，TXT 记录内容必须是 `host:port` 形式的服务器地址
 
 ### -e `<stun-server>`
 
