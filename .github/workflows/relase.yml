@@ -25,7 +25,7 @@ jobs:
             OS: ubuntu-latest
             FEATURES: openssl-vendored
           - TARGET: x86_64-apple-darwin
-            OS: macos-13
+            OS: macos-latest
             FEATURES: default-feature
           - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest
