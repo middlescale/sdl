@@ -21,44 +21,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - TARGET: i686-unknown-linux-musl
-            OS: ubuntu-latest
-            FEATURES: openssl-vendored
           - TARGET: x86_64-unknown-linux-musl
             OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: aarch64-unknown-linux-musl
-            OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: armv7-unknown-linux-musleabihf
-            OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: armv7-unknown-linux-musleabi
-            OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: arm-unknown-linux-musleabihf
-            OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: arm-unknown-linux-musleabi
-            OS: ubuntu-latest
-            FEATURES: default-feature
+            FEATURES: openssl-vendored
           - TARGET: x86_64-apple-darwin
-            OS: macos-latest
-            FEATURES: default-feature
-          - TARGET: aarch64-apple-darwin
-            OS: macos-latest
-            FEATURES: default-feature
-          - TARGET: i686-pc-windows-msvc
-            OS: windows-2019
+            OS: macos-13
             FEATURES: default-feature
           - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest
-            FEATURES: default-feature
-          - TARGET: mipsel-unknown-linux-musl
-            OS: ubuntu-latest
-            FEATURES: default-feature
-          - TARGET: mips-unknown-linux-musl
-            OS: ubuntu-latest
             FEATURES: default-feature
     runs-on: ${{ matrix.OS }}
     env:
@@ -93,114 +63,28 @@ jobs:
 
           if [[ $OS =~ ^ubuntu.*$ ]]; then
             sudo apt-get update
-            sudo apt-get install clang llvm libc6-dev-i386 crossbuild-essential-arm64 crossbuild-essential-armhf musl-tools libboost-all-dev libc6-dev -y
-            case $TARGET in
-              mipsel-unknown-linux-musl)
-                MUSL_URI=mipsel-linux-muslsf-cross
-                URL=mipsel-linux-muslsf
-                ;;
-              aarch64-unknown-linux-musl)
-                MUSL_URI=aarch64-linux-musl-cross
-                ;;
-              armv7-unknown-linux-musleabihf)
-                MUSL_URI=armv7l-linux-musleabihf-cross
-                ;;
-              armv7-unknown-linux-musleabi)
-                MUSL_URI=armv7m-linux-musleabi-cross
-                ;;
-              arm-unknown-linux-musleabihf)
-                MUSL_URI=arm-linux-musleabihf-cross
-                ;;
-              arm-unknown-linux-musleabi)
-                MUSL_URI=arm-linux-musleabi-cross
-                ;;
-              mips-unknown-linux-musl)
-                MUSL_URI=mips-linux-muslsf-cross
-                URL=mips-linux-muslsf
-                ;;
-              i686-unknown-linux-musl)
-                MUSL_URI=i686-linux-musl-cross
-                ;;
-            esac
-
-            if [[ -n "${MUSL_URI:-}" ]]; then
-              mkdir -p /opt/musl_gcc
-              wget -c "https://musl.cc/${MUSL_URI}.tgz" -P /opt/musl_gcc/
-              tar zxf "/opt/musl_gcc/${MUSL_URI}.tgz" -C /opt/musl_gcc/
-              sudo ln -sf /opt/musl_gcc/$MUSL_URI/bin/*gcc /usr/bin/
-            fi
+            sudo apt-get install clang llvm musl-tools libboost-all-dev libc6-dev -y
           fi
 
-          if [[ $TARGET =~ ^mips.*$ ]]; then
-            cd /opt/musl_gcc/${URL}-cross/lib/gcc/${URL}/11.2.1
-            cp libgcc_eh.a libunwind.a
-            rustup toolchain install nightly-x86_64-unknown-linux-gnu
-            rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-            RUST_LIB_SRC=$HOME/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
-            if [[ -f $RUST_LIB_SRC/library/Cargo.lock && ! -f $RUST_LIB_SRC/Cargo.lock ]]; then
-              cp -f $RUST_LIB_SRC/library/Cargo.lock $RUST_LIB_SRC/Cargo.lock
-            fi
-          else
-            rustup toolchain install stable
-            rustup default stable
-          fi
+          rustup toolchain install stable
+          rustup default stable
 
           rustup -V
 
           cat >>~/.cargo/config <<EOF
           [target.x86_64-unknown-linux-musl]
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.armv7-unknown-linux-musleabihf]
-          linker = "armv7l-linux-musleabihf-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.armv7-unknown-linux-musleabi]
-          linker = "armv7m-linux-musleabi-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.arm-unknown-linux-musleabihf]
-          linker = "arm-linux-musleabihf-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.arm-unknown-linux-musleabi]
-          linker = "arm-linux-musleabi-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.mipsel-unknown-linux-musl]
-          linker = "mipsel-linux-muslsf-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols","-C", "link-arg=-static",
-          "-C", "relocation-model=static","-C", "link-arg=-no-pie","--cfg", "compiler_builtins_no_debug",
-          "-L", "/opt/musl_gcc/mipsel-linux-muslsf-cross/mipsel-linux-muslsf/lib",
-          "-L", "/opt/musl_gcc/mipsel-linux-muslsf-cross/lib/gcc/mipsel-linux-muslsf/11.2.1"]
-          [target.mips-unknown-linux-musl]
-          linker = "mips-linux-muslsf-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols","-C", "link-arg=-static",
-          "-C", "relocation-model=static","-C", "link-arg=-no-pie","--cfg", "compiler_builtins_no_debug",
-          "-L", "/opt/musl_gcc/mips-linux-muslsf-cross/mips-linux-muslsf/lib",
-          "-L", "/opt/musl_gcc/mips-linux-muslsf-cross/lib/gcc/mips-linux-muslsf/11.2.1"]
           [target.x86_64-pc-windows-msvc]
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.i686-pc-windows-msvc]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.x86_64-apple-darwin]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.aarch64-apple-darwin]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
-          [target.i686-unknown-linux-musl]
-          linker = "i686-linux-musl-gcc"
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           EOF
 
       - name: Install rust target
-        if: ${{ ! startsWith(matrix.TARGET, 'mips') }}
         run: rustup target add $TARGET
 
       - name: Build sdl-cli
-        run: |
-          if [[ $TARGET =~ ^mips.*$ ]]; then
-            cargo +nightly build --package sdl-cli --release --verbose --target $TARGET -Z build-std=std,panic_abort --features $FEATURES
-          else
-            cargo build --package sdl-cli --release --verbose --target $TARGET --features $FEATURES
-          fi
+        run: cargo build --package sdl-cli --release --verbose --target $TARGET --features $FEATURES
 
       - name: List target
         run: find ./target
