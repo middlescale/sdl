@@ -1,4 +1,4 @@
-name: Rust
+name: Release
 
 on:
   push:
@@ -7,79 +7,59 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+
 permissions:
   contents: write
+
 defaults:
   run:
-    # necessary for windows
     shell: bash
 
 jobs:
-  #  test:
-  #    runs-on: ubuntu-latest
-  #    steps:
-  #      - uses: actions/checkout@v2
-  #      - name: Init submodules
-  #        uses: snickerbockers/submodules-init@v4
-  #      - name: Cargo cache
-  #        uses: actions/cache@v2
-  #        with:
-  #          path: |
-  #            ~/.cargo/registry
-  #            ./target
-  #          key: test-cargo-registry
-  #      - name: List
-  #        run: find ./
-  #      - name: Run tests
-  #        run: cargo test --verbose
-
   build:
     strategy:
       fail-fast: false
       matrix:
-        # a list of all the targets
-        # 选择使用openssl或者ring，并不是所有平台都支持
         include:
-          - TARGET: i686-unknown-linux-musl # test in an alpine container on a mac
+          - TARGET: i686-unknown-linux-musl
             OS: ubuntu-latest
             FEATURES: openssl-vendored
-          - TARGET: x86_64-unknown-linux-musl # test in an alpine container on a mac
+          - TARGET: x86_64-unknown-linux-musl
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: aarch64-unknown-linux-musl # tested on aws t4g.nano in alpine container
+          - TARGET: aarch64-unknown-linux-musl
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: armv7-unknown-linux-musleabihf # raspberry pi 2-3-4, not tested
+          - TARGET: armv7-unknown-linux-musleabihf
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: armv7-unknown-linux-musleabi # raspberry pi 2-3-4, not tested
+          - TARGET: armv7-unknown-linux-musleabi
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: arm-unknown-linux-musleabihf # raspberry pi 0-1, not tested
+          - TARGET: arm-unknown-linux-musleabihf
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: arm-unknown-linux-musleabi # raspberry pi 0-1, not tested
+          - TARGET: arm-unknown-linux-musleabi
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: x86_64-apple-darwin # tested on a mac, is not properly signed so there are security warnings
+          - TARGET: x86_64-apple-darwin
             OS: macos-latest
             FEATURES: default-feature
-          - TARGET: aarch64-apple-darwin # tested on a mac, is not properly signed so there are security warnings
+          - TARGET: aarch64-apple-darwin
             OS: macos-latest
             FEATURES: default-feature
-          - TARGET: i686-pc-windows-msvc # tested on a windows machine
+          - TARGET: i686-pc-windows-msvc
             OS: windows-2019
             FEATURES: default-feature
-          - TARGET: x86_64-pc-windows-msvc # tested on a windows machine
+          - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest
             FEATURES: default-feature
-          - TARGET: mipsel-unknown-linux-musl # openwrt
+          - TARGET: mipsel-unknown-linux-musl
             OS: ubuntu-latest
             FEATURES: default-feature
-          - TARGET: mips-unknown-linux-musl # openwrt
+          - TARGET: mips-unknown-linux-musl
             OS: ubuntu-latest
             FEATURES: default-feature
-    # needs: test
     runs-on: ${{ matrix.OS }}
     env:
       NAME: sdl-cli
@@ -88,30 +68,33 @@ jobs:
       FEATURES: ${{ matrix.FEATURES }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Init submodules
         uses: snickerbockers/submodules-init@v4
+
       - name: Cargo cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ./target
-          key: build-cargo-registry-${{matrix.TARGET}}
+          key: build-cargo-registry-${{ matrix.TARGET }}
+
       - name: Use strawberry perl
         if: startsWith(matrix.os, 'windows')
         run: echo OPENSSL_SRC_PERL=C:/Strawberry/perl/bin/perl >> $GITHUB_ENV
-      - name: List
+
+      - name: List workspace
         run: find ./
+
       - name: Install and configure dependencies
         run: |
-          # dependencies are only needed on ubuntu as that's the only place where
-          # we make cross-compilation
           rustup set auto-self-update disable
-          
+
           if [[ $OS =~ ^ubuntu.*$ ]]; then
-            sudo apt-get update && sudo apt-get install clang llvm libc6-dev-i386 crossbuild-essential-arm64 crossbuild-essential-armhf musl-tools libboost-all-dev libc6-dev -y
-            #  curl -s musl.cc | grep mipsel
-            case $TARGET in 
+            sudo apt-get update
+            sudo apt-get install clang llvm libc6-dev-i386 crossbuild-essential-arm64 crossbuild-essential-armhf musl-tools libboost-all-dev libc6-dev -y
+            case $TARGET in
               mipsel-unknown-linux-musl)
                 MUSL_URI=mipsel-linux-muslsf-cross
                 URL=mipsel-linux-muslsf
@@ -121,16 +104,16 @@ jobs:
                 ;;
               armv7-unknown-linux-musleabihf)
                 MUSL_URI=armv7l-linux-musleabihf-cross
-                ;;    
+                ;;
               armv7-unknown-linux-musleabi)
                 MUSL_URI=armv7m-linux-musleabi-cross
-                ;;   
+                ;;
               arm-unknown-linux-musleabihf)
                 MUSL_URI=arm-linux-musleabihf-cross
-                ;;    
+                ;;
               arm-unknown-linux-musleabi)
                 MUSL_URI=arm-linux-musleabi-cross
-                ;;        
+                ;;
               mips-unknown-linux-musl)
                 MUSL_URI=mips-linux-muslsf-cross
                 URL=mips-linux-muslsf
@@ -139,34 +122,31 @@ jobs:
                 MUSL_URI=i686-linux-musl-cross
                 ;;
             esac
-          
-            if [  -n "$MUSL_URI" ]; then
-              mkdir -p /opt/musl_gcc 
-              wget -c https://musl.cc/$MUSL_URI.tgz -P /opt/musl_gcc/
-              tar zxf /opt/musl_gcc/$MUSL_URI.tgz -C /opt/musl_gcc/
-              sudo ln -s /opt/musl_gcc/$MUSL_URI/bin/*gcc /usr/bin/
+
+            if [[ -n "${MUSL_URI:-}" ]]; then
+              mkdir -p /opt/musl_gcc
+              wget -c "https://musl.cc/${MUSL_URI}.tgz" -P /opt/musl_gcc/
+              tar zxf "/opt/musl_gcc/${MUSL_URI}.tgz" -C /opt/musl_gcc/
+              sudo ln -sf /opt/musl_gcc/$MUSL_URI/bin/*gcc /usr/bin/
+            fi
+          fi
+
+          if [[ $TARGET =~ ^mips.*$ ]]; then
+            cd /opt/musl_gcc/${URL}-cross/lib/gcc/${URL}/11.2.1
+            cp libgcc_eh.a libunwind.a
+            rustup toolchain install nightly-x86_64-unknown-linux-gnu
+            rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
+            RUST_LIB_SRC=$HOME/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
+            if [[ -f $RUST_LIB_SRC/library/Cargo.lock && ! -f $RUST_LIB_SRC/Cargo.lock ]]; then
+              cp -f $RUST_LIB_SRC/library/Cargo.lock $RUST_LIB_SRC/Cargo.lock
             fi
           else
-              rustup install 1.77
-              rustup default 1.77
+            rustup toolchain install stable
+            rustup default stable
           fi
-          if [[ $TARGET =~ ^mips.*$ ]]; then
-              # mips平台使用nightly版本
-              cd /opt/musl_gcc/${URL}-cross/lib/gcc/${URL}/11.2.1
-              cp libgcc_eh.a libunwind.a
-              rustup toolchain install nightly-x86_64-unknown-linux-gnu
-              rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
-              RUST_LIB_SRC=$HOME/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/
-              if [[ -f $RUST_LIB_SRC/library/Cargo.lock && ! -f $RUST_LIB_SRC/Cargo.lock ]]; then 
-                 cp -f $RUST_LIB_SRC/library/Cargo.lock $RUST_LIB_SRC/Cargo.lock
-              fi 
-          else
-              rustup install 1.77
-              rustup default 1.77
-          fi
+
           rustup -V
-          
-          # some additional configuration for cross-compilation on linux
+
           cat >>~/.cargo/config <<EOF
           [target.x86_64-unknown-linux-musl]
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
@@ -181,7 +161,7 @@ jobs:
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.arm-unknown-linux-musleabihf]
           linker = "arm-linux-musleabihf-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]   
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.arm-unknown-linux-musleabi]
           linker = "arm-linux-musleabi-gcc"
           rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
@@ -198,29 +178,33 @@ jobs:
           "-L", "/opt/musl_gcc/mips-linux-muslsf-cross/mips-linux-muslsf/lib",
           "-L", "/opt/musl_gcc/mips-linux-muslsf-cross/lib/gcc/mips-linux-muslsf/11.2.1"]
           [target.x86_64-pc-windows-msvc]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]    
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.i686-pc-windows-msvc]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]      
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.x86_64-apple-darwin]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"] 
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.aarch64-apple-darwin]
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]     
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           [target.i686-unknown-linux-musl]
           linker = "i686-linux-musl-gcc"
-          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]   
+          rustflags = ["-C", "target-feature=+crt-static","-C", "strip=symbols"]
           EOF
+
       - name: Install rust target
         if: ${{ ! startsWith(matrix.TARGET, 'mips') }}
         run: rustup target add $TARGET
-      - name: Run build sdl-cli
+
+      - name: Build sdl-cli
         run: |
           if [[ $TARGET =~ ^mips.*$ ]]; then
             cargo +nightly build --package sdl-cli --release --verbose --target $TARGET -Z build-std=std,panic_abort --features $FEATURES
           else
             cargo build --package sdl-cli --release --verbose --target $TARGET --features $FEATURES
           fi
+
       - name: List target
         run: find ./target
+
       - name: Compress
         run: |
           mkdir -p ./artifacts
@@ -243,13 +227,13 @@ jobs:
           tar -czf sdl-$TARGET-$TAG.tar.gz *
           mkdir upload_file
           mv sdl-$TARGET-$TAG.tar.gz ./upload_file/
+
       - name: Archive artifact
         uses: actions/upload-artifact@v4
         with:
           name: sdl-cli-${{ matrix.TARGET }}
-          path: |
-            ./artifacts/upload_file
-  # deploys to github releases on tag
+          path: ./artifacts/upload_file
+
   deploy:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
@@ -259,8 +243,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-      - name: List
+
+      - name: List artifacts
         run: find ./artifacts
+
       - name: Release
         uses: svenstaro/upload-release-action@v2
         with:
