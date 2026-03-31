@@ -105,13 +105,22 @@ jobs:
           else
             TAG=$GITHUB_SHA
           fi
+          if [[ $OS =~ ^windows.*$ ]]; then
+            ARCHIVE_NAME=sdl-$TARGET-$TAG.zip
+          else
+            ARCHIVE_NAME=sdl-$TARGET-$TAG.tar.gz
+          fi
           mv ./target/$TARGET/release/$EXEC_SDL ./artifacts/$EXEC_SDL
           mv ./target/$TARGET/release/$EXEC_SDL_SERVICE ./artifacts/$EXEC_SDL_SERVICE
           mv ./README ./artifacts/README.txt
           cd ./artifacts
-          tar -czf sdl-$TARGET-$TAG.tar.gz *
+          if [[ $OS =~ ^windows.*$ ]]; then
+            powershell.exe -NoLogo -NoProfile -Command "Compress-Archive -Path * -DestinationPath '$ARCHIVE_NAME'"
+          else
+            tar -czf "$ARCHIVE_NAME" *
+          fi
           mkdir upload_file
-          mv sdl-$TARGET-$TAG.tar.gz ./upload_file/
+          mv "$ARCHIVE_NAME" ./upload_file/
 
       - name: Archive artifact
         uses: actions/upload-artifact@v4
