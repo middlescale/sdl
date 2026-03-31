@@ -138,7 +138,6 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool)> {
     let port_mapping_list = file_conf.mapping;
     let config = Config::new(
         #[cfg(target_os = "windows")]
-        #[cfg(feature = "integrated_tun")]
         file_conf.tap,
         file_conf.token,
         file_conf.device_id,

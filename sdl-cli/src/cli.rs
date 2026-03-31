@@ -240,7 +240,6 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
             Compressor::None
         };
         let config = Config::new(
-            #[cfg(feature = "integrated_tun")]
             #[cfg(target_os = "windows")]
             false,
             token,
