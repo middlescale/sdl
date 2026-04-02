@@ -372,14 +372,22 @@ impl SdlCallback for ServiceCallback {
     }
 
     fn error(&self, info: ErrorInfo) {
-        log::error!("error {:?}", info);
         let message = format!("{}", info);
         let auth_pending = Self::is_auth_pending_message(&message);
+        if auth_pending {
+            log::warn!("auth pending {:?}", info);
+        } else {
+            log::error!("error {:?}", info);
+        }
         self.mutate_state(|state| {
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = auth_pending;
-            state.last_error = Some(message.clone());
+            state.last_error = if auth_pending {
+                None
+            } else {
+                Some(message.clone())
+            };
         });
         if auth_pending {
             println!(
