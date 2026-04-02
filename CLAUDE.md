@@ -83,8 +83,8 @@ The project uses Cargo features for conditional compilation:
 
 ### Command Line Interface
 The sdl-cli provides extensive command-line options:
-- Authentication: `-k <token>` for token, `-d <id>` for device id, `-n <name>` for device name
-- Transport: `-s <server>` for server address (only `quic://` protocol currently supported)
+- Authentication: `-g <group>` for group, `-d <id>` for device id, `-n <name>` for device name
+- Transport: `-s <server>` for server address (control plane uses `https://host[:port]/control`)
 - Network: `-a` for TAP mode (instead of TUN), `--nic <name>` for specifying interface name
 - Proxy: `-i <in-ip>` and `-o <out-ip>` for IP proxy configuration
 - Encryption: `-W` for client-to-server encryption
@@ -98,4 +98,4 @@ The sdl-cli provides extensive command-line options:
 
 ## Troubleshooting
 - On Linux, Ctrl+C may not properly exit due to TUN device `SyncDevice::Shutdown()` method differences on Unix-like systems
-- Service address protocol currently only supports `quic://`, e.g., `./target/debug/sdl-service -k <token> -d <device_id> -s quic://control.example.com:4433`
+- Service address currently uses `https://host[:port]/control`, e.g., `./target/debug/sdl-service -g default.ms.net -d <device_id> -s https://control.example.com/control`

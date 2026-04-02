@@ -45,32 +45,18 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 cargo build -p sdl-cli --no-default-features
 ```
 
-服务端地址协议当前仅支持 `quic://`，例如：
+`sdl-service` 无参数启动时，会默认使用：
+
+- group：`default.ms.net`
+- server：`https://control.middlescale.net/control`
+
+如果 `env/config.json` 已存在，则会优先读取这个保存下来的配置；首次带参数启动成功后也会自动写入它，后续无参数即可直接启动。
+
+如果需要覆盖，再显式传参数。服务端地址当前使用 `https://host[:port]/control`，例如：
 
 ```
-./target/debug/sdl-service -k <token> -d <device_id> -s quic://control.example.com:4433
+./target/debug/sdl-service -g default.ms.net -d <device_id> -s https://control.example.com/control
 ```
 
-features说明
-
-| feature           | 说明                             | 是否默认 |
-|-------------------|--------------------------------|------|
-| openssl           | 使用openssl中的加密算法                | 否    |
-| openssl-vendored  | 从源码编译openssl                   | 否    |
-| aes_cbc           | 支持aes_cbc加密                    | 是    |
-| aes_ecb           | 支持aes_ecb加密                    | 是    |
-| aes_gcm           | 支持aes_gcm加密                    | 是    |
-| sm4_cbc           | 支持sm4_cbc加密                    | 是    |
-| chacha20_poly1305 | 支持chacha20和chacha20_poly1305加密 | 是    |
-| port_mapping      | 端口映射                           | 是    |
-| log               | 日志                             | 是    |
-| command           | list、route等命令                  | 是    |
-| file_config       | yaml配置文件                       | 是    |
-| lz4               | lz4压缩                          | 是    |
-| zstd              | zstd压缩                         | 否    |
-| upnp              | upnp协议                         | 否    |
-| ws                | ws协议                           | 是    |
-| wss               | wss协议                          | 是    |
-| quic              | quic协议                         | 是    |
 
 </details>

@@ -13,19 +13,27 @@
 
 ### `sdl-service` 启动方式
 
-`sdl-service` 的参数可以有两种来源：
+`sdl-service` 的参数可以有三种来源，优先级从高到低如下：
 
 - 直接在命令行里指定
 - 通过 `-f <config.yaml>` 指定配置文件
+- 读取本地 `env/config.json`
+
+如果既没有命令行参数，也没有 `-f` 配置文件，则会先尝试读取本地 `env/config.json`；如果仍不存在，再使用默认值：
+
+- group：`default.ms.net`
+- server：`https://control.middlescale.net/control`
+- device_id：自动生成或复用本机已有 device id
+- name：主机名
 
 示例：
 
 ```bash
-sudo sdl-service -k <token> -n <name> -s <server>
+sudo sdl-service -g <group> -n <name> -s <server>
 sudo sdl-service -f /path/to/config.yaml
 ```
 
-`sdl-service` 负责带参数启动；`sdl resume` 只负责恢复已经存在的本地 service runtime，不再接受启动参数。
+`sdl-service` 负责带参数启动；首次带参数启动成功后，会把启动配置写入 `env/config.json`。`sdl resume` 只负责恢复已经存在的本地 service runtime，不再接受启动参数。
 
 如果 `sdl-service` 已经在本机启动过，那么：
 
@@ -50,7 +58,7 @@ sdl suspend
 - `sdl resume`：恢复本地收发服务；优先恢复已有 runtime
 - `sdl suspend`：挂起本地收发服务，但保留内存中的 runtime 状态
 - `sdl list/info/route`：查询当前本地服务状态
-- `sdl auth ...`：向本地 `sdl-service` 提交设备认证
+- `sdl auth ...`：向本地 `sdl-service` 提交设备认证；认证完成后会把状态写回本地状态文件
 - control 服务器地址由 `sdl-service ... -s <server>` 决定
 - 如果设备处于待认证状态，可用 `sdl info --json` 查看 `auth_pending` 和 `last_error`
 
@@ -63,9 +71,9 @@ sdl suspend
 
 ## 详细参数说明
 
-### -k `<token>`
+### -g `<group>`
 
-一个虚拟局域网的标识，在同一服务器下，相同token的设备会组建一个局域网
+一个虚拟局域网分组标识，在同一服务器下，相同 group 的设备会组建一个局域网，例如 `default.ms.net`
 
 ### -n `<name>`
 
@@ -113,7 +121,7 @@ sdl suspend
 
 ### -W
 
-开启和服务端通信的数据加密，采用rsa+aes256gcm加密客户端和服务端之间通信的数据，可以避免token泄漏、中间人攻击
+开启和服务端通信的数据加密，采用rsa+aes256gcm加密客户端和服务端之间通信的数据，可以避免 group 泄漏、中间人攻击
 
 注意：
 
@@ -127,7 +135,7 @@ sdl suspend
 
 ~~和服务端使用tcp通信。有些网络提供商对UDP限制比较大，这个时候可以选择使用TCP模式，提高稳定性。一般来说udp延迟和消耗更低~~
 
-当前控制面连接仅支持 `-s quic://...`
+当前控制面连接使用 `-s https://host[:port]/control`
 
 ### --ip `<IP>`
 
@@ -204,10 +212,10 @@ aes_gcm/aes_cbc/aes_ecb/sm4_cbc/chacha20_poly1305/chacha20/xor，默认使用aes
 ```yaml
 # 全部参数
 tap: false #是否使用tap 仅在windows上支持使用tap
-token: xxx #组网token
+group: default.ms.net #组网分组
 device_id: xxx #当前设备id
 name: windows 11 #当前设备名称
-server_address: ip:port #注册和中继服务器
+server_address: https://control.middlescale.net/control #控制面地址
 stun_server: #stun服务器
   - stun1.l.google.com:19302
   - stun2.l.google.com:19302
@@ -240,11 +248,11 @@ mapping:
 disable_stats: false # 为true表示关闭统计
 ```
 
-或者需要哪个配置就加哪个，当然token是必须的
+或者需要哪个配置就加哪个，当然 group 是必须的
 
 ```yaml
 # 部分参数
-token: xxx #组网token
+group: default.ms.net #组网分组
 ```
 
 ### --use-channel `<relay/p2p>`

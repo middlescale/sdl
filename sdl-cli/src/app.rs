@@ -1,6 +1,7 @@
 use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
 use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
+use crate::config::{write_saved_config, FileConfig};
 use anyhow::Context;
 use console::style;
 use sdl::core::{Config, Sdl};
@@ -14,6 +15,7 @@ use crate::root_check;
 
 struct ServiceManager {
     config: Mutex<Config>,
+    saved_config: Mutex<FileConfig>,
     runtime: Mutex<Option<Arc<Sdl>>>,
 }
 
@@ -21,9 +23,10 @@ struct ServiceManager {
 struct ServiceCommandHandler(Arc<ServiceManager>);
 
 impl ServiceManager {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, saved_config: FileConfig) -> Self {
         Self {
             config: Mutex::new(config),
+            saved_config: Mutex::new(saved_config),
             runtime: Mutex::new(None),
         }
     }
@@ -41,6 +44,13 @@ impl ServiceManager {
 
     fn current_config(&self) -> Config {
         self.config.lock().unwrap().clone()
+    }
+
+    fn persist_saved_config(&self) {
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        if let Err(e) = write_saved_config(&saved_config) {
+            log::warn!("write saved config failed: {:?}", e);
+        }
     }
 
     fn current_runtime(&self) -> io::Result<Arc<Sdl>> {
@@ -116,12 +126,14 @@ impl ServiceManager {
                 state.runtime_running = true;
                 state.runtime_suspended = false;
             });
+            self.persist_saved_config();
             Ok("service resumed".to_string())
         } else {
             self.mutate_state(|state| {
                 state.runtime_running = true;
                 state.runtime_suspended = false;
             });
+            self.persist_saved_config();
             Ok("service already resumed".to_string())
         }
     }
@@ -165,6 +177,29 @@ impl ServiceManager {
     fn shutdown(&self) {
         if let Err(e) = self.stop_service_runtime() {
             log::warn!("shutdown stop failed: {:?}", e);
+        }
+    }
+
+    fn record_auth_success(&self) {
+        let mut config = self.config.lock().unwrap();
+        let mut saved = self.saved_config.lock().unwrap();
+        let authenticated_user_id = config.auth_user_id.clone();
+        let authenticated_group = config.auth_group.clone();
+        config.auth_ticket = None;
+        self.mutate_state(|state| {
+            state.runtime_running = true;
+            state.runtime_suspended = false;
+            state.auth_pending = false;
+            state.last_error = None;
+            state.authenticated_user_id = authenticated_user_id.clone();
+            state.authenticated_group = authenticated_group.clone();
+        });
+        if let Some(user_id) = authenticated_user_id {
+            log::info!("persisting authenticated user_id={}", user_id);
+        }
+        saved.cmd = false;
+        if let Err(e) = write_saved_config(&saved) {
+            log::warn!("write saved config after auth failed: {:?}", e);
         }
     }
 }
@@ -224,9 +259,15 @@ impl CommandHandler for ServiceCommandHandler {
 
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String> {
         self.0.config.lock().unwrap().use_channel_type = use_channel_type;
+        self.0.saved_config.lock().unwrap().use_channel = match use_channel_type {
+            UseChannelType::Relay => "relay".to_string(),
+            UseChannelType::P2p => "p2p".to_string(),
+            UseChannelType::All => "all".to_string(),
+        };
         if let Ok(vnt) = self.0.current_runtime() {
             vnt.set_use_channel_type(use_channel_type);
         }
+        self.0.persist_saved_config();
         Ok(format!(
             "channel policy changed to {}",
             match use_channel_type {
@@ -238,6 +279,12 @@ impl CommandHandler for ServiceCommandHandler {
     }
 
     fn auth(&self, auth: AuthCommand) -> io::Result<String> {
+        {
+            let mut config = self.0.config.lock().unwrap();
+            config.auth_user_id = Some(auth.user_id.clone());
+            config.auth_group = Some(auth.group.clone());
+            config.auth_ticket = Some(auth.ticket.clone());
+        }
         let vnt = self.0.current_runtime()?;
         vnt.request_device_auth(auth.user_id, auth.group, auth.ticket)
             .map(|_| "device auth request submitted to local service".to_string())
@@ -296,6 +343,12 @@ impl ServiceCallback {
 impl SdlCallback for ServiceCallback {
     fn success(&self) {
         self.clear_error_state();
+        if let Some(manager) = self.manager.upgrade() {
+            let current = manager.current_config();
+            if current.auth_user_id.is_some() && current.auth_group.is_some() {
+                manager.record_auth_success();
+            }
+        }
         println!(" {} ", style("====== Connect Successfully ======").green())
     }
 
@@ -363,7 +416,7 @@ impl SdlCallback for ServiceCallback {
 }
 
 pub fn run_service_from_args(args: Vec<String>) -> i32 {
-    let (config, show_cmd) = match crate::cli::parse_args_config_from(args) {
+    let (config, show_cmd, saved_config) = match crate::cli::parse_args_config_from(args) {
         Ok(rs) => match rs {
             Some(rs) => rs,
             None => return 0,
@@ -374,15 +427,15 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
             return 1;
         }
     };
-    run_service(config, show_cmd)
+    run_service(config, show_cmd, saved_config)
 }
 
-pub fn run_service(config: Config, show_cmd: bool) -> i32 {
+pub fn run_service(config: Config, show_cmd: bool, saved_config: FileConfig) -> i32 {
     if !root_check::is_app_elevated() {
         println!("Please run sdl-service with administrator or root privileges");
         return 1;
     }
-    let manager = Arc::new(ServiceManager::new(config.clone()));
+    let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
     manager.mutate_state(|state| {
         state.runtime_running = false;
         state.runtime_suspended = false;

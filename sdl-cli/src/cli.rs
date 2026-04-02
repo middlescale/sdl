@@ -37,11 +37,17 @@ pub fn app_home() -> io::Result<PathBuf> {
     Ok(path)
 }
 
-pub fn parse_args_config() -> anyhow::Result<Option<(Config, bool)>> {
+pub fn parse_args_config() -> anyhow::Result<Option<(Config, bool, config::FileConfig)>> {
     parse_args_config_from(std::env::args().collect())
 }
 
-pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Config, bool)>> {
+fn default_service_file_config() -> config::FileConfig {
+    config::FileConfig::default()
+}
+
+pub fn parse_args_config_from(
+    args: Vec<String>,
+) -> anyhow::Result<Option<(Config, bool, config::FileConfig)>> {
     #[cfg(feature = "log")]
     {
         if let Err(e) = log4rs::init_file("log4rs.yaml", Default::default()) {
@@ -51,7 +57,7 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
     }
     let program = args[0].clone();
     let mut opts = Options::new();
-    opts.optopt("k", "", "组网标识", "<token>");
+    opts.optopt("g", "group", "组网分组(FQDN)", "<group>");
     opts.optopt("n", "", "设备名称", "<name>");
     opts.optopt("d", "", "设备标识", "<id>");
     opts.optflag("c", "", "关闭交互式命令");
@@ -87,13 +93,21 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
             return Err(anyhow::anyhow!("{}", f.to_string()));
         }
     };
-    if matches.opt_present("h") || args.len() == 1 {
+    if matches.opt_present("h") {
         print_usage(&program, opts);
         return Ok(None);
     }
+    if args.len() == 1 {
+        if let Some(saved) = config::read_saved_config()? {
+            return Ok(Some(saved));
+        }
+        let file_conf = default_service_file_config();
+        let (config, cmd) = file_conf.clone().into_runtime_config()?;
+        return Ok(Some((config, cmd, file_conf)));
+    }
 
     let conf = matches.opt_str("f");
-    let (config, cmd) = if conf.is_some() {
+    let (config, cmd, file_conf) = if conf.is_some() {
         match config::read_config(&conf.unwrap()) {
             Ok(c) => c,
             Err(e) => {
@@ -101,14 +115,17 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
             }
         }
     } else {
-        if !matches.opt_present("k") {
+        if !(matches.opt_present("g") || matches.opt_present("group")) {
             print_usage(&program, opts);
-            return Err(anyhow::anyhow!("parameter -k not found ."));
+            return Err(anyhow::anyhow!("parameter -g/--group not found ."));
         }
         let device_name = matches.opt_str("nic");
         #[cfg(not(feature = "port_mapping"))]
         let port_mapping_list: Vec<String> = vec![];
-        let token: String = matches.opt_get("k").unwrap().unwrap();
+        let group = matches
+            .opt_str("g")
+            .or_else(|| matches.opt_str("group"))
+            .unwrap();
         let device_id = matches.opt_get_default("d", String::new()).unwrap();
         let device_id = if device_id.is_empty() {
             config::get_device_id()
@@ -129,7 +146,7 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
             )
             .unwrap();
         let server_address_str = matches
-            .opt_get_default("s", "control.example.com:29872".to_string())
+            .opt_get_default("s", config::DEFAULT_SERVICE_SERVER.to_string())
             .unwrap();
 
         let mut stun_server = matches.opt_strs("e");
@@ -139,23 +156,23 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
             }
         }
         let dns = matches.opt_strs("dns");
-        let in_ip = matches.opt_strs("i");
-        let in_ip = match ips_parse(&in_ip) {
+        let raw_in_ips = matches.opt_strs("i");
+        let _in_ip = match ips_parse(&raw_in_ips) {
             Ok(in_ip) => in_ip,
             Err(e) => {
                 print_usage(&program, opts);
                 println!();
-                println!("-i: {:?} {}", in_ip, e);
+                println!("-i: {:?} {}", raw_in_ips, e);
                 return Err(anyhow::anyhow!("example: -i 192.168.0.0/24,10.26.0.3"));
             }
         };
-        let out_ip = matches.opt_strs("o");
-        let out_ip = match out_ips_parse(&out_ip) {
+        let raw_out_ips = matches.opt_strs("o");
+        let _out_ip = match out_ips_parse(&raw_out_ips) {
             Ok(out_ip) => out_ip,
             Err(e) => {
                 print_usage(&program, opts);
                 println!();
-                println!("-o: {:?} {}", out_ip, e);
+                println!("-o: {:?} {}", raw_out_ips, e);
                 return Err(anyhow::anyhow!("example: -o 0.0.0.0/0"));
             }
         };
@@ -232,43 +249,57 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
         let local_dev: Option<String> = matches.opt_get("local-dev").unwrap();
 
         let disable_stats = matches.opt_present("disable-stats");
-        let compressor = if let Some(compressor) = matches.opt_str("compressor").as_ref() {
+        let raw_compressor = matches.opt_str("compressor");
+        let _compressor = if let Some(compressor) = raw_compressor.as_ref() {
             Compressor::from_str(compressor)
                 .map_err(|e| anyhow!("{}", e))
                 .unwrap()
         } else {
             Compressor::None
         };
-        let config = Config::new(
+        let file_conf = config::FileConfig {
             #[cfg(target_os = "windows")]
-            false,
-            token,
+            tap: false,
+            group,
             device_id,
             name,
-            server_address_str,
-            dns,
+            server_address: server_address_str,
             stun_server,
-            in_ip,
-            out_ip,
+            dns,
+            in_ips: raw_in_ips,
+            out_ips: raw_out_ips,
             mtu,
-            virtual_ip,
-            cipher_model,
-            punch_model,
+            tcp: false,
+            ip: virtual_ip.map(|v| v.to_string()),
+            use_channel: match use_channel_type {
+                UseChannelType::Relay => "relay".to_string(),
+                UseChannelType::P2p => "p2p".to_string(),
+                UseChannelType::All => "all".to_string(),
+            },
+            cipher_model: Some(cipher_model.to_string()),
+            punch_model: match punch_model {
+                PunchModel::All => "all".to_string(),
+                PunchModel::IPv4 => "ipv4".to_string(),
+                PunchModel::IPv6 => "ipv6".to_string(),
+                PunchModel::IPv4Tcp => "ipv4-tcp".to_string(),
+                PunchModel::IPv4Udp => "ipv4-udp".to_string(),
+                PunchModel::IPv6Tcp => "ipv6-tcp".to_string(),
+                PunchModel::IPv6Udp => "ipv6-udp".to_string(),
+            },
             ports,
+            cmd,
             latency_first,
             device_name,
-            use_channel_type,
             packet_loss,
             packet_delay,
-            port_mapping_list,
-            compressor,
-            !disable_stats,
+            #[cfg(feature = "port_mapping")]
+            mapping: port_mapping_list,
+            compressor: raw_compressor,
+            disable_stats,
             local_dev,
-            None,
-            None,
-            None,
-        )?;
-        (config, cmd)
+        };
+        let (config, cmd) = file_conf.clone().into_runtime_config()?;
+        (config, cmd, file_conf)
     };
     println!("version {}", sdl::SDL_VERSION);
     println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
@@ -277,13 +308,13 @@ pub fn parse_args_config_from(args: Vec<String>) -> anyhow::Result<Option<(Confi
         sdl::SDL_VERSION,
         generated_serial_number::SERIAL_NUMBER
     );
-    Ok(Some((config, cmd)))
+    Ok(Some((config, cmd, file_conf)))
 }
 
 fn get_description(key: &str, language: &str) -> String {
     // 设置一个全局的映射来存储中英文对照
     let descriptions: HashMap<&str, (&str, &str)> = [
-        ("-k <token>", ("使用相同的token,就能组建一个局域网络", "Use the same token to form a local network")),
+        ("-g <group>", ("使用相同的group(如 default.ms.net),就能组建一个局域网络", "Use the same group (for example default.ms.net) to form a local network")),
         ("-n <name>", ("给设备一个名字,便于区分不同设备,默认使用系统版本", "Give the device a name to distinguish it, defaults to system version")),
         ("-d <id>", ("设备唯一标识符,不使用--ip参数时,服务端凭此参数分配虚拟ip,注意不能重复", "Device unique identifier, used by the server to allocate virtual IP when --ip parameter is not used, must be unique")),
         ("-s <server>", ("注册和中继服务器地址,当前使用https://host[:port]/control", "Registration and relay server address, use https://host[:port]/control")),
@@ -342,8 +373,8 @@ fn print_usage(program: &str, _opts: Options) {
     println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
     println!("Options:");
     println!(
-        "  -k <token>          {}",
-        green(get_description("-k <token>", &language).to_string())
+        "  -g, --group <group> {}",
+        green(get_description("-g <group>", &language).to_string())
     );
     println!(
         "  -n <name>           {}",
@@ -515,6 +546,24 @@ fn print_usage(program: &str, _opts: Options) {
         );
     }
     println!("  -h, --help          display help information(显示帮助信息)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args_config_from;
+    use crate::config::{DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
+
+    #[test]
+    fn parse_args_uses_default_service_config_without_args() {
+        let result = parse_args_config_from(vec!["sdl-service".to_string()])
+            .expect("parse args should succeed")
+            .expect("default config should be returned");
+
+        let (config, show_cmd, _) = result;
+        assert_eq!(config.token, DEFAULT_SERVICE_GROUP);
+        assert_eq!(config.server_address_str, DEFAULT_SERVICE_SERVER);
+        assert!(!show_cmd);
+    }
 }
 
 fn green(str: String) -> impl std::fmt::Display {

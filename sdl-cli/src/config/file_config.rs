@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::args_parse;
@@ -11,12 +12,15 @@ use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::nat::punch::PunchModel;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(default)]
+pub const DEFAULT_SERVICE_GROUP: &str = "default.ms.net";
+pub const DEFAULT_SERVICE_SERVER: &str = "https://control.middlescale.net/control";
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
     #[cfg(target_os = "windows")]
     pub tap: bool,
-    pub token: String,
+    pub group: String,
     pub device_id: String,
     pub name: String,
     pub server_address: String,
@@ -52,13 +56,13 @@ impl Default for FileConfig {
         Self {
             #[cfg(target_os = "windows")]
             tap: false,
-            token: "".to_string(),
+            group: DEFAULT_SERVICE_GROUP.to_string(),
             device_id: get_device_id(),
             name: gethostname::gethostname()
                 .to_str()
                 .unwrap_or("UnknownName")
                 .to_string(),
-            server_address: "https://control.middlescale.net/control".to_string(),
+            server_address: DEFAULT_SERVICE_SERVER.to_string(),
             stun_server,
             dns: vec![],
             in_ips: vec![],
@@ -84,87 +88,179 @@ impl Default for FileConfig {
     }
 }
 
-pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool)> {
-    let conf = std::fs::read_to_string(file_path)?;
-    let file_conf = match serde_yaml::from_str::<FileConfig>(&conf) {
+impl FileConfig {
+    pub fn into_runtime_config(self) -> anyhow::Result<(Config, bool)> {
+        let cmd = self.cmd;
+        let in_ips = match args_parse::ips_parse(&self.in_ips) {
+            Ok(in_ips) => in_ips,
+            Err(e) => {
+                return Err(anyhow!("in_ips {:?} error:{}", &self.in_ips, e));
+            }
+        };
+        let out_ips = match args_parse::out_ips_parse(&self.out_ips) {
+            Ok(out_ips) => out_ips,
+            Err(e) => {
+                return Err(anyhow!("out_ips {:?} error:{}", &self.out_ips, e));
+            }
+        };
+        let virtual_ip = match self.ip.clone().map(|v| Ipv4Addr::from_str(&v)) {
+            None => None,
+            Some(r) => Some(r.map_err(|e| anyhow!("ip {:?} error:{}", &self.ip, e))?),
+        };
+        let cipher_model = if let Some(v) = self.cipher_model.clone() {
+            CipherModel::from_str(&v).map_err(|e| anyhow!("{}", e))?
+        } else {
+            #[cfg(not(feature = "aes_gcm"))]
+            {
+                CipherModel::None
+            }
+            #[cfg(feature = "aes_gcm")]
+            {
+                CipherModel::AesGcm
+            }
+        };
+
+        let punch_model = PunchModel::from_str(&self.punch_model).map_err(|e| anyhow!("{}", e))?;
+        let use_channel_type =
+            UseChannelType::from_str(&self.use_channel).map_err(|e| anyhow!("{}", e))?;
+        let compressor = if let Some(compressor) = self.compressor.as_ref() {
+            Compressor::from_str(compressor).map_err(|e| anyhow!("{}", e))?
+        } else {
+            Compressor::None
+        };
+        #[cfg(not(feature = "port_mapping"))]
+        let port_mapping_list: Vec<String> = vec![];
+        #[cfg(feature = "port_mapping")]
+        let port_mapping_list = self.mapping.clone();
+        let config = Config::new(
+            #[cfg(target_os = "windows")]
+            self.tap,
+            self.group,
+            self.device_id,
+            self.name,
+            self.server_address,
+            self.dns,
+            self.stun_server,
+            in_ips,
+            out_ips,
+            self.mtu,
+            virtual_ip,
+            cipher_model,
+            punch_model,
+            self.ports,
+            self.latency_first,
+            self.device_name,
+            use_channel_type,
+            self.packet_loss,
+            self.packet_delay,
+            port_mapping_list,
+            compressor,
+            !self.disable_stats,
+            self.local_dev,
+            None,
+            None,
+            None,
+        )?;
+
+        Ok((config, cmd))
+    }
+}
+
+pub fn saved_config_path() -> std::io::Result<PathBuf> {
+    Ok(crate::cli::app_home()?.join("config.json"))
+}
+
+fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
+    let file_conf = match serde_yaml::from_str::<FileConfig>(conf) {
         Ok(val) => val,
         Err(e) => {
             log::error!("serde_yaml::from_str {:?}", e);
             return Err(anyhow!("serde_yaml::from_str {:?}", e));
         }
     };
-    if file_conf.token.is_empty() {
-        return Err(anyhow!("token is_empty"));
+    if file_conf.group.is_empty() {
+        return Err(anyhow!("group is_empty"));
+    }
+    Ok(file_conf)
+}
+
+pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool, FileConfig)> {
+    let conf = std::fs::read_to_string(file_path)?;
+    let file_conf = parse_config_str(&conf)?;
+    let (config, cmd) = file_conf.clone().into_runtime_config()?;
+    Ok((config, cmd, file_conf))
+}
+
+pub fn read_config_from_path(path: &Path) -> anyhow::Result<(Config, bool, FileConfig)> {
+    read_config(path.to_str().ok_or_else(|| anyhow!("invalid config path"))?)
+}
+
+pub fn read_saved_config() -> anyhow::Result<Option<(Config, bool, FileConfig)>> {
+    let path = saved_config_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_config_from_path(&path).map(Some)
+}
+
+pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
+    let path = saved_config_path()?;
+    let contents = serde_json::to_string_pretty(file_conf)?;
+    std::fs::write(path, contents)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_config, FileConfig, DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
+    use std::fs;
+
+    fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sdl-cli-file-config-{}-{}.yaml",
+            std::process::id(),
+            suffix
+        ));
+        fs::write(&path, contents).expect("write temp config");
+        path
     }
 
-    let in_ips = match args_parse::ips_parse(&file_conf.in_ips) {
-        Ok(in_ips) => in_ips,
-        Err(e) => {
-            return Err(anyhow!("in_ips {:?} error:{}", &file_conf.in_ips, e));
-        }
-    };
-    let out_ips = match args_parse::out_ips_parse(&file_conf.out_ips) {
-        Ok(out_ips) => out_ips,
-        Err(e) => {
-            return Err(anyhow!("out_ips {:?} error:{}", &file_conf.out_ips, e));
-        }
-    };
-    let virtual_ip = match file_conf.ip.clone().map(|v| Ipv4Addr::from_str(&v)) {
-        None => None,
-        Some(r) => Some(r.map_err(|e| anyhow!("ip {:?} error:{}", &file_conf.ip, e))?),
-    };
-    let cipher_model = if let Some(v) = file_conf.cipher_model {
-        CipherModel::from_str(&v).map_err(|e| anyhow!("{}", e))?
-    } else {
-        #[cfg(not(feature = "aes_gcm"))]
-        {
-            CipherModel::None
-        }
-        #[cfg(feature = "aes_gcm")]
-        CipherModel::AesGcm
-    };
+    #[test]
+    fn read_config_accepts_group_field() {
+        let path = write_temp_config(
+            r#"
+group: default.ms.net
+device_id: dev-1
+name: test-node
+server_address: https://control.middlescale.net/control
+"#,
+            "group",
+        );
+        let (config, _, _) = read_config(path.to_str().unwrap()).expect("group config should parse");
+        assert_eq!(config.token, "default.ms.net");
+        let _ = fs::remove_file(path);
+    }
 
-    let punch_model = PunchModel::from_str(&file_conf.punch_model).map_err(|e| anyhow!("{}", e))?;
-    let use_channel_type =
-        UseChannelType::from_str(&file_conf.use_channel).map_err(|e| anyhow!("{}", e))?;
-    let compressor = if let Some(compressor) = file_conf.compressor.as_ref() {
-        Compressor::from_str(compressor).map_err(|e| anyhow!("{}", e))?
-    } else {
-        Compressor::None
-    };
-    #[cfg(not(feature = "port_mapping"))]
-    let port_mapping_list: Vec<String> = vec![];
-    #[cfg(feature = "port_mapping")]
-    let port_mapping_list = file_conf.mapping;
-    let config = Config::new(
-        #[cfg(target_os = "windows")]
-        file_conf.tap,
-        file_conf.token,
-        file_conf.device_id,
-        file_conf.name,
-        file_conf.server_address,
-        file_conf.dns,
-        file_conf.stun_server,
-        in_ips,
-        out_ips,
-        file_conf.mtu,
-        virtual_ip,
-        cipher_model,
-        punch_model,
-        file_conf.ports,
-        file_conf.latency_first,
-        file_conf.device_name,
-        use_channel_type,
-        file_conf.packet_loss,
-        file_conf.packet_delay,
-        port_mapping_list,
-        compressor,
-        !file_conf.disable_stats,
-        file_conf.local_dev,
-        None,
-        None,
-        None,
-    )?;
+    #[test]
+    fn default_config_uses_group_defaults() {
+        let file_conf = FileConfig::default();
+        assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
+        assert_eq!(file_conf.server_address, DEFAULT_SERVICE_SERVER);
+    }
 
-    Ok((config, file_conf.cmd))
+    #[test]
+    fn read_config_rejects_legacy_token_alias() {
+        let path = write_temp_config(
+            r#"
+token: default.ms.net
+device_id: dev-2
+name: test-node
+server_address: https://control.middlescale.net/control
+"#,
+            "token",
+        );
+        let err = read_config(path.to_str().unwrap()).expect_err("legacy token config should fail");
+        assert!(err.to_string().contains("unknown field `token`"));
+        let _ = fs::remove_file(path);
+    }
 }

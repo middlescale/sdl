@@ -3,12 +3,20 @@ mod file_config;
 
 use crate::identifier;
 #[cfg(feature = "file_config")]
-pub use file_config::read_config;
+pub use file_config::{
+    read_config, read_saved_config, saved_config_path, write_saved_config, FileConfig,
+    DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER,
+};
 
 #[cfg(not(feature = "file_config"))]
-pub fn read_config(_file_path: &str) -> anyhow::Result<(sdl::core::Config, bool)> {
+pub fn read_config(
+    _file_path: &str,
+) -> anyhow::Result<(sdl::core::Config, bool, UnavailableFileConfig)> {
     unimplemented!()
 }
+
+#[cfg(not(feature = "file_config"))]
+pub struct UnavailableFileConfig;
 
 pub fn get_device_id() -> String {
     if let Some(id) = identifier::get_unique_identifier() {

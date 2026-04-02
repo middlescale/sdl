@@ -9,6 +9,8 @@ pub struct LocalServiceState {
     pub runtime_suspended: bool,
     pub auth_pending: bool,
     pub last_error: Option<String>,
+    pub authenticated_user_id: Option<String>,
+    pub authenticated_group: Option<String>,
 }
 
 fn state_path() -> io::Result<std::path::PathBuf> {
