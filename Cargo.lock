@@ -2049,6 +2049,7 @@ dependencies = [
  "gethostname",
  "getopts",
  "interprocess",
+ "libc",
  "log",
  "log4rs",
  "rand 0.8.5",

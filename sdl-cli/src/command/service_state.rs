@@ -31,7 +31,8 @@ pub fn write_service_state(state: &LocalServiceState) -> io::Result<()> {
     let path = state_path()?;
     let mut file = std::fs::File::create(path)?;
     file.write_all(serde_json::to_string_pretty(state).unwrap().as_bytes())?;
-    file.sync_all()
+    file.sync_all()?;
+    crate::fs_access::ensure_user_access(&state_path()?, 0o600)
 }
 
 pub fn clear_service_state() -> io::Result<()> {

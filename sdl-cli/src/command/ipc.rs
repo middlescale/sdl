@@ -27,10 +27,16 @@ fn command_name() -> io::Result<Name<'static>> {
 }
 
 pub fn bind_listener() -> io::Result<LocalSocketListener> {
-    ListenerOptions::new()
+    let listener = ListenerOptions::new()
         .name(command_name()?)
         .try_overwrite(true)
-        .create_sync()
+        .create_sync()?;
+    #[cfg(not(windows))]
+    {
+        let path = crate::cli::app_home()?.join("command.sock");
+        crate::fs_access::ensure_user_access(&path, 0o600)?;
+    }
+    Ok(listener)
 }
 
 pub fn connect_stream() -> io::Result<LocalSocketStream> {

@@ -207,6 +207,7 @@ pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
     let path = saved_config_path()?;
     let contents = serde_json::to_string_pretty(file_conf)?;
     std::fs::write(path, contents)?;
+    crate::fs_access::ensure_user_access(&saved_config_path()?, 0o600)?;
     Ok(())
 }
 

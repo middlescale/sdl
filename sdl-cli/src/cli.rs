@@ -34,6 +34,7 @@ pub fn app_home() -> io::Result<PathBuf> {
     if !path.exists() {
         std::fs::create_dir_all(&path)?;
     }
+    let _ = crate::fs_access::ensure_user_access(&path, 0o700);
     Ok(path)
 }
 

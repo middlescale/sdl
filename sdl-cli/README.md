@@ -48,7 +48,7 @@ sdl list
 sdl list --json
 sdl info --json
 sdl route --json
-sdl auth <user-id> <group> <ticket>
+sdl auth --userId <user-id> [--group default.ms.net] <ticket>
 sdl channel_change --type relay
 sdl channel_change --json
 sdl suspend
@@ -58,7 +58,7 @@ sdl suspend
 - `sdl resume`：恢复本地收发服务；优先恢复已有 runtime
 - `sdl suspend`：挂起本地收发服务，但保留内存中的 runtime 状态
 - `sdl list/info/route`：查询当前本地服务状态
-- `sdl auth ...`：向本地 `sdl-service` 提交设备认证；认证完成后会把状态写回本地状态文件
+- `sdl auth ...`：向本地 `sdl-service` 提交设备认证；`--group` 不传时默认使用 `default.ms.net`；认证完成后会把状态写回本地状态文件
 - control 服务器地址由 `sdl-service ... -s <server>` 决定
 - 如果设备处于待认证状态，可用 `sdl info --json` 查看 `auth_pending` 和 `last_error`
 
