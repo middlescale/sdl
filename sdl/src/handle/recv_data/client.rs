@@ -63,16 +63,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         packet: &NetPacket<B>,
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
-        if route_key.protocol().is_udp() {
-            self.runtime
-                .udp_channel
-                .send_by_key(packet.buffer(), route_key)?;
-        } else if self
+        if self
             .runtime
             .gateway_sessions
             .is_gateway_addr(route_key.addr)
         {
             self.runtime.gateway_sessions.send_relay(packet)?;
+        } else if route_key.protocol().is_udp() {
+            self.runtime
+                .udp_channel
+                .send_by_key(packet.buffer(), route_key)?;
         } else {
             return Err(anyhow!("unsupported reply route {:?}", route_key));
         }
@@ -89,7 +89,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
-        if self.runtime.peer_info(&source).is_none() {
+        if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
             log::debug!(
                 "drop packet from unknown peer {} via {:?}",
                 source,

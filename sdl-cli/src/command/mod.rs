@@ -128,11 +128,32 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let service_state = service_state::read_service_state().unwrap_or_default();
     let config = vnt.config();
     let current_device = vnt.current_device();
+    let gateway_summary = vnt.gateway_session_summary();
     let nat_info = vnt.nat_info();
     let name = vnt.name().to_string();
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
+    let gateway_session_status = if !gateway_summary.configured {
+        "not-configured".to_string()
+    } else if gateway_summary.authenticated {
+        if gateway_summary.reauth_required {
+            "reauth-required".to_string()
+        } else {
+            "connected".to_string()
+        }
+    } else {
+        "disconnected".to_string()
+    };
+    let gateway_endpoint = gateway_summary
+        .endpoint
+        .map(|endpoint| endpoint.to_string())
+        .unwrap_or_default();
+    let gateway_channel = if gateway_summary.configured {
+        gateway_summary.channel_name
+    } else {
+        String::new()
+    };
     let connect_status = format!("{:?}", vnt.connection_status());
     let channel_policy = match vnt.use_channel_type() {
         UseChannelType::Relay => "relay".to_string(),
@@ -172,6 +193,9 @@ pub fn command_info(vnt: &Sdl) -> Info {
         virtual_ip,
         virtual_gateway,
         virtual_netmask,
+        gateway_session_status,
+        gateway_endpoint,
+        gateway_channel,
         connect_status,
         auth_pending: service_state.auth_pending,
         channel_policy,

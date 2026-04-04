@@ -192,7 +192,10 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool, FileConfig)
 }
 
 pub fn read_config_from_path(path: &Path) -> anyhow::Result<(Config, bool, FileConfig)> {
-    read_config(path.to_str().ok_or_else(|| anyhow!("invalid config path"))?)
+    read_config(
+        path.to_str()
+            .ok_or_else(|| anyhow!("invalid config path"))?,
+    )
 }
 
 pub fn read_saved_config() -> anyhow::Result<Option<(Config, bool, FileConfig)>> {
@@ -237,7 +240,8 @@ server_address: https://control.middlescale.net/control
 "#,
             "group",
         );
-        let (config, _, _) = read_config(path.to_str().unwrap()).expect("group config should parse");
+        let (config, _, _) =
+            read_config(path.to_str().unwrap()).expect("group config should parse");
         assert_eq!(config.token, "default.ms.net");
         let _ = fs::remove_file(path);
     }

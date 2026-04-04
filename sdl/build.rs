@@ -4,7 +4,9 @@ use std::path::Path;
 
 fn write_if_changed(src: &Path, dst: &Path) {
     let src_bytes = fs::read(src).expect("read generated proto failed");
-    let same = fs::read(dst).map(|dst_bytes| dst_bytes == src_bytes).unwrap_or(false);
+    let same = fs::read(dst)
+        .map(|dst_bytes| dst_bytes == src_bytes)
+        .unwrap_or(false);
     if !same {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent).expect("create proto output dir failed");

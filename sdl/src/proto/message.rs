@@ -930,15 +930,185 @@ impl ::protobuf::reflect::ProtobufValue for RegistrationResponse {
 }
 
 #[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:GatewayChannel)
+pub struct GatewayChannel {
+    // message fields
+    // @@protoc_insertion_point(field:GatewayChannel.kind)
+    pub kind: ::protobuf::EnumOrUnknown<GatewayChannelKind>,
+    // @@protoc_insertion_point(field:GatewayChannel.addr)
+    pub addr: ::std::string::String,
+    // @@protoc_insertion_point(field:GatewayChannel.server_name)
+    pub server_name: ::std::string::String,
+    // @@protoc_insertion_point(field:GatewayChannel.ca_pem)
+    pub ca_pem: ::std::vec::Vec<u8>,
+    // special fields
+    // @@protoc_insertion_point(special_field:GatewayChannel.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a GatewayChannel {
+    fn default() -> &'a GatewayChannel {
+        <GatewayChannel as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl GatewayChannel {
+    pub fn new() -> GatewayChannel {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "kind",
+            |m: &GatewayChannel| { &m.kind },
+            |m: &mut GatewayChannel| { &mut m.kind },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "addr",
+            |m: &GatewayChannel| { &m.addr },
+            |m: &mut GatewayChannel| { &mut m.addr },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "server_name",
+            |m: &GatewayChannel| { &m.server_name },
+            |m: &mut GatewayChannel| { &mut m.server_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ca_pem",
+            |m: &GatewayChannel| { &m.ca_pem },
+            |m: &mut GatewayChannel| { &mut m.ca_pem },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GatewayChannel>(
+            "GatewayChannel",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for GatewayChannel {
+    const NAME: &'static str = "GatewayChannel";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.kind = is.read_enum_or_unknown()?;
+                },
+                18 => {
+                    self.addr = is.read_string()?;
+                },
+                26 => {
+                    self.server_name = is.read_string()?;
+                },
+                34 => {
+                    self.ca_pem = is.read_bytes()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.kind != ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN) {
+            my_size += ::protobuf::rt::int32_size(1, self.kind.value());
+        }
+        if !self.addr.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.addr);
+        }
+        if !self.server_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.server_name);
+        }
+        if !self.ca_pem.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(4, &self.ca_pem);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.kind != ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN) {
+            os.write_enum(1, ::protobuf::EnumOrUnknown::value(&self.kind))?;
+        }
+        if !self.addr.is_empty() {
+            os.write_string(2, &self.addr)?;
+        }
+        if !self.server_name.is_empty() {
+            os.write_string(3, &self.server_name)?;
+        }
+        if !self.ca_pem.is_empty() {
+            os.write_bytes(4, &self.ca_pem)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> GatewayChannel {
+        GatewayChannel::new()
+    }
+
+    fn clear(&mut self) {
+        self.kind = ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN);
+        self.addr.clear();
+        self.server_name.clear();
+        self.ca_pem.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static GatewayChannel {
+        static instance: GatewayChannel = GatewayChannel {
+            kind: ::protobuf::EnumOrUnknown::from_i32(0),
+            addr: ::std::string::String::new(),
+            server_name: ::std::string::String::new(),
+            ca_pem: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for GatewayChannel {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("GatewayChannel").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for GatewayChannel {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for GatewayChannel {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
 // @@protoc_insertion_point(message:GatewayAccessGrant)
 pub struct GatewayAccessGrant {
     // message fields
-    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_addrs)
-    pub gateway_addrs: ::std::vec::Vec<::std::string::String>,
-    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_server_name)
-    pub gateway_server_name: ::std::string::String,
-    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_ca_pem)
-    pub gateway_ca_pem: ::std::vec::Vec<u8>,
     // @@protoc_insertion_point(field:GatewayAccessGrant.ticket)
     pub ticket: ::std::vec::Vec<u8>,
     // @@protoc_insertion_point(field:GatewayAccessGrant.ticket_expire_unix_ms)
@@ -955,6 +1125,14 @@ pub struct GatewayAccessGrant {
     pub grace_secs: u32,
     // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_group_id)
     pub gateway_group_id: ::std::string::String,
+    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_channels)
+    pub gateway_channels: ::std::vec::Vec<GatewayChannel>,
+    // @@protoc_insertion_point(field:GatewayAccessGrant.default_gateway_channel)
+    pub default_gateway_channel: ::protobuf::EnumOrUnknown<GatewayChannelKind>,
+    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_udp_public_key)
+    pub gateway_udp_public_key: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_udp_key_id)
+    pub gateway_udp_key_id: ::std::string::String,
     // special fields
     // @@protoc_insertion_point(special_field:GatewayAccessGrant.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -972,23 +1150,8 @@ impl GatewayAccessGrant {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(11);
+        let mut fields = ::std::vec::Vec::with_capacity(12);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "gateway_addrs",
-            |m: &GatewayAccessGrant| { &m.gateway_addrs },
-            |m: &mut GatewayAccessGrant| { &mut m.gateway_addrs },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "gateway_server_name",
-            |m: &GatewayAccessGrant| { &m.gateway_server_name },
-            |m: &mut GatewayAccessGrant| { &mut m.gateway_server_name },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "gateway_ca_pem",
-            |m: &GatewayAccessGrant| { &m.gateway_ca_pem },
-            |m: &mut GatewayAccessGrant| { &mut m.gateway_ca_pem },
-        ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "ticket",
             |m: &GatewayAccessGrant| { &m.ticket },
@@ -1029,6 +1192,26 @@ impl GatewayAccessGrant {
             |m: &GatewayAccessGrant| { &m.gateway_group_id },
             |m: &mut GatewayAccessGrant| { &mut m.gateway_group_id },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "gateway_channels",
+            |m: &GatewayAccessGrant| { &m.gateway_channels },
+            |m: &mut GatewayAccessGrant| { &mut m.gateway_channels },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "default_gateway_channel",
+            |m: &GatewayAccessGrant| { &m.default_gateway_channel },
+            |m: &mut GatewayAccessGrant| { &mut m.default_gateway_channel },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_udp_public_key",
+            |m: &GatewayAccessGrant| { &m.gateway_udp_public_key },
+            |m: &mut GatewayAccessGrant| { &mut m.gateway_udp_public_key },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_udp_key_id",
+            |m: &GatewayAccessGrant| { &m.gateway_udp_key_id },
+            |m: &mut GatewayAccessGrant| { &mut m.gateway_udp_key_id },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GatewayAccessGrant>(
             "GatewayAccessGrant",
             fields,
@@ -1048,37 +1231,40 @@ impl ::protobuf::Message for GatewayAccessGrant {
         while let Some(tag) = is.read_raw_tag_or_eof()? {
             match tag {
                 10 => {
-                    self.gateway_addrs.push(is.read_string()?);
-                },
-                18 => {
-                    self.gateway_server_name = is.read_string()?;
-                },
-                26 => {
-                    self.gateway_ca_pem = is.read_bytes()?;
-                },
-                34 => {
                     self.ticket = is.read_bytes()?;
                 },
-                40 => {
+                16 => {
                     self.ticket_expire_unix_ms = is.read_int64()?;
                 },
-                48 => {
+                24 => {
                     self.session_id = is.read_uint64()?;
                 },
-                56 => {
+                32 => {
                     self.policy_rev = is.read_uint64()?;
                 },
-                82 => {
+                42 => {
                     self.gateway_capabilities.push(is.read_string()?);
                 },
-                88 => {
+                48 => {
                     self.lease_secs = is.read_uint32()?;
                 },
-                96 => {
+                56 => {
                     self.grace_secs = is.read_uint32()?;
                 },
-                106 => {
+                66 => {
                     self.gateway_group_id = is.read_string()?;
+                },
+                74 => {
+                    self.gateway_channels.push(is.read_message()?);
+                },
+                80 => {
+                    self.default_gateway_channel = is.read_enum_or_unknown()?;
+                },
+                90 => {
+                    self.gateway_udp_public_key = is.read_bytes()?;
+                },
+                98 => {
+                    self.gateway_udp_key_id = is.read_string()?;
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -1092,38 +1278,42 @@ impl ::protobuf::Message for GatewayAccessGrant {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u64 {
         let mut my_size = 0;
-        for value in &self.gateway_addrs {
-            my_size += ::protobuf::rt::string_size(1, &value);
-        };
-        if !self.gateway_server_name.is_empty() {
-            my_size += ::protobuf::rt::string_size(2, &self.gateway_server_name);
-        }
-        if !self.gateway_ca_pem.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(3, &self.gateway_ca_pem);
-        }
         if !self.ticket.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(4, &self.ticket);
+            my_size += ::protobuf::rt::bytes_size(1, &self.ticket);
         }
         if self.ticket_expire_unix_ms != 0 {
-            my_size += ::protobuf::rt::int64_size(5, self.ticket_expire_unix_ms);
+            my_size += ::protobuf::rt::int64_size(2, self.ticket_expire_unix_ms);
         }
         if self.session_id != 0 {
-            my_size += ::protobuf::rt::uint64_size(6, self.session_id);
+            my_size += ::protobuf::rt::uint64_size(3, self.session_id);
         }
         if self.policy_rev != 0 {
-            my_size += ::protobuf::rt::uint64_size(7, self.policy_rev);
+            my_size += ::protobuf::rt::uint64_size(4, self.policy_rev);
         }
         for value in &self.gateway_capabilities {
-            my_size += ::protobuf::rt::string_size(10, &value);
+            my_size += ::protobuf::rt::string_size(5, &value);
         };
         if self.lease_secs != 0 {
-            my_size += ::protobuf::rt::uint32_size(11, self.lease_secs);
+            my_size += ::protobuf::rt::uint32_size(6, self.lease_secs);
         }
         if self.grace_secs != 0 {
-            my_size += ::protobuf::rt::uint32_size(12, self.grace_secs);
+            my_size += ::protobuf::rt::uint32_size(7, self.grace_secs);
         }
         if !self.gateway_group_id.is_empty() {
-            my_size += ::protobuf::rt::string_size(13, &self.gateway_group_id);
+            my_size += ::protobuf::rt::string_size(8, &self.gateway_group_id);
+        }
+        for value in &self.gateway_channels {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if self.default_gateway_channel != ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN) {
+            my_size += ::protobuf::rt::int32_size(10, self.default_gateway_channel.value());
+        }
+        if !self.gateway_udp_public_key.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(11, &self.gateway_udp_public_key);
+        }
+        if !self.gateway_udp_key_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(12, &self.gateway_udp_key_id);
         }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
@@ -1131,38 +1321,41 @@ impl ::protobuf::Message for GatewayAccessGrant {
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
-        for v in &self.gateway_addrs {
-            os.write_string(1, &v)?;
-        };
-        if !self.gateway_server_name.is_empty() {
-            os.write_string(2, &self.gateway_server_name)?;
-        }
-        if !self.gateway_ca_pem.is_empty() {
-            os.write_bytes(3, &self.gateway_ca_pem)?;
-        }
         if !self.ticket.is_empty() {
-            os.write_bytes(4, &self.ticket)?;
+            os.write_bytes(1, &self.ticket)?;
         }
         if self.ticket_expire_unix_ms != 0 {
-            os.write_int64(5, self.ticket_expire_unix_ms)?;
+            os.write_int64(2, self.ticket_expire_unix_ms)?;
         }
         if self.session_id != 0 {
-            os.write_uint64(6, self.session_id)?;
+            os.write_uint64(3, self.session_id)?;
         }
         if self.policy_rev != 0 {
-            os.write_uint64(7, self.policy_rev)?;
+            os.write_uint64(4, self.policy_rev)?;
         }
         for v in &self.gateway_capabilities {
-            os.write_string(10, &v)?;
+            os.write_string(5, &v)?;
         };
         if self.lease_secs != 0 {
-            os.write_uint32(11, self.lease_secs)?;
+            os.write_uint32(6, self.lease_secs)?;
         }
         if self.grace_secs != 0 {
-            os.write_uint32(12, self.grace_secs)?;
+            os.write_uint32(7, self.grace_secs)?;
         }
         if !self.gateway_group_id.is_empty() {
-            os.write_string(13, &self.gateway_group_id)?;
+            os.write_string(8, &self.gateway_group_id)?;
+        }
+        for v in &self.gateway_channels {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+        };
+        if self.default_gateway_channel != ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN) {
+            os.write_enum(10, ::protobuf::EnumOrUnknown::value(&self.default_gateway_channel))?;
+        }
+        if !self.gateway_udp_public_key.is_empty() {
+            os.write_bytes(11, &self.gateway_udp_public_key)?;
+        }
+        if !self.gateway_udp_key_id.is_empty() {
+            os.write_string(12, &self.gateway_udp_key_id)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1181,9 +1374,6 @@ impl ::protobuf::Message for GatewayAccessGrant {
     }
 
     fn clear(&mut self) {
-        self.gateway_addrs.clear();
-        self.gateway_server_name.clear();
-        self.gateway_ca_pem.clear();
         self.ticket.clear();
         self.ticket_expire_unix_ms = 0;
         self.session_id = 0;
@@ -1192,14 +1382,15 @@ impl ::protobuf::Message for GatewayAccessGrant {
         self.lease_secs = 0;
         self.grace_secs = 0;
         self.gateway_group_id.clear();
+        self.gateway_channels.clear();
+        self.default_gateway_channel = ::protobuf::EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN);
+        self.gateway_udp_public_key.clear();
+        self.gateway_udp_key_id.clear();
         self.special_fields.clear();
     }
 
     fn default_instance() -> &'static GatewayAccessGrant {
         static instance: GatewayAccessGrant = GatewayAccessGrant {
-            gateway_addrs: ::std::vec::Vec::new(),
-            gateway_server_name: ::std::string::String::new(),
-            gateway_ca_pem: ::std::vec::Vec::new(),
             ticket: ::std::vec::Vec::new(),
             ticket_expire_unix_ms: 0,
             session_id: 0,
@@ -1208,6 +1399,10 @@ impl ::protobuf::Message for GatewayAccessGrant {
             lease_secs: 0,
             grace_secs: 0,
             gateway_group_id: ::std::string::String::new(),
+            gateway_channels: ::std::vec::Vec::new(),
+            default_gateway_channel: ::protobuf::EnumOrUnknown::from_i32(0),
+            gateway_udp_public_key: ::std::vec::Vec::new(),
+            gateway_udp_key_id: ::std::string::String::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -5935,6 +6130,64 @@ impl ::protobuf::reflect::ProtobufValue for RouteItem {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:GatewayChannelKind)
+pub enum GatewayChannelKind {
+    // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_UNKNOWN)
+    GATEWAY_CHANNEL_UNKNOWN = 0,
+    // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_UDP)
+    GATEWAY_CHANNEL_UDP = 1,
+    // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_QUIC)
+    GATEWAY_CHANNEL_QUIC = 2,
+}
+
+impl ::protobuf::Enum for GatewayChannelKind {
+    const NAME: &'static str = "GatewayChannelKind";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<GatewayChannelKind> {
+        match value {
+            0 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN),
+            1 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+            2 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [GatewayChannelKind] = &[
+        GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN,
+        GatewayChannelKind::GATEWAY_CHANNEL_UDP,
+        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+    ];
+}
+
+impl ::protobuf::EnumFull for GatewayChannelKind {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("GatewayChannelKind").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for GatewayChannelKind {
+    fn default() -> Self {
+        GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN
+    }
+}
+
+impl GatewayChannelKind {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GatewayChannelKind>("GatewayChannelKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 // @@protoc_insertion_point(enum:PunchNatType)
 pub enum PunchNatType {
     // @@protoc_insertion_point(enum_value:PunchNatType.Symmetric)
@@ -6153,111 +6406,116 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x0cR\npublicIpv6\x12E\n\x14gateway_access_grant\x18\t\x20\x01(\x0b2\x13\
     .GatewayAccessGrantR\x12gatewayAccessGrant\x12\x1d\n\nerror_code\x18\n\
     \x20\x01(\rR\terrorCode\x12#\n\rerror_message\x18\x0b\x20\x01(\tR\x0cerr\
-    orMessage\"\xbf\x03\n\x12GatewayAccessGrant\x12#\n\rgateway_addrs\x18\
-    \x01\x20\x03(\tR\x0cgatewayAddrs\x12.\n\x13gateway_server_name\x18\x02\
-    \x20\x01(\tR\x11gatewayServerName\x12$\n\x0egateway_ca_pem\x18\x03\x20\
-    \x01(\x0cR\x0cgatewayCaPem\x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06\
-    ticket\x121\n\x15ticket_expire_unix_ms\x18\x05\x20\x01(\x03R\x12ticketEx\
-    pireUnixMs\x12\x1d\n\nsession_id\x18\x06\x20\x01(\x04R\tsessionId\x12\
-    \x1d\n\npolicy_rev\x18\x07\x20\x01(\x04R\tpolicyRev\x121\n\x14gateway_ca\
-    pabilities\x18\n\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\nlease_sec\
-    s\x18\x0b\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\x0c\x20\x01(\
-    \rR\tgraceSecs\x12(\n\x10gateway_group_id\x18\r\x20\x01(\tR\x0egatewayGr\
-    oupIdJ\x04\x08\x08\x10\tJ\x04\x08\t\x10\n\"\xcd\x01\n\x1aRefreshGatewayG\
-    rantRequest\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\x12\
-    \x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_session\
-    _id\x18\x03\x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\x18\
-    \x04\x20\x01(\x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\x01(\
-    \x08R\x0cforceReissue\"\x9b\x01\n\x1bRefreshGatewayGrantResponse\x12\x1d\
-    \n\nhas_update\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_access\
-    _grant\x18\x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGra\
-    nt\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xcb\x03\n\x13Gate\
-    wayTicketClaims\x12\x1b\n\tticket_id\x18\x01\x20\x01(\tR\x08ticketId\x12\
-    \x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\
-    \x18\x03\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x04\x20\x01(\
-    \x04R\tsessionId\x12'\n\x0fpolicy_revision\x18\x05\x20\x01(\x04R\x0epoli\
-    cyRevision\x12\x1f\n\x0bgateway_ids\x18\x06\x20\x03(\tR\ngatewayIds\x12(\
-    \n\x10gateway_group_id\x18\x07\x20\x01(\tR\x0egatewayGroupId\x12)\n\x11i\
-    ssued_at_unix_ms\x18\x08\x20\x01(\x03R\x0eissuedAtUnixMs\x12+\n\x12not_b\
-    efore_unix_ms\x18\t\x20\x01(\x03R\x0fnotBeforeUnixMs\x12$\n\x0eexpire_un\
-    ix_ms\x18\n\x20\x01(\x03R\x0cexpireUnixMs\x12$\n\x0elease_cap_secs\x18\
-    \x0b\x20\x01(\rR\x0cleaseCapSecs\x12$\n\x0egrace_cap_secs\x18\x0c\x20\
-    \x01(\rR\x0cgraceCapSecs\"t\n\x13SignedGatewayTicket\x12\x10\n\x03alg\
-    \x18\x01\x20\x01(\tR\x03alg\x12\x15\n\x06key_id\x18\x02\x20\x01(\tR\x05k\
-    eyId\x12\x16\n\x06claims\x18\x03\x20\x01(\x0cR\x06claims\x12\x1c\n\tsign\
-    ature\x18\x04\x20\x01(\x0cR\tsignature\"\xa1\x01\n\x14GatewayReportReque\
-    st\x12\x1d\n\ngateway_id\x18\x01\x20\x01(\tR\tgatewayId\x12\x1a\n\x08end\
-    point\x18\x02\x20\x01(\tR\x08endpoint\x12\"\n\x0ccapabilities\x18\x04\
-    \x20\x03(\tR\x0ccapabilities\x12$\n\x0ereport_unix_ms\x18\x05\x20\x01(\
-    \x03R\x0creportUnixMsJ\x04\x08\x03\x10\x04\"\x7f\n\x10GatewayReportAck\
-    \x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\
-    \x20\x01(\tR\x06reason\x12\x1d\n\ngateway_id\x18\x03\x20\x01(\tR\tgatewa\
-    yId\x12$\n\x0eexpire_unix_ms\x18\x04\x20\x01(\x03R\x0cexpireUnixMs\"\xe5\
-    \x01\n\x13GatewayConnectHello\x12\x1b\n\tdevice_id\x18\x01\x20\x01(\tR\
-    \x08deviceId\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12\
-    \x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x16\n\x06ticket\
-    \x18\x04\x20\x01(\x0cR\x06ticket\x12\x14\n\x05nonce\x18\x05\x20\x01(\x0c\
-    R\x05nonce\x12-\n\x13client_time_unix_ms\x18\x06\x20\x01(\x03R\x10client\
-    TimeUnixMs\x12\x16\n\x06reauth\x18\n\x20\x01(\x08R\x06reauth\"\xb3\x02\n\
-    \x11GatewayConnectAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\
-    \x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\nsession_id\x18\
-    \x03\x20\x01(\x04R\tsessionId\x12%\n\x0enegotiated_mtu\x18\x04\x20\x01(\
-    \rR\rnegotiatedMtu\x12%\n\x0ekeepalive_secs\x18\x05\x20\x01(\rR\rkeepali\
-    veSecs\x12/\n\x14lease_expire_unix_ms\x18\x06\x20\x01(\x03R\x11leaseExpi\
-    reUnixMs\x12/\n\x14grace_expire_unix_ms\x18\x07\x20\x01(\x03R\x11graceEx\
-    pireUnixMs\x12'\n\x0freauth_required\x18\x08\x20\x01(\x08R\x0ereauthRequ\
-    ired\"\x9d\x01\n\x11DeviceAuthRequest\x12\x17\n\x07user_id\x18\x01\x20\
-    \x01(\tR\x06userId\x12\x14\n\x05group\x18\x02\x20\x01(\tR\x05group\x12\
-    \x1b\n\tdevice_id\x18\x03\x20\x01(\tR\x08deviceId\x12\x16\n\x06ticket\
-    \x18\x04\x20\x01(\tR\x06ticket\x12$\n\x0edevice_pub_key\x18\x05\x20\x01(\
-    \x0cR\x0cdevicePubKey\"\xb5\x01\n\x13DeviceAuthChallenge\x12!\n\x0cchall\
-    enge_id\x18\x01\x20\x01(\tR\x0bchallengeId\x12\x14\n\x05nonce\x18\x02\
-    \x20\x01(\x0cR\x05nonce\x12$\n\x0eexpire_unix_ms\x18\x03\x20\x01(\x03R\
-    \x0cexpireUnixMs\x12'\n\x0freauth_required\x18\x04\x20\x01(\x08R\x0ereau\
-    thRequired\x12\x16\n\x06reason\x18\x05\x20\x01(\tR\x06reason\"\x95\x01\n\
-    \x0fDeviceAuthProof\x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\x0bchalle\
-    ngeId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12$\n\x0edev\
-    ice_pub_key\x18\x03\x20\x01(\x0cR\x0cdevicePubKey\x12\x1c\n\tsignature\
-    \x18\x04\x20\x01(\x0cR\tsignature\"\xdb\x01\n\rDeviceAuthAck\x12\x0e\n\
-    \x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\
-    \tR\x06reason\x12\x17\n\x07user_id\x18\x03\x20\x01(\tR\x06userId\x12\x14\
-    \n\x05group\x18\x04\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x05\
-    \x20\x01(\tR\x08deviceId\x12-\n\x13auth_expire_unix_ms\x18\x06\x20\x01(\
-    \x03R\x10authExpireUnixMs\x12'\n\x0freauth_required\x18\x07\x20\x01(\x08\
-    R\x0ereauthRequired\"\xe9\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\
-    \x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtua\
-    lIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1c\n\
-    \twireguard\x18\x06\x20\x01(\x08R\twireguard\x12\x1b\n\tdevice_id\x18\
-    \x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\
-    \x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonli\
-    neKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\
-    \x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edev\
-    iceInfoList\"\xdd\x03\n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\
-    \x03(\x07R\x0cpublicIpList\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\
-    \npublicPort\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPo\
-    rtRange\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natT\
-    ype\x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\x08local\
-    _ip\x18\x07\x20\x01(\x07R\x07localIp\x12\x1d\n\nlocal_port\x18\x08\x20\
-    \x01(\rR\tlocalPort\x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv6\x12\
-    \x1b\n\tipv6_port\x18\n\x20\x01(\rR\x08ipv6Port\x12\x19\n\x08tcp_port\
-    \x18\x0b\x20\x01(\rR\x07tcpPort\x12\x1b\n\tudp_ports\x18\x0c\x20\x03(\rR\
-    \x08udpPorts\x12!\n\x0cpublic_ports\x18\r\x20\x03(\rR\x0bpublicPorts\x12\
-    &\n\x0fpublic_tcp_port\x18\x0e\x20\x01(\rR\rpublicTcpPort\x12/\n\x0bpunc\
-    h_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\"Y\n\rPunch\
-    Endpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\
-    \x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04\
-    ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPunchR\
-    equest\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\
-    \x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\
-    \x20\x01(\x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\
-    \r.PunchNatTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\x20\
-    \x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\x18\
-    \x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\x129\n\x10targe\
-    t_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoints\
-    \x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_\
-    ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\x01\
-    (\x03R\x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_id\
-    \x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\
+    orMessage\"\x85\x01\n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\
+    \x0e2\x13.GatewayChannelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\
+    \tR\x04addr\x12\x1f\n\x0bserver_name\x18\x03\x20\x01(\tR\nserverName\x12\
+    \x15\n\x06ca_pem\x18\x04\x20\x01(\x0cR\x05caPem\"\xa3\x04\n\x12GatewayAc\
+    cessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\n\x15\
+    ticket_expire_unix_ms\x18\x02\x20\x01(\x03R\x12ticketExpireUnixMs\x12\
+    \x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x1d\n\npolicy_re\
+    v\x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14gateway_capabilities\x18\
+    \x05\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\nlease_secs\x18\x06\
+    \x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\x07\x20\x01(\rR\tgrace\
+    Secs\x12(\n\x10gateway_group_id\x18\x08\x20\x01(\tR\x0egatewayGroupId\
+    \x12:\n\x10gateway_channels\x18\t\x20\x03(\x0b2\x0f.GatewayChannelR\x0fg\
+    atewayChannels\x12K\n\x17default_gateway_channel\x18\n\x20\x01(\x0e2\x13\
+    .GatewayChannelKindR\x15defaultGatewayChannel\x123\n\x16gateway_udp_publ\
+    ic_key\x18\x0b\x20\x01(\x0cR\x13gatewayUdpPublicKey\x12+\n\x12gateway_ud\
+    p_key_id\x18\x0c\x20\x01(\tR\x0fgatewayUdpKeyId\"\xcd\x01\n\x1aRefreshGa\
+    tewayGrantRequest\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\
+    \x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_ses\
+    sion_id\x18\x03\x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\
+    \x18\x04\x20\x01(\x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\
+    \x01(\x08R\x0cforceReissue\"\x9b\x01\n\x1bRefreshGatewayGrantResponse\
+    \x12\x1d\n\nhas_update\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gatewa\
+    y_access_grant\x18\x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayA\
+    ccessGrant\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xcb\x03\n\
+    \x13GatewayTicketClaims\x12\x1b\n\tticket_id\x18\x01\x20\x01(\tR\x08tick\
+    etId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x1d\n\nvir\
+    tual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x04\
+    \x20\x01(\x04R\tsessionId\x12'\n\x0fpolicy_revision\x18\x05\x20\x01(\x04\
+    R\x0epolicyRevision\x12\x1f\n\x0bgateway_ids\x18\x06\x20\x03(\tR\ngatewa\
+    yIds\x12(\n\x10gateway_group_id\x18\x07\x20\x01(\tR\x0egatewayGroupId\
+    \x12)\n\x11issued_at_unix_ms\x18\x08\x20\x01(\x03R\x0eissuedAtUnixMs\x12\
+    +\n\x12not_before_unix_ms\x18\t\x20\x01(\x03R\x0fnotBeforeUnixMs\x12$\n\
+    \x0eexpire_unix_ms\x18\n\x20\x01(\x03R\x0cexpireUnixMs\x12$\n\x0elease_c\
+    ap_secs\x18\x0b\x20\x01(\rR\x0cleaseCapSecs\x12$\n\x0egrace_cap_secs\x18\
+    \x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\x13SignedGatewayTicket\x12\x10\n\
+    \x03alg\x18\x01\x20\x01(\tR\x03alg\x12\x15\n\x06key_id\x18\x02\x20\x01(\
+    \tR\x05keyId\x12\x16\n\x06claims\x18\x03\x20\x01(\x0cR\x06claims\x12\x1c\
+    \n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xa1\x01\n\x14GatewayRep\
+    ortRequest\x12\x1d\n\ngateway_id\x18\x01\x20\x01(\tR\tgatewayId\x12\x1a\
+    \n\x08endpoint\x18\x02\x20\x01(\tR\x08endpoint\x12\"\n\x0ccapabilities\
+    \x18\x04\x20\x03(\tR\x0ccapabilities\x12$\n\x0ereport_unix_ms\x18\x05\
+    \x20\x01(\x03R\x0creportUnixMsJ\x04\x08\x03\x10\x04\"\x7f\n\x10GatewayRe\
+    portAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\
+    \x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\ngateway_id\x18\x03\x20\x01(\tR\
+    \tgatewayId\x12$\n\x0eexpire_unix_ms\x18\x04\x20\x01(\x03R\x0cexpireUnix\
+    Ms\"\xe5\x01\n\x13GatewayConnectHello\x12\x1b\n\tdevice_id\x18\x01\x20\
+    \x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtua\
+    lIp\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x16\n\x06\
+    ticket\x18\x04\x20\x01(\x0cR\x06ticket\x12\x14\n\x05nonce\x18\x05\x20\
+    \x01(\x0cR\x05nonce\x12-\n\x13client_time_unix_ms\x18\x06\x20\x01(\x03R\
+    \x10clientTimeUnixMs\x12\x16\n\x06reauth\x18\n\x20\x01(\x08R\x06reauth\"\
+    \xb3\x02\n\x11GatewayConnectAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\
+    \x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\nsess\
+    ion_id\x18\x03\x20\x01(\x04R\tsessionId\x12%\n\x0enegotiated_mtu\x18\x04\
+    \x20\x01(\rR\rnegotiatedMtu\x12%\n\x0ekeepalive_secs\x18\x05\x20\x01(\rR\
+    \rkeepaliveSecs\x12/\n\x14lease_expire_unix_ms\x18\x06\x20\x01(\x03R\x11\
+    leaseExpireUnixMs\x12/\n\x14grace_expire_unix_ms\x18\x07\x20\x01(\x03R\
+    \x11graceExpireUnixMs\x12'\n\x0freauth_required\x18\x08\x20\x01(\x08R\
+    \x0ereauthRequired\"\x9d\x01\n\x11DeviceAuthRequest\x12\x17\n\x07user_id\
+    \x18\x01\x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x02\x20\x01(\tR\
+    \x05group\x12\x1b\n\tdevice_id\x18\x03\x20\x01(\tR\x08deviceId\x12\x16\n\
+    \x06ticket\x18\x04\x20\x01(\tR\x06ticket\x12$\n\x0edevice_pub_key\x18\
+    \x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\x01\n\x13DeviceAuthChallenge\
+    \x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\x0bchallengeId\x12\x14\n\x05\
+    nonce\x18\x02\x20\x01(\x0cR\x05nonce\x12$\n\x0eexpire_unix_ms\x18\x03\
+    \x20\x01(\x03R\x0cexpireUnixMs\x12'\n\x0freauth_required\x18\x04\x20\x01\
+    (\x08R\x0ereauthRequired\x12\x16\n\x06reason\x18\x05\x20\x01(\tR\x06reas\
+    on\"\x95\x01\n\x0fDeviceAuthProof\x12!\n\x0cchallenge_id\x18\x01\x20\x01\
+    (\tR\x0bchallengeId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\
+    \x12$\n\x0edevice_pub_key\x18\x03\x20\x01(\x0cR\x0cdevicePubKey\x12\x1c\
+    \n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xdb\x01\n\rDeviceAuthAc\
+    k\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\
+    \x02\x20\x01(\tR\x06reason\x12\x17\n\x07user_id\x18\x03\x20\x01(\tR\x06u\
+    serId\x12\x14\n\x05group\x18\x04\x20\x01(\tR\x05group\x12\x1b\n\tdevice_\
+    id\x18\x05\x20\x01(\tR\x08deviceId\x12-\n\x13auth_expire_unix_ms\x18\x06\
+    \x20\x01(\x03R\x10authExpireUnixMs\x12'\n\x0freauth_required\x18\x07\x20\
+    \x01(\x08R\x0ereauthRequired\"\xe9\x01\n\nDeviceInfo\x12\x12\n\x04name\
+    \x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\
+    \tvirtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\
+    \x12\x1c\n\twireguard\x18\x06\x20\x01(\x08R\twireguard\x12\x1b\n\tdevice\
+    _id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\
+    \x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\
+    \x0bonlineKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\
+    \x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInf\
+    oR\x0edeviceInfoList\"\xdd\x03\n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\
+    \x02\x20\x03(\x07R\x0cpublicIpList\x12\x1f\n\x0bpublic_port\x18\x03\x20\
+    \x01(\rR\npublicPort\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0f\
+    publicPortRange\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\
+    \x07natType\x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\
+    \x08local_ip\x18\x07\x20\x01(\x07R\x07localIp\x12\x1d\n\nlocal_port\x18\
+    \x08\x20\x01(\rR\tlocalPort\x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv\
+    6\x12\x1b\n\tipv6_port\x18\n\x20\x01(\rR\x08ipv6Port\x12\x19\n\x08tcp_po\
+    rt\x18\x0b\x20\x01(\rR\x07tcpPort\x12\x1b\n\tudp_ports\x18\x0c\x20\x03(\
+    \rR\x08udpPorts\x12!\n\x0cpublic_ports\x18\r\x20\x03(\rR\x0bpublicPorts\
+    \x12&\n\x0fpublic_tcp_port\x18\x0e\x20\x01(\rR\rpublicTcpPort\x12/\n\x0b\
+    punch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\"Y\n\rP\
+    unchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04po\
+    rt\x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\
+    \x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPu\
+    nchRequest\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\
+    \x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\
+    \x03\x20\x01(\x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\
+    \x0e2\r.PunchNatTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\
+    \x20\x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\
+    \x18\x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\x129\n\x10t\
+    arget_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoi\
+    nts\x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeo\
+    ut_ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\
+    \x01(\x03R\x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_\
+    id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\
     \x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\
     \x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\
     \x18\x05\x20\x01(\tR\x06reason\"\xf5\x01\n\nPunchStart\x12\x1d\n\nsessio\
@@ -6281,14 +6539,16 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x20\x03(\x07R\x0cpublicIpList\x12(\n\x10public_udp_ports\x18\x07\x20\
     \x03(\rR\x0epublicUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\
     \rlocalUdpPorts\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\
-    \x07R\x06nextIp*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\
-    \x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04\
-    IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\x12\
-    \x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07IPv6\
-    Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknow\
-    n\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResult\
-    Failed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13Punc\
-    hResultCanceled\x10\x04b\x06proto3\
+    \x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_U\
+    NKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEW\
+    AY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\
+    \x08\n\x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\
+    \n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\
+    \x03\x12\x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\
+    \x07IPv6Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResu\
+    ltUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11Pun\
+    chResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\
+    \x13PunchResultCanceled\x10\x04b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -6306,11 +6566,12 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(27);
+            let mut messages = ::std::vec::Vec::with_capacity(28);
             messages.push(HandshakeRequest::generated_message_descriptor_data());
             messages.push(HandshakeResponse::generated_message_descriptor_data());
             messages.push(RegistrationRequest::generated_message_descriptor_data());
             messages.push(RegistrationResponse::generated_message_descriptor_data());
+            messages.push(GatewayChannel::generated_message_descriptor_data());
             messages.push(GatewayAccessGrant::generated_message_descriptor_data());
             messages.push(RefreshGatewayGrantRequest::generated_message_descriptor_data());
             messages.push(RefreshGatewayGrantResponse::generated_message_descriptor_data());
@@ -6334,7 +6595,8 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(PunchResult::generated_message_descriptor_data());
             messages.push(ClientStatusInfo::generated_message_descriptor_data());
             messages.push(RouteItem::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(3);
+            let mut enums = ::std::vec::Vec::with_capacity(4);
+            enums.push(GatewayChannelKind::generated_enum_descriptor_data());
             enums.push(PunchNatType::generated_enum_descriptor_data());
             enums.push(PunchNatModel::generated_enum_descriptor_data());
             enums.push(PunchResultCode::generated_enum_descriptor_data());

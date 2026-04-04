@@ -16,9 +16,14 @@ const NOTIFY: Token = Token(0);
 
 #[derive(Clone)]
 pub struct UdpChannel {
+    driver: UdpSocketDriver,
+    stats: DataPlaneStats,
+}
+
+#[derive(Clone)]
+pub(crate) struct UdpSocketDriver {
     socket: Arc<UdpSocket>,
     dual_stack: bool,
-    stats: DataPlaneStats,
 }
 
 impl UdpChannel {
@@ -28,27 +33,16 @@ impl UdpChannel {
             .as_ref()
             .and_then(|ports| ports.first().copied())
             .unwrap_or(0);
-        let default_interface = config.local_interface.clone();
-        let (socket, dual_stack) = match bind_dual_stack_udp(port, &default_interface) {
-            Ok(socket) => (socket, true),
-            Err(e) => {
-                log::warn!("bind dual-stack udp failed: {:?}", e);
-                (bind_ipv4_udp(port, &default_interface)?, false)
-            }
-        };
-        Ok(Self {
-            socket: Arc::new(socket),
-            dual_stack,
-            stats,
-        })
+        let driver = UdpSocketDriver::bind(port, &config.local_interface)?;
+        Ok(Self { driver, stats })
     }
 
     pub fn local_udp_port(&self) -> io::Result<u16> {
-        Ok(self.socket.local_addr()?.port())
+        Ok(self.driver.local_addr()?.port())
     }
 
     pub fn supports_ipv6(&self) -> bool {
-        self.dual_stack
+        self.driver.supports_ipv6()
     }
 
     pub fn up_traffic_total(&self) -> u64 {
@@ -80,8 +74,7 @@ impl UdpChannel {
     }
 
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        let addr = self.normalize_send_addr(addr);
-        self.socket.send_to(buf, addr)?;
+        self.driver.send_to(buf, addr)?;
         self.record_up_traffic(buf.len());
         Ok(())
     }
@@ -100,34 +93,11 @@ impl UdpChannel {
     where
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     {
-        listen(self.clone(), stop_manager, recv_handler)
-    }
-
-    fn normalize_send_addr(&self, addr: SocketAddr) -> SocketAddr {
-        if self.dual_stack {
-            if let SocketAddr::V4(addr_v4) = addr {
-                return SocketAddr::V6(std::net::SocketAddrV6::new(
-                    addr_v4.ip().to_ipv6_mapped(),
-                    addr_v4.port(),
-                    0,
-                    0,
-                ));
-            }
-        }
-        addr
-    }
-
-    fn normalize_recv_addr(&self, addr: SocketAddr) -> SocketAddr {
-        match addr {
-            SocketAddr::V6(addr_v6) => {
-                if let Some(ipv4) = addr_v6.ip().to_ipv4_mapped() {
-                    SocketAddr::new(IpAddr::V4(ipv4), addr_v6.port())
-                } else {
-                    SocketAddr::V6(addr_v6)
-                }
-            }
-            SocketAddr::V4(_) => addr,
-        }
+        let channel = self.clone();
+        self.driver
+            .start_named(stop_manager, "mainUdp", recv_handler, move |len| {
+                channel.record_down_traffic(len);
+            })
     }
 
     fn record_up_traffic(&self, len: usize) {
@@ -136,6 +106,71 @@ impl UdpChannel {
 
     fn record_down_traffic(&self, len: usize) {
         self.stats.record_down(0, len);
+    }
+}
+
+impl UdpSocketDriver {
+    pub(crate) fn bind(
+        port: u16,
+        default_interface: &crate::transport::socket::LocalInterface,
+    ) -> anyhow::Result<Self> {
+        let (socket, dual_stack) = match bind_dual_stack_udp(port, default_interface) {
+            Ok(socket) => (socket, true),
+            Err(e) => {
+                log::warn!("bind dual-stack udp failed: {:?}", e);
+                (bind_ipv4_udp(port, default_interface)?, false)
+            }
+        };
+        Ok(Self {
+            socket: Arc::new(socket),
+            dual_stack,
+        })
+    }
+
+    pub(crate) fn bind_unspecified_for_remote(remote_addr: SocketAddr) -> anyhow::Result<Self> {
+        let bind_addr = match remote_addr {
+            SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        };
+        let socket = UdpSocket::bind(bind_addr)?;
+        Ok(Self {
+            socket: Arc::new(socket),
+            dual_stack: false,
+        })
+    }
+
+    pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    pub(crate) fn supports_ipv6(&self) -> bool {
+        self.dual_stack
+    }
+
+    pub(crate) fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        let addr = normalize_send_addr(self.dual_stack, addr);
+        self.socket.send_to(buf, addr)?;
+        Ok(())
+    }
+
+    pub(crate) fn start_named<H, D>(
+        &self,
+        stop_manager: StopManager,
+        worker_name: &str,
+        recv_handler: H,
+        down_traffic_hook: D,
+    ) -> anyhow::Result<()>
+    where
+        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        D: Fn(usize) + Clone + Send + Sync + 'static,
+    {
+        listen(
+            self.clone(),
+            stop_manager,
+            worker_name,
+            recv_handler,
+            down_traffic_hook,
+        )
     }
 }
 
@@ -163,40 +198,48 @@ fn bind_ipv4_udp(
     Ok(socket.into())
 }
 
-fn listen<H>(
-    udp_channel: UdpChannel,
+fn listen<H, D>(
+    driver: UdpSocketDriver,
     stop_manager: StopManager,
+    worker_name: &str,
     recv_handler: H,
+    down_traffic_hook: D,
 ) -> anyhow::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
     let waker = Arc::new(Waker::new(poll.registry(), NOTIFY)?);
     let wake = waker.clone();
-    let worker = stop_manager.add_listener("main_udp".into(), move || {
+    let worker_name = worker_name.to_string();
+    let worker = stop_manager.add_listener(worker_name.clone(), move || {
         if let Err(e) = wake.wake() {
             log::error!("{:?}", e);
         }
     })?;
-    thread::Builder::new()
-        .name("mainUdp".into())
-        .spawn(move || {
-            if let Err(e) = listen_loop(udp_channel, poll, recv_handler) {
-                log::error!("{:?}", e);
-            }
-            drop(waker);
-            worker.stop_all();
-        })?;
+    thread::Builder::new().name(worker_name).spawn(move || {
+        if let Err(e) = listen_loop(driver, poll, recv_handler, down_traffic_hook) {
+            log::error!("{:?}", e);
+        }
+        drop(waker);
+        worker.stop_all();
+    })?;
     Ok(())
 }
 
-fn listen_loop<H>(udp_channel: UdpChannel, mut poll: Poll, recv_handler: H) -> io::Result<()>
+fn listen_loop<H, D>(
+    driver: UdpSocketDriver,
+    mut poll: Poll,
+    recv_handler: H,
+    down_traffic_hook: D,
+) -> io::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
-    let udp_socket = udp_channel.socket.try_clone()?;
+    let udp_socket = driver.socket.try_clone()?;
     udp_socket.set_nonblocking(true)?;
     let mut udp = MioUdpSocket::from_std(udp_socket);
     poll.registry()
@@ -221,14 +264,11 @@ where
             loop {
                 match udp.recv_from(&mut buf) {
                     Ok((len, addr)) => {
-                        udp_channel.record_down_traffic(len);
+                        down_traffic_hook(len);
                         recv_handler(
                             &mut buf[..len],
                             &mut extend,
-                            RouteKey::new(
-                                ConnectProtocol::UDP,
-                                udp_channel.normalize_recv_addr(addr),
-                            ),
+                            RouteKey::new(ConnectProtocol::UDP, normalize_recv_addr(addr)),
                         )
                     }
                     Err(e) => {
@@ -243,9 +283,36 @@ where
     }
 }
 
+pub(crate) fn normalize_send_addr(dual_stack: bool, addr: SocketAddr) -> SocketAddr {
+    if dual_stack {
+        if let SocketAddr::V4(addr_v4) = addr {
+            return SocketAddr::V6(std::net::SocketAddrV6::new(
+                addr_v4.ip().to_ipv6_mapped(),
+                addr_v4.port(),
+                0,
+                0,
+            ));
+        }
+    }
+    addr
+}
+
+pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V6(addr_v6) => {
+            if let Some(ipv4) = addr_v6.ip().to_ipv4_mapped() {
+                SocketAddr::new(IpAddr::V4(ipv4), addr_v6.port())
+            } else {
+                SocketAddr::V6(addr_v6)
+            }
+        }
+        SocketAddr::V4(_) => addr,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::UdpChannel;
+    use super::{normalize_recv_addr, normalize_send_addr, UdpChannel, UdpSocketDriver};
     use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -255,8 +322,10 @@ mod tests {
 
     fn test_channel(socket: UdpSocket, dual_stack: bool, enable_traffic: bool) -> UdpChannel {
         UdpChannel {
-            socket: Arc::new(socket),
-            dual_stack,
+            driver: UdpSocketDriver {
+                socket: Arc::new(socket),
+                dual_stack,
+            },
             stats: DataPlaneStats::new(enable_traffic),
         }
     }
@@ -266,7 +335,7 @@ mod tests {
         let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000));
 
-        let normalized = channel.normalize_send_addr(addr);
+        let normalized = normalize_send_addr(channel.driver.dual_stack, addr);
 
         assert_eq!(
             normalized,
@@ -289,7 +358,7 @@ mod tests {
             0,
         ));
 
-        let normalized = channel.normalize_recv_addr(mapped);
+        let normalized = normalize_recv_addr(mapped);
 
         assert_eq!(
             normalized,
@@ -313,7 +382,7 @@ mod tests {
         let mut buf = [0_u8; 64];
         let (len, from) = receiver.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..len], payload);
-        assert_eq!(from, sender.socket.local_addr().unwrap());
+        assert_eq!(from, sender.driver.socket.local_addr().unwrap());
         assert_eq!(sender.up_traffic_total(), payload.len() as u64);
         assert_eq!(
             sender.up_traffic_all(),

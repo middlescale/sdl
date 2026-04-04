@@ -155,8 +155,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime.config.device_id.clone(),
             );
             log::info!(
-                "gateway grant: addrs={:?} session_id={} policy_rev={} expire={} caps={:?}",
-                grant.gateway_addrs,
+                "gateway grant: channels={:?} default={:?} session_id={} policy_rev={} expire={} caps={:?}",
+                grant.gateway_channels,
+                grant.default_gateway_channel.enum_value_or_default(),
                 grant.session_id,
                 grant.policy_rev,
                 grant.ticket_expire_unix_ms,

@@ -6,8 +6,8 @@ pub mod command;
 pub mod config;
 #[cfg(feature = "command")]
 pub mod console_out;
-pub mod fs_access;
 pub mod frontend;
+pub mod fs_access;
 pub mod identifier;
 pub mod root_check;
 

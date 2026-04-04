@@ -145,17 +145,48 @@ pub fn add_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result
 }
 #[cfg(target_os = "linux")]
 pub fn add_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result<()> {
-    let cmd = if netmask.is_broadcast() {
-        format!("route add -host {:?} {}", address, name)
+    let prefix_len = u32::from(netmask).count_ones();
+    let route_target = if netmask.is_broadcast() {
+        format!("{address}/32")
     } else {
-        format!(
-            "route add -net {}/{} {}",
-            address,
-            u32::from(netmask).count_ones(),
-            name
-        )
+        format!("{address}/{prefix_len}")
     };
-    exe_cmd(&cmd)?;
+    if let Err(ip_err) = exe_linux_ip_route_cmd(name, &route_target) {
+        let fallback_cmd = if netmask.is_broadcast() {
+            format!("route add -host {:?} {}", address, name)
+        } else {
+            format!("route add -net {}/{} {}", address, prefix_len, name)
+        };
+        if let Err(route_err) = exe_cmd(&fallback_cmd) {
+            return Err(io::Error::new(
+                route_err.kind(),
+                format!("ip route error: {ip_err}; fallback route error: {route_err}"),
+            ));
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn exe_linux_ip_route_cmd(name: &str, route_target: &str) -> io::Result<()> {
+    use std::process::Command;
+
+    println!("exe cmd: ip route replace {} dev {}", route_target, name);
+    let out = Command::new("ip")
+        .arg("route")
+        .arg("replace")
+        .arg(route_target)
+        .arg("dev")
+        .arg(name)
+        .output()?;
+    if !out.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!(
+                "cmd=ip route replace {} dev {},out={:?}",
+                route_target, name, out
+            ),
+        ));
+    }
     Ok(())
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]

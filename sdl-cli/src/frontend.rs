@@ -1,5 +1,8 @@
 use crate::command::client::CommandClient;
+use crate::command::service_state::read_service_state;
 use crate::console_out;
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn print_usage() {
     println!("sdl <resume|list|info|route|suspend|auth|channel-change> [options]");
@@ -255,21 +258,39 @@ fn handle_auth(args: &[String]) -> i32 {
         }
     };
     match CommandClient::new().and_then(|mut client| client.auth(&user_id, &group, &ticket)) {
-        Ok(result) => {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "ok": true,
-                        "result": result
-                    }))
-                    .unwrap()
-                );
-            } else {
-                println!("{}", result);
+        Ok(result) => match wait_for_auth_result(&user_id, &group) {
+            Ok(message) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "result": message
+                        }))
+                        .unwrap()
+                    );
+                } else {
+                    println!("{}", message);
+                }
+                0
             }
-            0
-        }
+            Err(message) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": message,
+                            "submitted": result
+                        }))
+                        .unwrap()
+                    );
+                } else {
+                    eprintln!("{}", message);
+                }
+                1
+            }
+        },
         Err(e) => {
             if json {
                 println!(
@@ -288,6 +309,34 @@ fn handle_auth(args: &[String]) -> i32 {
     }
 }
 
+fn wait_for_auth_result(user_id: &str, group: &str) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut saw_pending = false;
+    while Instant::now() < deadline {
+        let state = read_service_state().map_err(|e| format!("auth state read failed: {}", e))?;
+        if let Some(last_error) = state.last_error {
+            return Err(format!("auth failed: {}", last_error));
+        }
+        if state.auth_pending {
+            saw_pending = true;
+        }
+        if state.authenticated_user_id.as_deref() == Some(user_id)
+            && state.authenticated_group.as_deref() == Some(group)
+        {
+            return Ok(format!(
+                "device authenticated: user_id={} group={}",
+                user_id, group
+            ));
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    if saw_pending {
+        Err("auth request submitted, but authentication is still pending".to_string())
+    } else {
+        Err("auth request submitted, but no final auth result was observed within 30s".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_auth_args;
@@ -300,7 +349,14 @@ mod tests {
             "ticket-1".to_string(),
         ];
         let parsed = parse_auth_args(&args).unwrap();
-        assert_eq!(parsed, ("u-1".to_string(), "default.ms.net".to_string(), "ticket-1".to_string()));
+        assert_eq!(
+            parsed,
+            (
+                "u-1".to_string(),
+                "default.ms.net".to_string(),
+                "ticket-1".to_string()
+            )
+        );
     }
 
     #[test]
@@ -313,7 +369,14 @@ mod tests {
             "ticket-1".to_string(),
         ];
         let parsed = parse_auth_args(&args).unwrap();
-        assert_eq!(parsed, ("u-1".to_string(), "sales.ms.net".to_string(), "ticket-1".to_string()));
+        assert_eq!(
+            parsed,
+            (
+                "u-1".to_string(),
+                "sales.ms.net".to_string(),
+                "ticket-1".to_string()
+            )
+        );
     }
 }
 

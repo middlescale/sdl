@@ -4,6 +4,7 @@ use quinn::{ClientConfig, Endpoint, RecvStream, SendStream};
 use rustls::RootCertStore;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -26,6 +27,7 @@ enum QuicCommand {
 
 struct ActiveConnection {
     addr: SocketAddr,
+    config_rev: u64,
     endpoint: Endpoint,
     send: SendStream,
 }
@@ -40,8 +42,15 @@ impl ActiveConnection {
 pub struct QuicChannel {
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
+    tls_config: Arc<Mutex<QuicTlsConfig>>,
+    config_rev: Arc<AtomicU64>,
     sender: Sender<QuicCommand>,
     receiver: Arc<Mutex<Option<Receiver<QuicCommand>>>>,
+}
+
+#[derive(Clone, Default)]
+struct QuicTlsConfig {
+    gateway_ca_pem: Vec<u8>,
 }
 
 impl QuicChannel {
@@ -50,6 +59,8 @@ impl QuicChannel {
         Self {
             server_addr: Arc::new(AtomicCell::new(server_addr)),
             server_name: Arc::new(Mutex::new(server_name)),
+            tls_config: Arc::new(Mutex::new(QuicTlsConfig::default())),
+            config_rev: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
         }
@@ -77,6 +88,8 @@ impl QuicChannel {
         let callback: PacketCallback = Arc::new(on_packet);
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
+        let tls_config = self.tls_config.clone();
+        let config_rev = self.config_rev.clone();
         let worker_name = worker_name.to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
         let worker = stop_manager.add_listener(worker_name.clone(), move || {
@@ -91,7 +104,15 @@ impl QuicChannel {
             .name(worker_name.clone())
             .spawn(move || {
                 let worker_task = runtime.spawn(async move {
-                    run_quic_worker(receiver, server_addr, server_name, callback).await;
+                    run_quic_worker(
+                        receiver,
+                        server_addr,
+                        server_name,
+                        tls_config,
+                        config_rev,
+                        callback,
+                    )
+                    .await;
                 });
                 runtime.block_on(async {
                     let mut worker_task = worker_task;
@@ -112,10 +133,19 @@ impl QuicChannel {
 
     pub fn update_server_addr(&self, server_addr: SocketAddr) {
         self.server_addr.store(server_addr);
+        self.config_rev.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn update_server_name(&self, server_name: String) {
         *self.server_name.lock() = server_name;
+        self.config_rev.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn update_gateway_tls_auth(&self, gateway_ca_pem: &[u8]) {
+        *self.tls_config.lock() = QuicTlsConfig {
+            gateway_ca_pem: gateway_ca_pem.to_vec(),
+        };
+        self.config_rev.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -136,6 +166,8 @@ async fn run_quic_worker(
     mut receiver: Receiver<QuicCommand>,
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
+    tls_config: Arc<Mutex<QuicTlsConfig>>,
+    config_rev: Arc<AtomicU64>,
     on_packet: PacketCallback,
 ) {
     let mut active: Option<ActiveConnection> = None;
@@ -143,14 +175,16 @@ async fn run_quic_worker(
         match command {
             QuicCommand::Send(data) => {
                 let addr = server_addr.load();
-                if active.as_ref().map(|v| v.addr) != Some(addr) {
+                let current_rev = config_rev.load(Ordering::Relaxed);
+                if active.as_ref().map(|v| (v.addr, v.config_rev)) != Some((addr, current_rev)) {
                     if let Some(connection) = active.take() {
                         connection.close();
                     }
                 }
                 if active.is_none() {
                     let name = server_name.lock().clone();
-                    match connect(addr, &name, b"sdl-control").await {
+                    let tls = tls_config.lock().clone();
+                    match connect(addr, &name, b"sdl-control", &tls).await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -173,6 +207,7 @@ async fn run_quic_worker(
                             });
                             active = Some(ActiveConnection {
                                 addr,
+                                config_rev: current_rev,
                                 endpoint,
                                 send,
                             });
@@ -194,7 +229,9 @@ async fn run_quic_worker(
                         connection.close();
                     }
                     let name = server_name.lock().clone();
-                    match connect(addr, &name, b"sdl-control").await {
+                    let tls = tls_config.lock().clone();
+                    let current_rev = config_rev.load(Ordering::Relaxed);
+                    match connect(addr, &name, b"sdl-control", &tls).await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -221,6 +258,7 @@ async fn run_quic_worker(
                             } else {
                                 active = Some(ActiveConnection {
                                     addr,
+                                    config_rev: current_rev,
                                     endpoint,
                                     send,
                                 });
@@ -247,25 +285,13 @@ pub(crate) struct QuicClientConnection {
     pub recv: RecvStream,
 }
 
-pub(crate) async fn connect(
+async fn connect(
     addr: SocketAddr,
     server_name: &str,
     alpn: &[u8],
+    tls_config: &QuicTlsConfig,
 ) -> anyhow::Result<QuicClientConnection> {
-    let mut roots = RootCertStore::empty();
-    let certs = rustls_native_certs::load_native_certs();
-    for cert in certs.certs {
-        if let Err(e) = roots.add(cert) {
-            log::warn!("skip system cert {:?}", e);
-        }
-    }
-    if roots.is_empty() {
-        anyhow::bail!("no valid system root certificates for quic");
-    }
-
-    let mut client_crypto = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let mut client_crypto = build_client_crypto(tls_config)?;
     client_crypto.alpn_protocols = vec![alpn.to_vec()];
     let quic_crypto = QuicClientConfig::try_from(client_crypto)?;
     let client_config = ClientConfig::new(Arc::new(quic_crypto));
@@ -289,6 +315,30 @@ pub(crate) async fn connect(
         send,
         recv,
     })
+}
+
+fn build_client_crypto(tls_config: &QuicTlsConfig) -> anyhow::Result<rustls::ClientConfig> {
+    let mut roots = RootCertStore::empty();
+    let certs = rustls_native_certs::load_native_certs();
+    for cert in certs.certs {
+        if let Err(e) = roots.add(cert) {
+            log::warn!("skip system cert {:?}", e);
+        }
+    }
+    if !tls_config.gateway_ca_pem.is_empty() {
+        let mut reader = std::io::BufReader::new(tls_config.gateway_ca_pem.as_slice());
+        let certs: Vec<_> = rustls_pemfile::certs(&mut reader).collect::<Result<_, _>>()?;
+        let (added, _) = roots.add_parsable_certificates(certs);
+        if added == 0 {
+            anyhow::bail!("gateway_ca_pem did not contain any valid CA certificates");
+        }
+    }
+    if roots.is_empty() {
+        anyhow::bail!("no valid system root certificates for quic");
+    }
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
 }
 
 pub fn extract_server_name(addr: &str) -> String {

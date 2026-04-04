@@ -10,6 +10,37 @@ pub fn console_info(status: Info) {
     println!("Name: {}", style(status.name).green());
     println!("Virtual ip: {}", style(status.virtual_ip).green());
     println!("Virtual gateway: {}", style(status.virtual_gateway).green());
+    if status
+        .gateway_session_status
+        .eq_ignore_ascii_case("connected")
+    {
+        println!(
+            "Gateway session: {}",
+            style(status.gateway_session_status).green()
+        );
+    } else if status
+        .gateway_session_status
+        .eq_ignore_ascii_case("reauth-required")
+    {
+        println!(
+            "Gateway session: {}",
+            style(status.gateway_session_status).yellow()
+        );
+    } else {
+        println!(
+            "Gateway session: {}",
+            style(status.gateway_session_status).red()
+        );
+    }
+    if !status.gateway_endpoint.is_empty() {
+        println!(
+            "Gateway endpoint: {}",
+            style(status.gateway_endpoint).green()
+        );
+    }
+    if !status.gateway_channel.is_empty() {
+        println!("Gateway channel: {}", style(status.gateway_channel).green());
+    }
     println!("Virtual netmask: {}", style(status.virtual_netmask).green());
     if status.connect_status.eq_ignore_ascii_case("Connected") {
         println!(

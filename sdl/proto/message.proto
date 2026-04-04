@@ -36,19 +36,30 @@ message RegistrationResponse {
     uint32 error_code = 10;
     string error_message = 11;
 }
+enum GatewayChannelKind {
+    GATEWAY_CHANNEL_UNKNOWN = 0;
+    GATEWAY_CHANNEL_UDP = 1;
+    GATEWAY_CHANNEL_QUIC = 2;
+}
+message GatewayChannel {
+    GatewayChannelKind kind = 1;
+    string addr = 2;
+    string server_name = 3;
+    bytes ca_pem = 4;
+}
 message GatewayAccessGrant {
-    repeated string gateway_addrs = 1;
-    string gateway_server_name = 2;
-    bytes gateway_ca_pem = 3;
-    bytes ticket = 4;
-    int64 ticket_expire_unix_ms = 5;
-    uint64 session_id = 6;
-    uint64 policy_rev = 7;
-    reserved 8, 9;
-    repeated string gateway_capabilities = 10;
-    uint32 lease_secs = 11;
-    uint32 grace_secs = 12;
-    string gateway_group_id = 13;
+    bytes ticket = 1;
+    int64 ticket_expire_unix_ms = 2;
+    uint64 session_id = 3;
+    uint64 policy_rev = 4;
+    repeated string gateway_capabilities = 5;
+    uint32 lease_secs = 6;
+    uint32 grace_secs = 7;
+    string gateway_group_id = 8;
+    repeated GatewayChannel gateway_channels = 9;
+    GatewayChannelKind default_gateway_channel = 10;
+    bytes gateway_udp_public_key = 11;
+    string gateway_udp_key_id = 12;
 }
 message RefreshGatewayGrantRequest {
     fixed32 virtual_ip = 1;

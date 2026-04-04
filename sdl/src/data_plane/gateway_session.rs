@@ -14,8 +14,11 @@ use rand::RngCore;
 
 use crate::data_plane::route::RouteKey;
 use crate::handle::{now_time, CurrentDeviceInfo};
-use crate::proto::message::{GatewayAccessGrant, GatewayConnectAck, GatewayConnectHello};
+use crate::proto::message::{
+    GatewayAccessGrant, GatewayChannelKind, GatewayConnectAck, GatewayConnectHello,
+};
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
+use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
 use crate::util::StopManager;
 
@@ -32,6 +35,7 @@ struct GatewaySessionState {
     policy_rev: u64,
     ticket_expire_unix_ms: i64,
     device_id: String,
+    channel_name: String,
     authenticated: bool,
     last_hello_unix_ms: i64,
     keepalive_secs: u32,
@@ -46,43 +50,81 @@ struct GatewaySessionState {
 pub struct GatewaySession {
     endpoint: SocketAddr,
     state: Arc<Mutex<GatewaySessionState>>,
-    channel: QuicChannel,
+    channel: GatewayTransport,
     started: Arc<AtomicCell<bool>>,
 }
 
+#[derive(Clone)]
+enum GatewayTransport {
+    Quic(QuicChannel),
+    Udp(GatewayUdpChannel),
+}
+
 impl GatewaySession {
-    fn new(endpoint: SocketAddr) -> Self {
+    fn new_quic(endpoint: SocketAddr) -> Self {
         Self {
             endpoint,
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
-            channel: QuicChannel::new(endpoint, endpoint.ip().to_string()),
+            channel: GatewayTransport::Quic(QuicChannel::new(endpoint, endpoint.ip().to_string())),
             started: Arc::new(AtomicCell::new(false)),
         }
+    }
+
+    fn new_udp(endpoint: SocketAddr, grant: &GatewayAccessGrant) -> anyhow::Result<Self> {
+        let gateway_udp_public_key: [u8; 32] =
+            grant
+                .gateway_udp_public_key
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("gateway udp public key must be 32 bytes"))?;
+        Ok(Self {
+            endpoint,
+            state: Arc::new(Mutex::new(GatewaySessionState::default())),
+            channel: GatewayTransport::Udp(GatewayUdpChannel::new(
+                endpoint,
+                gateway_udp_public_key,
+                grant.gateway_udp_key_id.clone(),
+                grant.session_id,
+            )?),
+            started: Arc::new(AtomicCell::new(false)),
+        })
     }
 
     fn start(&self, runtime: &GatewayRuntime) -> anyhow::Result<()> {
         if self.started.swap(true) {
             return Ok(());
         }
-        let worker_name = format!("gatewayQuic-{}", sanitize_worker_name(self.endpoint));
+        let worker_name = format!("gateway-{}", sanitize_worker_name(self.endpoint));
         let on_packet = runtime.on_packet.clone();
-        self.channel.start_named(
-            runtime.stop_manager.clone(),
-            &worker_name,
-            move |packet, route_key| {
-                on_packet(packet, route_key);
-            },
-        )?;
+        match &self.channel {
+            GatewayTransport::Quic(channel) => {
+                let on_packet = on_packet.clone();
+                channel.start_named(
+                    runtime.stop_manager.clone(),
+                    &worker_name,
+                    move |packet, route_key| {
+                        on_packet(packet, route_key);
+                    },
+                )?
+            }
+            GatewayTransport::Udp(channel) => {
+                channel.start_named(runtime.stop_manager.clone(), &worker_name, on_packet)?
+            }
+        }
         Ok(())
     }
 
-    fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) {
+    fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
         guard.policy_rev = grant.policy_rev;
         guard.ticket_expire_unix_ms = grant.ticket_expire_unix_ms;
         guard.device_id = device_id;
+        guard.channel_name = match &self.channel {
+            GatewayTransport::Quic(_) => "quic".to_string(),
+            GatewayTransport::Udp(_) => "udp".to_string(),
+        };
         guard.authenticated = false;
         guard.last_hello_unix_ms = 0;
         guard.keepalive_secs = 0;
@@ -92,12 +134,41 @@ impl GatewaySession {
         guard.grace_secs_hint = grant.grace_secs;
         guard.reauth_required = false;
         drop(guard);
-        let server_name = if grant.gateway_server_name.is_empty() {
-            self.endpoint.ip().to_string()
-        } else {
-            grant.gateway_server_name.clone()
-        };
-        self.channel.update_server_name(server_name);
+        match &self.channel {
+            GatewayTransport::Quic(channel) => {
+                let selected_channel = grant.gateway_channels.iter().find(|channel_meta| {
+                    channel_meta.kind.enum_value_or_default()
+                        == GatewayChannelKind::GATEWAY_CHANNEL_QUIC
+                        && parse_transport_endpoint(&channel_meta.addr)
+                            .map(|addr| addr == self.endpoint)
+                            .unwrap_or(false)
+                });
+                let server_name = selected_channel
+                    .map(|channel_meta| channel_meta.server_name.clone())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| self.endpoint.ip().to_string());
+                let gateway_ca_pem = selected_channel
+                    .map(|channel_meta| channel_meta.ca_pem.clone())
+                    .unwrap_or_default();
+                channel.update_gateway_tls_auth(&gateway_ca_pem);
+                channel.update_server_name(server_name);
+                channel.update_server_addr(self.endpoint);
+            }
+            GatewayTransport::Udp(channel) => {
+                let gateway_udp_public_key: [u8; 32] = grant
+                    .gateway_udp_public_key
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("gateway udp public key must be 32 bytes"))?;
+                channel.update_server_addr(self.endpoint);
+                channel.update_gateway_udp_auth(
+                    gateway_udp_public_key,
+                    grant.gateway_udp_key_id.clone(),
+                    grant.session_id,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn ticket_expire_unix_ms(&self) -> i64 {
@@ -110,6 +181,17 @@ impl GatewaySession {
             session_id: guard.session_id,
             policy_rev: guard.policy_rev,
             ticket_expire_unix_ms: guard.ticket_expire_unix_ms,
+        }
+    }
+
+    fn summary(&self) -> GatewaySessionSummary {
+        let guard = self.state.lock();
+        GatewaySessionSummary {
+            configured: true,
+            authenticated: guard.authenticated,
+            endpoint: Some(self.endpoint),
+            channel_name: guard.channel_name.clone(),
+            reauth_required: guard.reauth_required,
         }
     }
 
@@ -134,7 +216,7 @@ impl GatewaySession {
             current_device.virtual_ip,
             current_device.virtual_gateway
         );
-        if let Err(e) = self.channel.send_packet(&packet) {
+        if let Err(e) = self.send_packet(&packet) {
             self.state.lock().authenticated = false;
             return Err(e.into());
         }
@@ -164,11 +246,18 @@ impl GatewaySession {
                 ));
             }
         }
-        if let Err(e) = self.channel.send_packet(packet) {
+        if let Err(e) = self.send_packet(packet) {
             self.state.lock().authenticated = false;
             return Err(e);
         }
         Ok(())
+    }
+
+    fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
+        match &self.channel {
+            GatewayTransport::Quic(channel) => channel.send_packet(packet),
+            GatewayTransport::Udp(channel) => channel.send_packet(packet),
+        }
     }
 
     fn handle_connect_ack(&self, ack: &GatewayConnectAck) {
@@ -280,6 +369,15 @@ pub struct GatewayGrantSnapshot {
     pub ticket_expire_unix_ms: i64,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct GatewaySessionSummary {
+    pub configured: bool,
+    pub authenticated: bool,
+    pub endpoint: Option<SocketAddr>,
+    pub channel_name: String,
+    pub reauth_required: bool,
+}
+
 #[derive(Clone)]
 pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -355,41 +453,102 @@ impl GatewaySessions {
         virtual_ip: Ipv4Addr,
         device_id: String,
     ) {
+        let preferred_kind = grant.default_gateway_channel.enum_value_or_default();
         let mut parsed = Vec::new();
         let mut desired = HashSet::new();
-        for addr in grant.gateway_addrs.iter() {
-            match parse_transport_endpoint(addr) {
-                Ok(endpoint) => {
-                    if desired.insert(endpoint) {
-                        parsed.push(endpoint);
+        let mut selected_channels: Vec<(SocketAddr, GatewayChannelKind)> = grant
+            .gateway_channels
+            .iter()
+            .filter_map(|channel| {
+                let kind = channel.kind.enum_value_or_default();
+                let supported = match kind {
+                    GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
+                        grant.gateway_udp_public_key.len() == 32
+                            && !grant.gateway_udp_key_id.is_empty()
                     }
+                    GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
+                    _ => false,
+                };
+                if !supported || kind != preferred_kind {
+                    return None;
                 }
-                Err(e) => {
-                    log::warn!("skip invalid gateway endpoint {}: {:?}", addr, e);
-                }
+                parse_transport_endpoint(&channel.addr)
+                    .ok()
+                    .map(|endpoint| (endpoint, kind))
+            })
+            .collect();
+        if selected_channels.is_empty() {
+            selected_channels = grant
+                .gateway_channels
+                .iter()
+                .filter_map(|channel| {
+                    let kind = channel.kind.enum_value_or_default();
+                    let supported = match kind {
+                        GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
+                            grant.gateway_udp_public_key.len() == 32
+                                && !grant.gateway_udp_key_id.is_empty()
+                        }
+                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
+                        _ => false,
+                    };
+                    if !supported {
+                        return None;
+                    }
+                    parse_transport_endpoint(&channel.addr)
+                        .ok()
+                        .map(|endpoint| (endpoint, kind))
+                })
+                .collect();
+        }
+        for (endpoint, kind) in selected_channels {
+            if desired.insert(endpoint) {
+                parsed.push((endpoint, kind));
             }
         }
         if parsed.is_empty() {
             self.clear_gateway_grant();
-            log::info!("gateway relay disabled for virtual ip {virtual_ip}: no quic gateway addr");
+            log::info!(
+                "gateway relay disabled for virtual ip {virtual_ip}: no supported gateway channel"
+            );
             return;
         }
         log::info!(
-            "gateway grant applied for virtual ip {} with endpoints {:?}, session_id={}, server_name={}",
+            "gateway grant applied for virtual ip {} with endpoints {:?}, session_id={}, default_channel={:?}",
             virtual_ip,
-            parsed,
+            parsed.iter().map(|(endpoint, _)| *endpoint).collect::<Vec<_>>(),
             grant.session_id,
-            grant.gateway_server_name
+            grant.default_gateway_channel.enum_value_or_default()
         );
         let runtime = self.runtime.lock().clone();
         let mut guard = self.sessions.lock();
         guard.retain(|addr, _| desired.contains(addr));
-        for endpoint in parsed {
-            let session = guard
-                .entry(endpoint)
-                .or_insert_with(|| GatewaySession::new(endpoint))
-                .clone();
-            session.update_grant(grant, device_id.clone());
+        for (endpoint, kind) in parsed {
+            let session = if let Some(existing) = guard.get(&endpoint).cloned() {
+                existing
+            } else {
+                let created = match kind {
+                    GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
+                        match GatewaySession::new_udp(endpoint, grant) {
+                            Ok(session) => session,
+                            Err(e) => {
+                                log::warn!(
+                                    "create udp gateway session failed {}: {:?}",
+                                    endpoint,
+                                    e
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    _ => GatewaySession::new_quic(endpoint),
+                };
+                guard.insert(endpoint, created.clone());
+                created
+            };
+            if let Err(e) = session.update_grant(grant, device_id.clone()) {
+                log::warn!("update gateway session failed {}: {:?}", endpoint, e);
+                continue;
+            }
             if let Some(runtime) = runtime.as_ref() {
                 if let Err(e) = session.start(runtime) {
                     log::warn!("start gateway session failed {}: {:?}", endpoint, e);
@@ -417,6 +576,15 @@ impl GatewaySessions {
             .values()
             .map(GatewaySession::grant_snapshot)
             .max_by_key(|snapshot| snapshot.ticket_expire_unix_ms)
+    }
+
+    pub fn session_summary(&self) -> GatewaySessionSummary {
+        self.sessions
+            .lock()
+            .values()
+            .map(GatewaySession::summary)
+            .max_by_key(|summary| (summary.authenticated, summary.reauth_required))
+            .unwrap_or_default()
     }
 
     pub fn mark_refresh_requested(&self) {
@@ -487,6 +655,7 @@ impl Default for GatewaySessions {
 fn parse_transport_endpoint(addr: &str) -> anyhow::Result<SocketAddr> {
     let normalized = addr
         .strip_prefix("quic://")
+        .or_else(|| addr.strip_prefix("udp://"))
         .unwrap_or(addr)
         .trim()
         .to_string();
@@ -516,6 +685,13 @@ mod tests {
         let endpoint = parse_transport_endpoint("quic://127.0.0.1:29900").unwrap();
         assert_eq!(endpoint.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(endpoint.port(), 29900);
+    }
+
+    #[test]
+    fn parse_transport_endpoint_accepts_udp_scheme() {
+        let endpoint = parse_transport_endpoint("udp://127.0.0.1:29901").unwrap();
+        assert_eq!(endpoint.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(endpoint.port(), 29901);
     }
 
     #[test]

@@ -298,6 +298,11 @@ impl Sdl {
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.runtime.route_manager().snapshot_routes()
     }
+    pub fn gateway_session_summary(
+        &self,
+    ) -> crate::data_plane::gateway_session::GatewaySessionSummary {
+        self.runtime.gateway_sessions.session_summary()
+    }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
         self.runtime.route_manager().use_channel_type()
     }
