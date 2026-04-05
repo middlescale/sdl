@@ -4,6 +4,7 @@ use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
 use std::collections::HashSet;
+use std::net::{Ipv4Addr, SocketAddr};
 
 use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
 
@@ -13,12 +14,20 @@ mod ipc;
 pub mod server;
 pub mod service_state;
 
+const CONTROL_DESTINATION: &str = "CONTROL";
+const CONTROL_VIP_STR: &str = "0.0.0.1";
+
 pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
     let route_table = vnt.route_states();
+    let current_device = vnt.current_device();
     let server_addr = vnt.config().server_address_str.clone();
     let gateway_summary = vnt.gateway_session_summary();
     let mut route_list = Vec::with_capacity(route_table.len());
+    let mut has_gateway_route = false;
     for (destination, routes) in route_table {
+        if destination == current_device.virtual_gateway {
+            has_gateway_route = true;
+        }
         for route in routes {
             let next_hop = vnt
                 .route_key(&route.route_key)
@@ -42,7 +51,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             };
 
             let item = RouteItem {
-                destination: destination.to_string(),
+                destination: display_destination(destination),
                 next_hop,
                 metric,
                 rt,
@@ -51,7 +60,61 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             route_list.push(item);
         }
     }
+    if !has_gateway_route
+        && gateway_summary.configured
+        && !current_device.virtual_gateway.is_unspecified()
+    {
+        route_list.push(build_gateway_route_item(
+            current_device.virtual_gateway,
+            &gateway_summary,
+            &route_list,
+            &server_addr,
+        ));
+    }
     route_list
+}
+
+fn display_destination(destination: Ipv4Addr) -> String {
+    if destination.to_string() == CONTROL_VIP_STR {
+        CONTROL_DESTINATION.to_string()
+    } else {
+        destination.to_string()
+    }
+}
+
+fn build_gateway_route_item(
+    gateway_vip: Ipv4Addr,
+    gateway_summary: &GatewaySessionSummary,
+    route_list: &[RouteItem],
+    server_addr: &str,
+) -> RouteItem {
+    let (metric, rt) = control_route_metric_rt(route_list);
+    let fallback_addr = gateway_summary
+        .endpoint
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
+    RouteItem {
+        destination: gateway_vip.to_string(),
+        next_hop: String::new(),
+        metric,
+        rt,
+        interface: gateway_relay_interface(
+            gateway_summary,
+            ConnectProtocol::QUIC,
+            fallback_addr,
+            server_addr,
+        ),
+    }
+}
+
+fn control_route_metric_rt(route_list: &[RouteItem]) -> (String, String) {
+    if let Some(item) = route_list
+        .iter()
+        .find(|item| item.destination == CONTROL_DESTINATION)
+    {
+        (item.metric.clone(), item.rt.clone())
+    } else {
+        ("2".to_string(), String::new())
+    }
 }
 
 fn route_interface(
@@ -329,7 +392,11 @@ fn find_matching_channel(input_str: &str, channels: &[usize]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_matching_channel, match_from_end};
+    use super::{
+        control_route_metric_rt, display_destination, find_matching_channel, match_from_end,
+        RouteItem, CONTROL_DESTINATION,
+    };
+    use std::net::Ipv4Addr;
 
     #[test]
     fn match_from_end_requires_full_suffix_match() {
@@ -344,5 +411,36 @@ mod tests {
         assert_eq!(find_matching_channel("12", &channels), Some(12));
         assert_eq!(find_matching_channel("1", &channels), Some(1));
         assert_eq!(find_matching_channel("99", &channels), None);
+    }
+
+    #[test]
+    fn display_destination_relabels_control_vip() {
+        assert_eq!(
+            display_destination(Ipv4Addr::new(0, 0, 0, 1)),
+            CONTROL_DESTINATION
+        );
+        assert_eq!(
+            display_destination(Ipv4Addr::new(10, 26, 0, 1)),
+            "10.26.0.1"
+        );
+    }
+
+    #[test]
+    fn control_route_metric_rt_prefers_control_row() {
+        let route_list = vec![RouteItem {
+            destination: CONTROL_DESTINATION.to_string(),
+            next_hop: String::new(),
+            metric: "2".to_string(),
+            rt: "85".to_string(),
+            interface: "quic@43.133.189.140:443".to_string(),
+        }];
+        assert_eq!(
+            control_route_metric_rt(&route_list),
+            ("2".to_string(), "85".to_string())
+        );
+        assert_eq!(
+            control_route_metric_rt(&[]),
+            ("2".to_string(), String::new())
+        );
     }
 }

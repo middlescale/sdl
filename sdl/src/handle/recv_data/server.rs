@@ -436,6 +436,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let response = DeviceList::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
                 self.set_device_info_list(response.device_info_list, response.epoch as _);
+                self.runtime
+                    .control_session
+                    .trigger_status_report_with_nat_ready();
             }
             service_packet::Protocol::DeviceAuthAck => {
                 let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
