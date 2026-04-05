@@ -136,7 +136,9 @@ impl RouteManager {
         self.snapshot_routes()
             .into_iter()
             .filter_map(|(peer_ip, routes)| {
-                let routes = self.limit_heartbeat_routes(routes);
+                let routes = self.limit_heartbeat_routes(
+                    routes.into_iter().filter(|route| route.is_p2p()).collect(),
+                );
                 if routes.is_empty() {
                     None
                 } else {
@@ -566,6 +568,25 @@ mod tests {
 
         assert!(timeouts.lock().is_empty());
         assert_eq!(manager.direct_path_count(&peer), 1);
+    }
+
+    #[test]
+    fn heartbeat_targets_keep_p2p_routes_when_relay_route_sorts_first() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        table.add_route(
+            peer,
+            Route::new(route(2, 2010).protocol, route(2, 2010).addr, 2, 1),
+        );
+        table.add_route(peer, route(1, 2011));
+
+        let targets = manager.heartbeat_targets();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, peer);
+        assert_eq!(targets[0].1.len(), 1);
+        assert!(targets[0].1[0].is_p2p());
     }
 
     #[test]
