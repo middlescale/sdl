@@ -16,6 +16,7 @@ use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
 use crate::util::{PeerCryptoManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
+use parking_lot::Mutex;
 
 const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
 const ROUTE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
@@ -26,6 +27,7 @@ pub struct RouteManager {
     peer_crypto: Arc<PeerCryptoManager>,
     peer_encrypt: bool,
     sender: Option<RouteSender>,
+    direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
 }
 
 #[derive(Clone)]
@@ -57,6 +59,7 @@ impl RouteManager {
             peer_crypto,
             peer_encrypt,
             sender: Some(RouteSender { udp_channel }),
+            direct_route_timeout_handler: Arc::new(Mutex::new(None)),
         };
         manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
         manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
@@ -69,7 +72,12 @@ impl RouteManager {
             peer_crypto: Arc::new(PeerCryptoManager::new(0)),
             peer_encrypt: true,
             sender: None,
+            direct_route_timeout_handler: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn set_direct_route_timeout_handler(&self, handler: Arc<dyn Fn(Ipv4Addr) + Send + Sync>) {
+        *self.direct_route_timeout_handler.lock() = Some(handler);
     }
 
     pub fn use_channel_type(&self) -> UseChannelType {
@@ -208,25 +216,9 @@ impl RouteManager {
             if current_device.is_gateway_vip(&dest_ip) {
                 continue;
             }
-            let net_packet = match heartbeat_packet_client(
-                if self.peer_encrypt {
-                    match self.peer_crypto.current_cipher(&dest_ip) {
-                        Ok(cipher) => Some(cipher),
-                        Err(_) => {
-                            log::debug!(
-                                "skip heartbeat without peer session cipher for {}",
-                                dest_ip
-                            );
-                            continue;
-                        }
-                    }
-                } else {
-                    None
-                },
-                src_ip,
-                dest_ip,
-            ) {
-                Ok(net_packet) => net_packet,
+            let net_packets = match self.heartbeat_packets_for_peer(src_ip, dest_ip) {
+                Ok(net_packets) if !net_packets.is_empty() => net_packets,
+                Ok(_) => continue,
                 Err(e) => {
                     log::error!("heartbeat_packet err={:?}", e);
                     continue;
@@ -236,8 +228,10 @@ impl RouteManager {
                 if !route.is_p2p() {
                     continue;
                 }
-                if let Err(e) = self.send_by_key(sender, &net_packet, route.route_key()) {
-                    log::warn!("heartbeat err={:?}", e)
+                for net_packet in &net_packets {
+                    if let Err(e) = self.send_by_key(sender, net_packet, route.route_key()) {
+                        log::warn!("heartbeat err={:?}", e)
+                    }
                 }
             }
         }
@@ -248,6 +242,11 @@ impl RouteManager {
             StaleDirectRoute::Timeout(ip, route) => {
                 log::info!("route Timeout {:?},{:?}", ip, route);
                 self.remove_path(&ip, route.route_key());
+                if self.direct_path_count(&ip) == 0 {
+                    if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
+                        handler(ip);
+                    }
+                }
                 StaleDirectRouteCleanup {
                     delay: Duration::from_millis(100),
                 }
@@ -262,6 +261,50 @@ impl RouteManager {
     fn limit_heartbeat_routes(&self, routes: Vec<Route>) -> Vec<Route> {
         let limit = if self.latency_first() { 2 } else { 1 };
         routes.into_iter().take(limit).collect()
+    }
+
+    fn heartbeat_packets_for_peer(
+        &self,
+        src_ip: Ipv4Addr,
+        dest_ip: Ipv4Addr,
+    ) -> anyhow::Result<Vec<NetPacket<Vec<u8>>>> {
+        if !self.peer_encrypt {
+            return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip)?]);
+        }
+        let mut packets = Vec::with_capacity(2);
+        match self.peer_crypto.current_cipher(&dest_ip) {
+            Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+            Err(err) if !self.peer_crypto.is_grace_active() => {
+                log::debug!(
+                    "skip heartbeat without current peer session cipher for {}: {:?}",
+                    dest_ip,
+                    err
+                );
+                return Ok(Vec::new());
+            }
+            Err(err) => {
+                log::debug!(
+                    "current heartbeat cipher unavailable during grace for {}: {:?}",
+                    dest_ip,
+                    err
+                );
+            }
+        }
+        if self.peer_crypto.is_grace_active() {
+            match self.peer_crypto.previous_cipher(&dest_ip) {
+                Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+                Err(err) if packets.is_empty() => {
+                    log::debug!(
+                        "skip heartbeat without grace cipher for {}: {:?}",
+                        dest_ip,
+                        err
+                    );
+                    return Ok(Vec::new());
+                }
+                Err(_) => {}
+            }
+        }
+        Ok(packets)
     }
 }
 
@@ -399,6 +442,7 @@ mod tests {
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
     use crate::transport::connect_protocol::ConnectProtocol;
+    use parking_lot::Mutex;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
     use std::thread;
@@ -479,6 +523,74 @@ mod tests {
         let relay_routes = table.get_routes(&relay_peer).expect("relay routes");
         assert_eq!(relay_routes.len(), 1);
         assert_eq!(relay_routes[0].route_key(), relay.route_key());
+    }
+
+    #[test]
+    fn cleanup_stale_direct_routes_triggers_handler_when_last_direct_route_expires() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 6);
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
+        {
+            let timeouts = timeouts.clone();
+            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
+                timeouts.lock().push(ip);
+            }));
+        }
+        table.add_route(peer, route(1, 2004));
+        thread::sleep(Duration::from_millis(15));
+
+        let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
+
+        assert_eq!(*timeouts.lock(), vec![peer]);
+    }
+
+    #[test]
+    fn cleanup_stale_direct_routes_does_not_trigger_handler_when_other_direct_route_remains() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 7);
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
+        {
+            let timeouts = timeouts.clone();
+            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
+                timeouts.lock().push(ip);
+            }));
+        }
+        table.add_route(peer, route(1, 2005));
+        table.add_route(peer, route(1, 2006));
+        table.update_read_time(&peer, &route(1, 2006).route_key());
+        thread::sleep(Duration::from_millis(15));
+
+        let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
+
+        assert!(timeouts.lock().is_empty());
+        assert_eq!(manager.direct_path_count(&peer), 1);
+    }
+
+    #[test]
+    fn heartbeat_packets_include_previous_cipher_during_grace_window() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let manager = RouteManager::new_detached(table);
+        let peer = Ipv4Addr::new(10, 0, 0, 8);
+        manager
+            .peer_crypto
+            .rotate_peer_session_ciphers(std::collections::HashMap::from([(
+                peer,
+                Cipher::new_key([1; 32]).expect("cipher 1"),
+            )]));
+        manager
+            .peer_crypto
+            .rotate_peer_session_ciphers(std::collections::HashMap::from([(
+                peer,
+                Cipher::new_key([2; 32]).expect("cipher 2"),
+            )]));
+
+        let packets = manager
+            .heartbeat_packets_for_peer(Ipv4Addr::new(10, 0, 0, 1), peer)
+            .expect("heartbeat packets");
+
+        assert_eq!(packets.len(), 2);
     }
 
     fn kind_name(idle: &StaleDirectRoute) -> &'static str {

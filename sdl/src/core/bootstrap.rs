@@ -160,6 +160,16 @@ impl Sdl {
                 route_manager: route_manager.clone(),
             },
         );
+        {
+            let control_session = control_session.clone();
+            route_manager.set_direct_route_timeout_handler(Arc::new(move |peer_ip| {
+                log::info!(
+                    "last direct route expired for {}, triggering repunch",
+                    peer_ip
+                );
+                control_session.trigger_status_report_with_nat_ready();
+            }));
+        }
         let runtime = Arc::new_cyclic(|weak_runtime| {
             let data_channel = DataChannel::new(weak_runtime.clone());
             #[cfg(feature = "integrated_tun")]
