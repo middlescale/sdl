@@ -43,7 +43,14 @@ impl PunchSenders {
                 }
             }
         };
-        sender.try_send((ip, info)).is_ok()
+        let queued = sender.try_send((ip, info)).is_ok();
+        log::info!(
+            "打洞任务入队结果,是否对端发起:{},ip:{},queued:{}",
+            src_peer,
+            ip,
+            queued
+        );
+        queued
     }
 }
 
@@ -170,7 +177,7 @@ fn punch_start(
 
         if peer_encrypt {
             let Ok(cipher) = peer_crypto.current_cipher(&peer_ip) else {
-                log::debug!(
+                log::warn!(
                     "skip punch request without peer session cipher for {}",
                     peer_ip
                 );
@@ -181,8 +188,11 @@ fn punch_start(
                 continue;
             }
         }
+        log::info!("开始发送 PunchRequest,目标:{},第{}次", peer_ip, count);
         if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count) {
             log::warn!("{:?}", e)
+        } else {
+            log::info!("PunchRequest 发送完成,目标:{},第{}次", peer_ip, count);
         }
     }
 }

@@ -251,6 +251,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         reason: &str,
     ) -> anyhow::Result<()> {
         let _ = current_device;
+        log::info!(
+            "sending PunchResult session_id={} source={} target={} attempt={} code={:?} reason={}",
+            session_id,
+            Ipv4Addr::from(source),
+            Ipv4Addr::from(target),
+            attempt,
+            code,
+            reason
+        );
         send_punch_result_via_control(
             &self.runtime.control_session,
             session_id,
@@ -289,6 +298,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     }
                 };
                 if let Some((code, reason)) = outcome {
+                    log::info!(
+                        "punch watchdog outcome peer={} session_id={} attempt={} code={:?} reason={}",
+                        peer_ip,
+                        session.session_id,
+                        session.attempt,
+                        code,
+                        reason
+                    );
                     if let Err(err) = send_punch_result_via_control(
                         &runtime.control_session,
                         session.session_id,
@@ -470,6 +487,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PunchStart {:?}", e)))?;
                 let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
+                log::info!(
+                    "PunchStart received peer={} session_id={} attempt={} endpoints={} public_ips={:?} public_ports={:?} local_ipv4={:?}",
+                    peer_ip,
+                    punch_start.session_id,
+                    punch_start.attempt,
+                    punch_start.peer_endpoints.len(),
+                    peer_nat_info.public_ips,
+                    peer_nat_info.public_ports,
+                    peer_nat_info.local_ipv4()
+                );
                 let deadline_unix_ms = if punch_start.deadline_unix_ms > 0 {
                     punch_start.deadline_unix_ms
                 } else {
@@ -516,6 +543,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .punch_coordinator
                     .submit_local(peer_ip, peer_nat_info);
                 let reason = if accepted { "" } else { "punch queue busy" };
+                log::info!(
+                    "PunchStart ack peer={} session_id={} attempt={} accepted={} reason={}",
+                    peer_ip,
+                    punch_start.session_id,
+                    punch_start.attempt,
+                    accepted,
+                    reason
+                );
                 let ack = build_punch_ack(
                     punch_start.session_id,
                     u32::from(current_device.virtual_ip),
