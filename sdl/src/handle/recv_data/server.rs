@@ -29,6 +29,8 @@ use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::{proto, PeerClientInfo};
 
+const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
+
 /// 处理来源于服务端的包
 #[derive(Clone)]
 pub struct ServerPacketHandler<Call, Device> {
@@ -96,6 +98,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             let response = HandshakeResponse::parse_from_bytes(net_packet.payload())
                 .map_err(|e| anyhow!("HandshakeResponse {:?}", e))?;
             log::info!("握手响应:{:?},{}", route_key, response);
+            if !response
+                .capabilities
+                .iter()
+                .any(|item| item == CAPABILITY_UDP_ENDPOINT_REPORT_V1)
+            {
+                return Err(anyhow!(
+                    "control missing required capability {}",
+                    CAPABILITY_UDP_ENDPOINT_REPORT_V1
+                ));
+            }
+            self.runtime
+                .control_session
+                .set_negotiated_capabilities(&response.capabilities);
             let handshake_info =
                 HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {

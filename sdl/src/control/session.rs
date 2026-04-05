@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crossbeam_utils::atomic::AtomicCell;
 use protobuf::Message;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::core::RuntimeConfig;
@@ -29,7 +30,7 @@ use crate::util::{
     address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
 };
 use crate::{ErrorInfo, SdlCallback};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
@@ -49,6 +50,7 @@ pub struct ControlSessionDeps {
     pub gateway_sessions: GatewaySessions,
     pub data_plane_stats: DataPlaneStats,
     pub nat_test: NatTest,
+    pub negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
     pub route_manager: RouteManager,
 }
 
@@ -84,6 +86,7 @@ impl ControlSession {
     }
 
     pub fn send_handshake(&self) -> io::Result<()> {
+        self.clear_negotiated_capabilities();
         let request_packet = handshake_request_packet()?;
         self.send_packet(&request_packet)
     }
@@ -335,6 +338,27 @@ impl ControlSession {
         if let Err(e) = self.send_status_report_packet() {
             log::warn!("{:?}", e)
         }
+    }
+
+    pub fn supports_udp_endpoint_report_v1(&self) -> bool {
+        self.has_capability(CAPABILITY_UDP_ENDPOINT_REPORT_V1)
+    }
+
+    pub fn set_negotiated_capabilities(&self, capabilities: &[String]) {
+        let mut negotiated = self.deps.negotiated_capabilities.write();
+        negotiated.clear();
+        negotiated.extend(capabilities.iter().cloned());
+    }
+
+    fn clear_negotiated_capabilities(&self) {
+        self.deps.negotiated_capabilities.write().clear();
+    }
+
+    fn has_capability(&self, capability: &str) -> bool {
+        self.deps
+            .negotiated_capabilities
+            .read()
+            .contains(capability)
     }
 
     pub fn trigger_status_report_with_nat_ready(&self) {

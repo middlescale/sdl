@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,6 +133,7 @@ impl Sdl {
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
+        let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
         let route_table = Arc::new(RouteTable::new(
             config.use_channel_type,
             config.latency_first,
@@ -155,6 +156,7 @@ impl Sdl {
                 gateway_sessions: gateway_sessions.clone(),
                 data_plane_stats: data_plane_stats.clone(),
                 nat_test: nat_test.clone(),
+                negotiated_capabilities: negotiated_capabilities.clone(),
                 route_manager: route_manager.clone(),
             },
         );
