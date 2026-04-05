@@ -1,4 +1,6 @@
 use sdl::core::Sdl;
+use sdl::data_plane::gateway_session::GatewaySessionSummary;
+use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
 use std::collections::HashSet;
@@ -12,13 +14,14 @@ pub mod server;
 pub mod service_state;
 
 pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
-    let route_table = vnt.route_table();
+    let route_table = vnt.route_states();
     let server_addr = vnt.config().server_address_str.clone();
+    let gateway_summary = vnt.gateway_session_summary();
     let mut route_list = Vec::with_capacity(route_table.len());
     for (destination, routes) in route_table {
         for route in routes {
             let next_hop = vnt
-                .route_key(&route.route_key())
+                .route_key(&route.route_key)
                 .map_or(String::new(), |v| v.to_string());
             let metric = route.metric.to_string();
             let rt = if route.rt < 0 {
@@ -26,15 +29,16 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             } else {
                 route.rt.to_string()
             };
-            let interface = match route.protocol {
-                ConnectProtocol::UDP => route.addr.to_string(),
-                ConnectProtocol::TCP => {
-                    format!("tcp@{}", route.addr)
+            let interface = match route.kind {
+                RouteKind::GatewayRelay => gateway_relay_interface(
+                    &gateway_summary,
+                    route.transport,
+                    route.addr,
+                    &server_addr,
+                ),
+                RouteKind::P2p | RouteKind::Relay => {
+                    route_interface(route.transport, route.addr, &server_addr)
                 }
-                ConnectProtocol::QUIC => {
-                    format!("quic@{}", route.addr)
-                }
-                ConnectProtocol::WS | ConnectProtocol::WSS => server_addr.clone(),
             };
 
             let item = RouteItem {
@@ -48,6 +52,42 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
         }
     }
     route_list
+}
+
+fn route_interface(
+    protocol: ConnectProtocol,
+    addr: std::net::SocketAddr,
+    server_addr: &str,
+) -> String {
+    match protocol {
+        ConnectProtocol::UDP => addr.to_string(),
+        ConnectProtocol::TCP => format!("tcp@{}", addr),
+        ConnectProtocol::QUIC => format!("quic@{}", addr),
+        ConnectProtocol::WS | ConnectProtocol::WSS => server_addr.to_string(),
+    }
+}
+
+fn gateway_relay_interface(
+    gateway_summary: &GatewaySessionSummary,
+    fallback_protocol: ConnectProtocol,
+    fallback_addr: std::net::SocketAddr,
+    server_addr: &str,
+) -> String {
+    if let Some(endpoint) = gateway_summary.endpoint {
+        let channel = if gateway_summary.channel_name.is_empty() {
+            match fallback_protocol {
+                ConnectProtocol::UDP => "udp".to_string(),
+                ConnectProtocol::TCP => "tcp".to_string(),
+                ConnectProtocol::QUIC => "quic".to_string(),
+                ConnectProtocol::WS => "ws".to_string(),
+                ConnectProtocol::WSS => "wss".to_string(),
+            }
+        } else {
+            gateway_summary.channel_name.clone()
+        };
+        return format!("{}@{}", channel, endpoint);
+    }
+    route_interface(fallback_protocol, fallback_addr, server_addr)
 }
 
 pub fn command_list(vnt: &Sdl) -> Vec<DeviceItem> {

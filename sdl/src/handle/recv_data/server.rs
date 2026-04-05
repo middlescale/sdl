@@ -345,7 +345,13 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         .add_path_if_absent(virtual_gateway, route);
                     let public_ip = response.public_ip.into();
                     let public_port = response.public_port as u16;
-                    self.runtime.nat_test.update_addr(public_ip, public_port);
+                    let observed_udp_port =
+                        observed_udp_port_from_registration(route_key.protocol(), public_port);
+                    // For QUIC/TCP control, the observed remote port belongs to the control-plane
+                    // connection, not the data-plane UDP socket used for punching.
+                    self.runtime
+                        .nat_test
+                        .update_addr(public_ip, observed_udp_port);
                     if route_key.protocol().is_tcp() {
                         log::info!("更新公网tcp端口 {public_port}");
                         self.runtime.nat_test.update_tcp_port(public_port);
@@ -864,11 +870,26 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
     )
 }
 
+fn observed_udp_port_from_registration(
+    protocol: crate::transport::connect_protocol::ConnectProtocol,
+    public_port: u16,
+) -> u16 {
+    if protocol.is_udp() {
+        public_port
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result};
+    use super::{
+        build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
+        observed_udp_port_from_registration,
+    };
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
+    use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
@@ -934,5 +955,21 @@ mod tests {
             PunchResultCode::PunchResultTimeout
         );
         assert_eq!(result.reason, "timeout");
+    }
+
+    #[test]
+    fn observed_udp_port_from_registration_only_trusts_udp_control() {
+        assert_eq!(
+            observed_udp_port_from_registration(ConnectProtocol::UDP, 29901),
+            29901
+        );
+        assert_eq!(
+            observed_udp_port_from_registration(ConnectProtocol::QUIC, 443),
+            0
+        );
+        assert_eq!(
+            observed_udp_port_from_registration(ConnectProtocol::TCP, 443),
+            0
+        );
     }
 }
