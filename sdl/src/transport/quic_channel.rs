@@ -42,15 +42,9 @@ impl ActiveConnection {
 pub struct QuicChannel {
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
-    tls_config: Arc<Mutex<QuicTlsConfig>>,
     config_rev: Arc<AtomicU64>,
     sender: Sender<QuicCommand>,
     receiver: Arc<Mutex<Option<Receiver<QuicCommand>>>>,
-}
-
-#[derive(Clone, Default)]
-struct QuicTlsConfig {
-    gateway_ca_pem: Vec<u8>,
 }
 
 impl QuicChannel {
@@ -59,7 +53,6 @@ impl QuicChannel {
         Self {
             server_addr: Arc::new(AtomicCell::new(server_addr)),
             server_name: Arc::new(Mutex::new(server_name)),
-            tls_config: Arc::new(Mutex::new(QuicTlsConfig::default())),
             config_rev: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
@@ -88,7 +81,6 @@ impl QuicChannel {
         let callback: PacketCallback = Arc::new(on_packet);
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
-        let tls_config = self.tls_config.clone();
         let config_rev = self.config_rev.clone();
         let worker_name = worker_name.to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
@@ -104,15 +96,7 @@ impl QuicChannel {
             .name(worker_name.clone())
             .spawn(move || {
                 let worker_task = runtime.spawn(async move {
-                    run_quic_worker(
-                        receiver,
-                        server_addr,
-                        server_name,
-                        tls_config,
-                        config_rev,
-                        callback,
-                    )
-                    .await;
+                    run_quic_worker(receiver, server_addr, server_name, config_rev, callback).await;
                 });
                 runtime.block_on(async {
                     let mut worker_task = worker_task;
@@ -141,13 +125,6 @@ impl QuicChannel {
         self.config_rev.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn update_gateway_tls_auth(&self, gateway_ca_pem: &[u8]) {
-        *self.tls_config.lock() = QuicTlsConfig {
-            gateway_ca_pem: gateway_ca_pem.to_vec(),
-        };
-        self.config_rev.fetch_add(1, Ordering::Relaxed);
-    }
-
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         self.sender
             .try_send(QuicCommand::Send(packet.buffer().to_vec()))
@@ -166,7 +143,6 @@ async fn run_quic_worker(
     mut receiver: Receiver<QuicCommand>,
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
-    tls_config: Arc<Mutex<QuicTlsConfig>>,
     config_rev: Arc<AtomicU64>,
     on_packet: PacketCallback,
 ) {
@@ -183,8 +159,7 @@ async fn run_quic_worker(
                 }
                 if active.is_none() {
                     let name = server_name.lock().clone();
-                    let tls = tls_config.lock().clone();
-                    match connect(addr, &name, b"sdl-control", &tls).await {
+                    match connect(addr, &name, b"sdl-control").await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -229,9 +204,8 @@ async fn run_quic_worker(
                         connection.close();
                     }
                     let name = server_name.lock().clone();
-                    let tls = tls_config.lock().clone();
                     let current_rev = config_rev.load(Ordering::Relaxed);
-                    match connect(addr, &name, b"sdl-control", &tls).await {
+                    match connect(addr, &name, b"sdl-control").await {
                         Ok(connection) => {
                             let QuicClientConnection {
                                 addr,
@@ -289,9 +263,8 @@ async fn connect(
     addr: SocketAddr,
     server_name: &str,
     alpn: &[u8],
-    tls_config: &QuicTlsConfig,
 ) -> anyhow::Result<QuicClientConnection> {
-    let mut client_crypto = build_client_crypto(tls_config)?;
+    let mut client_crypto = build_client_crypto()?;
     client_crypto.alpn_protocols = vec![alpn.to_vec()];
     let quic_crypto = QuicClientConfig::try_from(client_crypto)?;
     let client_config = ClientConfig::new(Arc::new(quic_crypto));
@@ -317,20 +290,12 @@ async fn connect(
     })
 }
 
-fn build_client_crypto(tls_config: &QuicTlsConfig) -> anyhow::Result<rustls::ClientConfig> {
+fn build_client_crypto() -> anyhow::Result<rustls::ClientConfig> {
     let mut roots = RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {
         if let Err(e) = roots.add(cert) {
             log::warn!("skip system cert {:?}", e);
-        }
-    }
-    if !tls_config.gateway_ca_pem.is_empty() {
-        let mut reader = std::io::BufReader::new(tls_config.gateway_ca_pem.as_slice());
-        let certs: Vec<_> = rustls_pemfile::certs(&mut reader).collect::<Result<_, _>>()?;
-        let (added, _) = roots.add_parsable_certificates(certs);
-        if added == 0 {
-            anyhow::bail!("gateway_ca_pem did not contain any valid CA certificates");
         }
     }
     if roots.is_empty() {

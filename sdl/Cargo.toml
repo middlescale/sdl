@@ -53,8 +53,6 @@ rustls = { version = "0.23.0", features = [
 ], default-features = false, optional = true }
 quinn = { version = "0.11.7", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }
 rustls-native-certs = { version = "0.8.1", optional = true }
-rustls-pemfile = { version = "2", optional = true }
-x509-parser = { version = "0.16", optional = true }
 
 network-interface = "2.0.0"
 
@@ -101,4 +99,4 @@ lz4_compress = ["lz4_flex"]
 zstd_compress = ["zstd"]
 integrated_tun = ["tun-rs"]
 upnp = ["igd"]
-quic = ["quinn", "rustls", "rustls-native-certs", "rustls-pemfile", "x509-parser"]
+quic = ["quinn", "rustls", "rustls-native-certs"]

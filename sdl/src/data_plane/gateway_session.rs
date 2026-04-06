@@ -147,10 +147,6 @@ impl GatewaySession {
                     .map(|channel_meta| channel_meta.server_name.clone())
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| self.endpoint.ip().to_string());
-                let gateway_ca_pem = selected_channel
-                    .map(|channel_meta| channel_meta.ca_pem.clone())
-                    .unwrap_or_default();
-                channel.update_gateway_tls_auth(&gateway_ca_pem);
                 channel.update_server_name(server_name);
                 channel.update_server_addr(self.endpoint);
             }

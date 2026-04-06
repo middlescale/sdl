@@ -45,7 +45,7 @@ message GatewayChannel {
     GatewayChannelKind kind = 1;
     string addr = 2;
     string server_name = 3;
-    bytes ca_pem = 4;
+    reserved 4;
 }
 message GatewayAccessGrant {
     bytes ticket = 1;
