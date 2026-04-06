@@ -99,6 +99,12 @@ impl RegisterInfo {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DnsProfile {
+    pub servers: Vec<String>,
+    pub match_domains: Vec<String>,
+}
+
 #[derive(Debug)]
 pub struct ErrorInfo {
     pub code: ErrorType,

@@ -5,9 +5,12 @@ pub use notify::{StopManager, Worker};
 // pub use counter::*;
 
 mod dns_query;
+pub(crate) mod dns_tunnel;
 pub use dns_query::*;
 mod device_identity;
 pub use device_identity::*;
+#[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+pub(crate) mod linux_dns;
 mod peer_crypto_manager;
 pub use peer_crypto_manager::*;
 

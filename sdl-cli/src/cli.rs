@@ -80,7 +80,6 @@ pub fn parse_args_config_from(
     opts.optopt("", "use-channel", "使用通道 relay/p2p", "<use-channel>");
     opts.optopt("", "packet-loss", "丢包率", "<packet-loss>");
     opts.optopt("", "packet-delay", "延迟", "<packet-delay>");
-    opts.optmulti("", "dns", "dns", "<dns>");
     opts.optmulti("", "mapping", "mapping", "<mapping>");
     opts.optopt("f", "", "配置文件", "<conf>");
     opts.optopt("", "compressor", "压缩算法", "<lz4>");
@@ -156,7 +155,6 @@ pub fn parse_args_config_from(
                 stun_server.push(x.to_string());
             }
         }
-        let dns = matches.opt_strs("dns");
         let raw_in_ips = matches.opt_strs("i");
         let _in_ip = match ips_parse(&raw_in_ips) {
             Ok(in_ip) => in_ip,
@@ -266,7 +264,6 @@ pub fn parse_args_config_from(
             name,
             server_address: server_address_str,
             stun_server,
-            dns,
             in_ips: raw_in_ips,
             out_ips: raw_out_ips,
             mtu,
@@ -334,7 +331,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
         ("--packet-loss <0>", ("模拟丢包,取值0~1之间的小数,程序会按设定的概率主动丢包,可用于模拟弱网", "Simulate packet loss, value between 0 and 1, program actively drops packets based on set probability, useful for simulating weak networks")),
         ("--packet-delay <0>", ("模拟延迟,正整数,单位毫秒,程序将根据设定值延迟发送数据包,可用于模拟弱网", "Simulate latency, integer, in milliseconds (ms). The program will delay sending packets according to the set value and can be used to simulate weak networks")),
-        ("--dns <host:port>", ("DNS服务器地址,可使用多个dns,不指定时使用系统解析", "DNS server address, can specify multiple DNS servers, defaults to system resolution if not specified")),
         ("--mapping <mapping>", ("端口映射,例如 --mapping udp:0.0.0.0:80-domain:80 映射目标是本地路由能访问的设备", "Port mapping, e.g., --mapping udp:0.0.0.0:80-domain:80 maps to a device accessible by local routing")),
         ("--compressor-all <lz4>", ("启用压缩,可选值lz4/zstd<,level>,level为压缩级别,例如 --compressor lz4 或--compressor zstd,10", "Enable compression, options lz4/zstd<,level>, level is compression level, e.g., --compressor lz4 or --compressor zstd,10")),
         ("--compressor-lz4 <lz4>", ("启用压缩,可选值lz4,例如 --compressor lz4", "Enable compression, option lz4, e.g., --compressor lz4")),
@@ -467,11 +463,6 @@ fn print_usage(program: &str, _opts: Options) {
         "  --packet-delay <0>  {}",
         get_description("--packet-delay <0>", &language)
     );
-    println!(
-        "  --dns <host:port>   {}",
-        get_description("--dns <host:port>", &language)
-    );
-
     #[cfg(feature = "port_mapping")]
     println!(
         "  --mapping <mapping> {}",

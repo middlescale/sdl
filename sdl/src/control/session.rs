@@ -494,7 +494,6 @@ fn resolve_control_addr(
     config: &RuntimeConfig,
 ) -> CurrentDeviceInfo {
     let mut current_dev = current_device.load();
-    let default_interface = &config.default_interface;
     let control_addr = match parse_control_address(&config.server_addr) {
         Ok(control_addr) => control_addr,
         Err(e) => {
@@ -502,18 +501,9 @@ fn resolve_control_addr(
             return current_dev;
         }
     };
-    match dns_query_all(
-        control_addr.authority(),
-        config.name_servers.clone(),
-        default_interface,
-    ) {
+    match dns_query_all(control_addr.authority()) {
         Ok(addrs) => {
-            log::info!(
-                "domain {} dns {:?} addr {:?}",
-                control_addr.authority(),
-                config.name_servers,
-                addrs
-            );
+            log::info!("domain {} addr {:?}", control_addr.authority(), addrs);
             match address_choose(addrs) {
                 Ok(addr) => {
                     if addr != current_dev.control_server {

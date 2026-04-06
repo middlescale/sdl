@@ -25,7 +25,6 @@ pub struct FileConfig {
     pub name: String,
     pub server_address: String,
     pub stun_server: Vec<String>,
-    pub dns: Vec<String>,
     pub in_ips: Vec<String>,
     pub out_ips: Vec<String>,
     pub mtu: Option<u32>,
@@ -64,7 +63,6 @@ impl Default for FileConfig {
                 .to_string(),
             server_address: DEFAULT_SERVICE_SERVER.to_string(),
             stun_server,
-            dns: vec![],
             in_ips: vec![],
             out_ips: vec![],
             mtu: None,
@@ -139,7 +137,6 @@ impl FileConfig {
             self.device_id,
             self.name,
             self.server_address,
-            self.dns,
             self.stun_server,
             in_ips,
             out_ips,
@@ -266,6 +263,24 @@ server_address: https://control.middlescale.net/control
         );
         let err = read_config(path.to_str().unwrap()).expect_err("legacy token config should fail");
         assert!(err.to_string().contains("unknown field `token`"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_rejects_legacy_dns_field() {
+        let path = write_temp_config(
+            r#"
+group: default.ms.net
+device_id: dev-3
+name: test-node
+server_address: https://control.middlescale.net/control
+dns:
+  - 223.5.5.5
+"#,
+            "dns",
+        );
+        let err = read_config(path.to_str().unwrap()).expect_err("legacy dns config should fail");
+        assert!(err.to_string().contains("unknown field `dns`"));
         let _ = fs::remove_file(path);
     }
 }

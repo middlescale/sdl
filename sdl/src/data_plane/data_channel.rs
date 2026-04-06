@@ -39,6 +39,13 @@ impl DataChannel {
             .unwrap_or(false)
     }
 
+    pub fn is_dns_service_ip(&self, vip: &Ipv4Addr) -> bool {
+        self.runtime
+            .upgrade()
+            .map(|runtime| runtime.is_dns_service_ip(*vip))
+            .unwrap_or(false)
+    }
+
     pub fn peer_encrypt_enabled(&self) -> bool {
         self.runtime
             .upgrade()
@@ -69,6 +76,33 @@ impl DataChannel {
     ) -> io::Result<()> {
         let runtime = self.runtime()?;
         self.send_udp(runtime.as_ref(), buf, route.route_key())
+    }
+
+    pub fn proxy_dns_query(
+        &self,
+        client_ip: Ipv4Addr,
+        dns_server_ip: Ipv4Addr,
+        client_port: u16,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let runtime = self.runtime()?;
+        let request_id = runtime.remember_dns_query(client_ip, dns_server_ip, client_port);
+        let query_payload =
+            match crate::util::dns_tunnel::build_dns_query_payload(request_id, payload) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    runtime.forget_dns_query(request_id);
+                    return Err(err);
+                }
+            };
+        if let Err(err) = runtime.control_session.send_service_payload(
+            crate::protocol::service_packet::Protocol::DnsQueryRequest,
+            &query_payload,
+        ) {
+            runtime.forget_dns_query(request_id);
+            return Err(io::Error::other(err));
+        }
+        Ok(())
     }
 
     fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {

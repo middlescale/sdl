@@ -27,7 +27,7 @@ use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{load_or_create_device_signing_key, PeerCryptoManager, StopManager};
-use crate::{nat, SdlCallback};
+use crate::{nat, DnsProfile, SdlCallback};
 
 #[derive(Clone)]
 struct NullCallback;
@@ -89,7 +89,6 @@ impl Sdl {
             device_id: config.device_id.clone(),
             device_pub_key,
             server_addr: config.server_address_str.clone(),
-            name_servers: config.name_servers.clone(),
             mtu: config.mtu.unwrap_or(1420),
             #[cfg(feature = "integrated_tun")]
             #[cfg(target_os = "windows")]
@@ -191,6 +190,9 @@ impl Sdl {
 
             SdlRuntime {
                 config: runtime_config.clone(),
+                dns_profile: Arc::new(RwLock::new(None::<DnsProfile>)),
+                dns_query_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                pending_dns_queries: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
@@ -212,8 +214,17 @@ impl Sdl {
                 tun_lifecycle: Arc::new(Mutex::new(())),
                 #[cfg(feature = "integrated_tun")]
                 tun_device_helper,
+                #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+                applied_dns_interface: Arc::new(Mutex::new(None)),
             }
         });
+        #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+        {
+            let runtime = runtime.clone();
+            stop_manager.add_listener("linuxSplitDns".into(), move || {
+                runtime.revert_dns_on_shutdown();
+            })?;
+        }
         let handler = RecvDataHandler::new(runtime.clone(), device, callback.clone());
         let control_handler = handler.clone();
         {

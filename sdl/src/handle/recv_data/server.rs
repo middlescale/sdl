@@ -20,14 +20,15 @@ use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
-    DeviceAuthAck, DeviceAuthChallenge, DeviceList, GatewayConnectAck, HandshakeResponse, PunchAck,
-    PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
+    DeviceAuthAck, DeviceAuthChallenge, DeviceList, DnsQueryResponse, GatewayConnectAck,
+    HandshakeResponse, PunchAck, PunchResult, PunchResultCode, PunchStart,
+    RefreshGatewayGrantResponse, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::{proto, PeerClientInfo};
+use crate::{proto, DnsProfile, PeerClientInfo};
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 
@@ -370,6 +371,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
                 log::info!("注册成功：{:?}", register_info);
                 self.apply_gateway_grant(response.gateway_access_grant.as_ref(), virtual_ip);
+                let dns_profile = response.dns_profile.as_ref().map(|profile| DnsProfile {
+                    servers: profile.servers.clone(),
+                    match_domains: profile.match_domains.clone(),
+                });
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);
                     self.runtime
@@ -389,6 +394,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         self.runtime.nat_test.update_tcp_port(public_port);
                     }
                     let old = current_device;
+                    let dns_changed = self.runtime.replace_dns_profile(dns_profile);
                     let mut cur = *current_device;
                     loop {
                         let mut new_current_device = cur;
@@ -411,6 +417,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     if old.virtual_ip != virtual_ip
                         || old.virtual_gateway != virtual_gateway
                         || old.virtual_netmask != virtual_netmask
+                        || dns_changed
                     {
                         if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
                             log::info!("ip发生变化,old:{:?},response={:?}", old, response);
@@ -482,6 +489,37 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime
                     .control_session
                     .send_device_auth_proof(&challenge)?;
+            }
+            service_packet::Protocol::DnsQueryResponse => {
+                let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DnsQueryResponse {:?}", e)))?;
+                let Some(pending) = self.runtime.take_dns_query(response.request_id) else {
+                    log::debug!(
+                        "drop dns response for unknown request_id={}",
+                        response.request_id
+                    );
+                    return Ok(());
+                };
+                if !response.error.is_empty() {
+                    log::warn!(
+                        "control dns proxy failed request_id={} err={}",
+                        response.request_id,
+                        response.error
+                    );
+                    return Ok(());
+                }
+                if response.response.is_empty() {
+                    log::warn!(
+                        "control dns proxy returned empty response request_id={}",
+                        response.request_id
+                    );
+                    return Ok(());
+                }
+                let packet = crate::util::dns_tunnel::build_dns_response_packet(
+                    &pending,
+                    &response.response,
+                )?;
+                self.device.write(&packet)?;
             }
             service_packet::Protocol::PunchStart => {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload())

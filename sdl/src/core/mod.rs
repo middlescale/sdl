@@ -8,9 +8,8 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
-pub use runtime::{AuthRequestConfig, RuntimeConfig, SdlRuntime};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::str::FromStr;
+pub use runtime::{AuthRequestConfig, PendingDnsQuery, RuntimeConfig, SdlRuntime};
+use std::net::{Ipv4Addr, SocketAddr};
 
 mod bootstrap;
 mod runtime;
@@ -32,7 +31,6 @@ pub struct Config {
     pub name: String,
     pub server_address: SocketAddr,
     pub server_address_str: String,
-    pub name_servers: Vec<String>,
     pub stun_server: Vec<String>,
     pub in_ips: Vec<(u32, u32, Ipv4Addr)>,
     pub out_ips: Vec<(u32, u32)>,
@@ -81,7 +79,6 @@ impl Config {
             device_id,
             name,
             server_address_str,
-            vec![],
             PUB_STUN.iter().map(|s| s.to_string()).collect(),
             vec![],
             vec![],
@@ -116,7 +113,6 @@ impl Config {
         device_id: String,
         name: String,
         server_address_str: String,
-        mut name_servers: Vec<String>,
         mut stun_server: Vec<String>,
         mut in_ips: Vec<(u32, u32, Ipv4Addr)>,
         out_ips: Vec<(u32, u32)>,
@@ -142,13 +138,6 @@ impl Config {
         for x in stun_server.iter_mut() {
             if !x.contains(":") {
                 x.push_str(":3478");
-            }
-        }
-        for x in name_servers.iter_mut() {
-            if Ipv6Addr::from_str(x).is_ok() {
-                x.push_str(":53");
-            } else if !x.contains(":") {
-                x.push_str(":53");
             }
         }
         if token.is_empty() || token.len() > 128 {
@@ -189,11 +178,7 @@ impl Config {
 
         let mut server_address = "0.0.0.0:0".parse().unwrap();
         if _query_dns {
-            server_address = address_choose(dns_query_all(
-                control_addr.authority(),
-                name_servers.clone(),
-                &LocalInterface::default(),
-            )?)?;
+            server_address = address_choose(dns_query_all(control_addr.authority())?)?;
         }
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = crate::port_mapping::convert(port_mapping_list)?;
@@ -222,7 +207,6 @@ impl Config {
             name,
             server_address,
             server_address_str,
-            name_servers,
             stun_server,
             in_ips,
             out_ips,

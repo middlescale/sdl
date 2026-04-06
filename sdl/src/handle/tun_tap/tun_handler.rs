@@ -4,6 +4,7 @@ use sdl_packet::icmp::icmp::IcmpPacket;
 use sdl_packet::icmp::Kind;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::ip::ipv4::protocol::Protocol;
+use sdl_packet::udp::udp::UdpPacket;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -161,6 +162,18 @@ pub(crate) fn handle(
     }
     let src_ip = ipv4_packet.source_ip();
     let mut dest_ip = ipv4_packet.destination_ip();
+    if ipv4_packet.protocol() == Protocol::Udp && data_channel.is_dns_service_ip(&dest_ip) {
+        let udp_packet = UdpPacket::new(src_ip, dest_ip, ipv4_packet.payload())?;
+        if udp_packet.destination_port() == 53 && !udp_packet.payload().is_empty() {
+            data_channel.proxy_dns_query(
+                src_ip,
+                dest_ip,
+                udp_packet.source_port(),
+                udp_packet.payload(),
+            )?;
+            return Ok(());
+        }
+    }
     let mut net_packet = NetPacket::new0(data_len, buf)?;
     let mut out = NetPacket::unchecked(extend);
     net_packet.set_default_version();

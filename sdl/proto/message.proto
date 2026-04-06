@@ -23,6 +23,22 @@ message RegistrationRequest {
     bytes online_kx_pub = 11;
 }
 
+message DnsProfile {
+    repeated string servers = 1;
+    repeated string match_domains = 2;
+}
+
+message DnsQueryRequest {
+    uint64 request_id = 1;
+    bytes query = 2;
+}
+
+message DnsQueryResponse {
+    uint64 request_id = 1;
+    bytes response = 2;
+    string error = 3;
+}
+
 message RegistrationResponse {
     fixed32 virtual_ip = 1;
     fixed32 virtual_gateway = 2;
@@ -35,6 +51,7 @@ message RegistrationResponse {
     GatewayAccessGrant gateway_access_grant = 9;
     uint32 error_code = 10;
     string error_message = 11;
+    DnsProfile dns_profile = 12;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;

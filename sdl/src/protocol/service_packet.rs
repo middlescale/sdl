@@ -28,6 +28,8 @@ pub enum Protocol {
     GatewayConnectAck,
     RefreshGatewayGrantRequest,
     RefreshGatewayGrantResponse,
+    DnsQueryRequest,
+    DnsQueryResponse,
     Unknown(u8),
 }
 
@@ -56,6 +58,8 @@ impl From<u8> for Protocol {
             20 => Self::GatewayConnectAck,
             21 => Self::RefreshGatewayGrantRequest,
             22 => Self::RefreshGatewayGrantResponse,
+            25 => Self::DnsQueryRequest,
+            26 => Self::DnsQueryResponse,
             val => Self::Unknown(val),
         }
     }
@@ -86,6 +90,8 @@ impl Into<u8> for Protocol {
             Self::GatewayConnectAck => 20,
             Self::RefreshGatewayGrantRequest => 21,
             Self::RefreshGatewayGrantResponse => 22,
+            Self::DnsQueryRequest => 25,
+            Self::DnsQueryResponse => 26,
             Self::Unknown(val) => val,
         }
     }
@@ -111,6 +117,8 @@ mod tests {
             (18u8, Protocol::GatewayReportAck),
             (21u8, Protocol::RefreshGatewayGrantRequest),
             (22u8, Protocol::RefreshGatewayGrantResponse),
+            (25u8, Protocol::DnsQueryRequest),
+            (26u8, Protocol::DnsQueryResponse),
         ];
         for (raw, expect) in cases {
             assert_eq!(Protocol::from(raw), expect);
