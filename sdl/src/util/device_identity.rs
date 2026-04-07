@@ -124,17 +124,44 @@ fn resolve_device_key_path(device_id: &str) -> anyhow::Result<PathBuf> {
             }
         })
         .collect();
-    let home =
-        std::env::var("HOME").context("HOME is not set and SDL_DEVICE_KEY_PATH not provided")?;
-    Ok(PathBuf::from(home)
-        .join(".sdl")
-        .join("identity")
-        .join(format!("{safe_device_id}.key")))
+    let root = resolve_device_key_root(|name| std::env::var(name), cfg!(target_os = "windows"))?;
+    Ok(root.join("identity").join(format!("{safe_device_id}.key")))
+}
+
+fn resolve_device_key_root<F>(mut get_env: F, is_windows: bool) -> anyhow::Result<PathBuf>
+where
+    F: FnMut(&str) -> Result<String, std::env::VarError>,
+{
+    if let Ok(home) = get_env("HOME") {
+        return Ok(PathBuf::from(home).join(".sdl"));
+    }
+    if is_windows {
+        if let Ok(profile) = get_env("USERPROFILE") {
+            return Ok(PathBuf::from(profile).join(".sdl"));
+        }
+        if let (Ok(home_drive), Ok(home_path)) = (get_env("HOMEDRIVE"), get_env("HOMEPATH")) {
+            return Ok(PathBuf::from(format!("{home_drive}{home_path}")).join(".sdl"));
+        }
+        if let Ok(local_app_data) = get_env("LOCALAPPDATA") {
+            return Ok(PathBuf::from(local_app_data).join("sdl"));
+        }
+        if let Ok(app_data) = get_env("APPDATA") {
+            return Ok(PathBuf::from(app_data).join("sdl"));
+        }
+        return Err(anyhow!(
+            "HOME/USERPROFILE/HOMEDRIVE+HOMEPATH/LOCALAPPDATA/APPDATA are not set and SDL_DEVICE_KEY_PATH not provided"
+        ));
+    }
+    Err(anyhow!(
+        "HOME is not set and SDL_DEVICE_KEY_PATH not provided"
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_peer_session_key, OnlineSessionKeyMaterial};
+    use super::{derive_peer_session_key, resolve_device_key_root, OnlineSessionKeyMaterial};
+    use std::env::VarError;
+    use std::path::PathBuf;
 
     #[test]
     fn derive_peer_session_key_is_symmetric() {
@@ -175,5 +202,47 @@ mod tests {
             .expect("derive key for group-b");
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn resolve_device_key_root_uses_home_on_unix() {
+        let root = resolve_device_key_root(
+            |name| match name {
+                "HOME" => Ok("/home/tester".into()),
+                _ => Err(VarError::NotPresent),
+            },
+            false,
+        )
+        .expect("resolve root");
+        assert_eq!(root, PathBuf::from("/home/tester/.sdl"));
+    }
+
+    #[test]
+    fn resolve_device_key_root_uses_userprofile_on_windows() {
+        let root = resolve_device_key_root(
+            |name| match name {
+                "USERPROFILE" => Ok(r"C:\Users\tester".into()),
+                _ => Err(VarError::NotPresent),
+            },
+            true,
+        )
+        .expect("resolve root");
+        assert_eq!(root, PathBuf::from(r"C:\Users\tester").join(".sdl"));
+    }
+
+    #[test]
+    fn resolve_device_key_root_falls_back_to_appdata_on_windows() {
+        let root = resolve_device_key_root(
+            |name| match name {
+                "APPDATA" => Ok(r"C:\Users\tester\AppData\Roaming".into()),
+                _ => Err(VarError::NotPresent),
+            },
+            true,
+        )
+        .expect("resolve root");
+        assert_eq!(
+            root,
+            PathBuf::from(r"C:\Users\tester\AppData\Roaming").join("sdl")
+        );
     }
 }
