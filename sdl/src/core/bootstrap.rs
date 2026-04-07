@@ -38,6 +38,8 @@ pub struct Sdl {
     stop_manager: StopManager,
     config: Config,
     runtime: Arc<SdlRuntime>,
+    #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+    _linux_split_dns_stop_worker: crate::util::Worker,
 }
 
 impl Sdl {
@@ -219,12 +221,12 @@ impl Sdl {
             }
         });
         #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
-        {
+        let linux_split_dns_stop_worker = {
             let runtime = runtime.clone();
             stop_manager.add_listener("linuxSplitDns".into(), move || {
                 runtime.revert_dns_on_shutdown();
-            })?;
-        }
+            })?
+        };
         let handler = RecvDataHandler::new(runtime.clone(), device, callback.clone());
         let control_handler = handler.clone();
         {
@@ -278,6 +280,8 @@ impl Sdl {
             stop_manager,
             config,
             runtime,
+            #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+            _linux_split_dns_stop_worker: linux_split_dns_stop_worker,
         })
     }
 }
