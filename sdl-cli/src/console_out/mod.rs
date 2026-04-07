@@ -139,6 +139,7 @@ pub fn console_route_table(mut list: Vec<RouteItem>) {
     let mut out_list = Vec::with_capacity(list.len());
 
     out_list.push(vec![
+        ("Name".to_string(), Style::new()),
         ("Destination".to_string(), Style::new()),
         ("Next Hop".to_string(), Style::new()),
         ("Metric".to_string(), Style::new()),
@@ -147,6 +148,7 @@ pub fn console_route_table(mut list: Vec<RouteItem>) {
     ]);
     for item in list {
         out_list.push(vec![
+            (item.name, Style::new().green()),
             (item.destination, Style::new().green()),
             (item.next_hop, Style::new().green()),
             (item.metric, Style::new().green()),

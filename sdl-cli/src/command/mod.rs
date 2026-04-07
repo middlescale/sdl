@@ -22,6 +22,11 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
     let current_device = vnt.current_device();
     let server_addr = vnt.config().server_address_str.clone();
     let gateway_summary = vnt.gateway_session_summary();
+    let peer_names: std::collections::HashMap<Ipv4Addr, String> = vnt
+        .device_list()
+        .into_iter()
+        .map(|peer| (peer.virtual_ip, peer.name))
+        .collect();
     let mut route_list = Vec::with_capacity(route_table.len());
     let mut has_gateway_route = false;
     for (destination, routes) in route_table {
@@ -51,6 +56,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             };
 
             let item = RouteItem {
+                name: route_name(destination, current_device.virtual_gateway, &peer_names),
                 destination: display_destination(destination),
                 next_hop,
                 metric,
@@ -68,6 +74,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             current_device.virtual_gateway,
             &gateway_summary,
             &route_list,
+            &peer_names,
             &server_addr,
         ));
     }
@@ -86,6 +93,7 @@ fn build_gateway_route_item(
     gateway_vip: Ipv4Addr,
     gateway_summary: &GatewaySessionSummary,
     route_list: &[RouteItem],
+    peer_names: &std::collections::HashMap<Ipv4Addr, String>,
     server_addr: &str,
 ) -> RouteItem {
     let (metric, rt) = control_route_metric_rt(route_list);
@@ -93,6 +101,7 @@ fn build_gateway_route_item(
         .endpoint
         .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
     RouteItem {
+        name: route_name(gateway_vip, gateway_vip, peer_names),
         destination: gateway_vip.to_string(),
         next_hop: String::new(),
         metric,
@@ -104,6 +113,23 @@ fn build_gateway_route_item(
             server_addr,
         ),
     }
+}
+
+fn route_name(
+    destination: Ipv4Addr,
+    gateway_vip: Ipv4Addr,
+    peer_names: &std::collections::HashMap<Ipv4Addr, String>,
+) -> String {
+    if destination.to_string() == CONTROL_VIP_STR {
+        return "control".to_string();
+    }
+    if destination == gateway_vip {
+        return "gateway".to_string();
+    }
+    peer_names
+        .get(&destination)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn control_route_metric_rt(route_list: &[RouteItem]) -> (String, String) {
@@ -394,8 +420,9 @@ fn find_matching_channel(input_str: &str, channels: &[usize]) -> Option<usize> {
 mod tests {
     use super::{
         control_route_metric_rt, display_destination, find_matching_channel, match_from_end,
-        RouteItem, CONTROL_DESTINATION,
+        route_name, RouteItem, CONTROL_DESTINATION,
     };
+    use std::collections::HashMap;
     use std::net::Ipv4Addr;
 
     #[test]
@@ -428,6 +455,7 @@ mod tests {
     #[test]
     fn control_route_metric_rt_prefers_control_row() {
         let route_list = vec![RouteItem {
+            name: "control".to_string(),
             destination: CONTROL_DESTINATION.to_string(),
             next_hop: String::new(),
             metric: "2".to_string(),
@@ -441,6 +469,36 @@ mod tests {
         assert_eq!(
             control_route_metric_rt(&[]),
             ("2".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn route_name_prefers_peer_and_special_labels() {
+        let mut peer_names = HashMap::new();
+        peer_names.insert(Ipv4Addr::new(10, 26, 0, 3), "aliyun-hk".to_string());
+        assert_eq!(
+            route_name(
+                Ipv4Addr::new(0, 0, 0, 1),
+                Ipv4Addr::new(10, 26, 0, 1),
+                &peer_names
+            ),
+            "control"
+        );
+        assert_eq!(
+            route_name(
+                Ipv4Addr::new(10, 26, 0, 1),
+                Ipv4Addr::new(10, 26, 0, 1),
+                &peer_names
+            ),
+            "gateway"
+        );
+        assert_eq!(
+            route_name(
+                Ipv4Addr::new(10, 26, 0, 3),
+                Ipv4Addr::new(10, 26, 0, 1),
+                &peer_names
+            ),
+            "aliyun-hk"
         );
     }
 }

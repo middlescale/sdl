@@ -29,6 +29,7 @@ pub struct Info {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RouteItem {
+    pub name: String,
     pub destination: String,
     pub next_hop: String,
     pub metric: String,
