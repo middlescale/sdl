@@ -126,10 +126,7 @@ fn route_name(
     if destination == gateway_vip {
         return "gateway".to_string();
     }
-    peer_names
-        .get(&destination)
-        .cloned()
-        .unwrap_or_default()
+    peer_names.get(&destination).cloned().unwrap_or_default()
 }
 
 fn control_route_metric_rt(route_list: &[RouteItem]) -> (String, String) {

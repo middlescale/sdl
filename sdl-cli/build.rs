@@ -13,8 +13,7 @@ fn main() {
         &now_time.format("%y%m%d%H%M").to_string(),
         rand::thread_rng().gen_range(100..1000)
     );
-    let git_tag = git_output(&["describe", "--tags", "--exact-match"])
-        .unwrap_or_default();
+    let git_tag = git_output(&["describe", "--tags", "--exact-match"]).unwrap_or_default();
     let git_commit = git_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_default();
     let generated_code = format!(
         r#"pub const SERIAL_NUMBER: &str = "{serial_number}";

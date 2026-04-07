@@ -38,8 +38,11 @@ pub struct Sdl {
     stop_manager: StopManager,
     config: Config,
     runtime: Arc<SdlRuntime>,
-    #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
-    _linux_split_dns_stop_worker: crate::util::Worker,
+    #[cfg(all(
+        feature = "integrated_tun",
+        any(target_os = "windows", target_os = "linux", target_os = "macos")
+    ))]
+    _split_dns_stop_worker: crate::util::Worker,
 }
 
 impl Sdl {
@@ -218,14 +221,20 @@ impl Sdl {
                 tun_device_helper,
                 #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
                 applied_dns_interface: Arc::new(Mutex::new(None)),
-                #[cfg(all(feature = "integrated_tun", target_os = "macos"))]
+                #[cfg(all(
+                    feature = "integrated_tun",
+                    any(target_os = "macos", target_os = "windows")
+                ))]
                 applied_dns_domains: Arc::new(Mutex::new(Vec::new())),
             }
         });
-        #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
-        let linux_split_dns_stop_worker = {
+        #[cfg(all(
+            feature = "integrated_tun",
+            any(target_os = "windows", target_os = "linux", target_os = "macos")
+        ))]
+        let split_dns_stop_worker = {
             let runtime = runtime.clone();
-            stop_manager.add_listener("linuxSplitDns".into(), move || {
+            stop_manager.add_listener("splitDns".into(), move || {
                 runtime.revert_dns_on_shutdown();
             })?
         };
@@ -282,8 +291,11 @@ impl Sdl {
             stop_manager,
             config,
             runtime,
-            #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
-            _linux_split_dns_stop_worker: linux_split_dns_stop_worker,
+            #[cfg(all(
+                feature = "integrated_tun",
+                any(target_os = "windows", target_os = "linux", target_os = "macos")
+            ))]
+            _split_dns_stop_worker: split_dns_stop_worker,
         })
     }
 }

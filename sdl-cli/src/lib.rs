@@ -24,7 +24,10 @@ pub(crate) fn build_version_string() -> String {
     };
 
     if generated_serial_number::GIT_COMMIT.is_empty() {
-        format!("{version} (serial {})", generated_serial_number::SERIAL_NUMBER)
+        format!(
+            "{version} (serial {})",
+            generated_serial_number::SERIAL_NUMBER
+        )
     } else {
         format!(
             "{version} (commit {}, serial {})",
