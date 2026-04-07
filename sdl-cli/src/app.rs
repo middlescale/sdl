@@ -2,7 +2,6 @@ use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
 use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{write_saved_config, FileConfig};
-use crate::generated_serial_number;
 use anyhow::Context;
 use console::style;
 use sdl::core::{Config, Sdl};
@@ -447,16 +446,9 @@ pub fn run_service(config: Config, show_cmd: bool, saved_config: FileConfig) -> 
         println!("Please run sdl-service with administrator or root privileges");
         return 1;
     }
-    println!(
-        "sdl-service version {} (serial {})",
-        sdl::SDL_VERSION,
-        generated_serial_number::SERIAL_NUMBER
-    );
-    log::info!(
-        "sdl-service version {} (serial {})",
-        sdl::SDL_VERSION,
-        generated_serial_number::SERIAL_NUMBER
-    );
+    let build_version = crate::build_version_string();
+    println!("sdl-service version {}", build_version);
+    log::info!("sdl-service version {}", build_version);
     let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
     manager.mutate_state(|state| {
         state.runtime_running = false;

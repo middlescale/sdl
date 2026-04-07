@@ -1,5 +1,5 @@
 use crate::args_parse::{ips_parse, out_ips_parse};
-use crate::{config, generated_serial_number};
+use crate::config;
 use anyhow::anyhow;
 use console::style;
 use getopts::Options;
@@ -299,13 +299,9 @@ pub fn parse_args_config_from(
         let (config, cmd) = file_conf.clone().into_runtime_config()?;
         (config, cmd, file_conf)
     };
-    println!("version {}", sdl::SDL_VERSION);
-    println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
-    log::info!(
-        "version:{},Serial:{}",
-        sdl::SDL_VERSION,
-        generated_serial_number::SERIAL_NUMBER
-    );
+    let build_version = crate::build_version_string();
+    println!("version {}", build_version);
+    log::info!("version:{}", build_version);
     Ok(Some((config, cmd, file_conf)))
 }
 
@@ -366,8 +362,7 @@ fn print_usage(program: &str, _opts: Options) {
     // 获取系统语言  Locale::user_default().unwrap_or_else(|_| Locale::default());
     let language = get_locale().unwrap_or_else(|| String::from("en-US"));
     println!("Usage: {} [options]", program);
-    println!("version:{}", sdl::SDL_VERSION);
-    println!("Serial:{}", generated_serial_number::SERIAL_NUMBER);
+    println!("version:{}", crate::build_version_string());
     println!("Options:");
     println!(
         "  -g, --group <group> {}",

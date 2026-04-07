@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn print_usage() {
-    println!("sdl <resume|list|info|route|suspend|auth|channel-change> [options]");
+    println!("sdl <resume|list|info|route|suspend|auth|channel-change|version> [options]");
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl info [--json]");
@@ -14,6 +14,7 @@ fn print_usage() {
     println!("  sdl auth [--json] --userId/-u <user-id> [--group/-g default.ms.net] <ticket>");
     println!("  sdl channel-change [--type <relay|p2p|auto>] [--json]");
     println!("  sdl channel_change [--type <relay|p2p|auto>] [--json]");
+    println!("  sdl version [--json]");
 }
 
 pub fn run() -> i32 {
@@ -31,6 +32,7 @@ pub fn run() -> i32 {
         "suspend" => handle_suspend(&args[2..]),
         "auth" => handle_auth(&args[2..]),
         "channel-change" | "channel_change" => handle_channel_change(&args[2..]),
+        "version" => handle_version(&args[2..]),
         _ => {
             print_usage();
             2
@@ -40,6 +42,45 @@ pub fn run() -> i32 {
 
 fn has_json_flag(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--json")
+}
+
+fn handle_version(args: &[String]) -> i32 {
+    let json = has_json_flag(args);
+    let filtered: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .cloned()
+        .collect();
+    if !filtered.is_empty() {
+        let message = "sdl version does not accept additional arguments";
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": false,
+                    "error": message
+                }))
+                .unwrap()
+            );
+        } else {
+            eprintln!("{}", message);
+        }
+        return 1;
+    }
+    let version = crate::build_version_string();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "version": version
+            }))
+            .unwrap()
+        );
+    } else {
+        println!("{}", version);
+    }
+    0
 }
 
 fn handle_resume(args: &[String]) -> i32 {
@@ -339,7 +380,7 @@ fn wait_for_auth_result(user_id: &str, group: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_auth_args;
+    use super::{handle_version, parse_auth_args};
 
     #[test]
     fn parse_auth_args_uses_default_group() {
@@ -377,6 +418,16 @@ mod tests {
                 "ticket-1".to_string()
             )
         );
+    }
+
+    #[test]
+    fn version_command_accepts_no_args() {
+        assert_eq!(handle_version(&[]), 0);
+    }
+
+    #[test]
+    fn version_command_rejects_extra_args() {
+        assert_eq!(handle_version(&["extra".to_string()]), 1);
     }
 }
 
