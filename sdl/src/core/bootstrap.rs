@@ -218,6 +218,8 @@ impl Sdl {
                 tun_device_helper,
                 #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
                 applied_dns_interface: Arc::new(Mutex::new(None)),
+                #[cfg(all(feature = "integrated_tun", target_os = "macos"))]
+                applied_dns_domains: Arc::new(Mutex::new(Vec::new())),
             }
         });
         #[cfg(all(feature = "integrated_tun", target_os = "linux"))]

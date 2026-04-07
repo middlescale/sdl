@@ -94,6 +94,8 @@ pub struct SdlRuntime {
     pub tun_device_helper: TunDeviceHelper,
     #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
     pub applied_dns_interface: Arc<Mutex<Option<String>>>,
+    #[cfg(all(feature = "integrated_tun", target_os = "macos"))]
+    pub applied_dns_domains: Arc<Mutex<Vec<String>>>,
 }
 
 impl SdlRuntime {
@@ -228,10 +230,10 @@ impl SdlRuntime {
             );
             callback.create_tun(tun_info);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         self.tun_device_helper.start(device)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
         Ok(())
     }
@@ -248,6 +250,19 @@ impl SdlRuntime {
                         err
                     );
                 }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut applied_domains = self.applied_dns_domains.lock();
+            let domains = std::mem::take(&mut *applied_domains);
+            drop(applied_domains);
+            if let Err(err) = crate::util::macos_dns::revert_split_dns(&domains) {
+                log::warn!(
+                    "failed to revert split DNS domains {:?}: {:?}",
+                    domains,
+                    err
+                );
             }
         }
     }
@@ -279,7 +294,37 @@ impl SdlRuntime {
         }
     }
 
-    #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+    #[cfg(all(feature = "integrated_tun", target_os = "macos"))]
+    fn apply_dns_profile<Call: SdlCallback>(&self, interface_name: &str, callback: &Call) {
+        let profile = self.dns_profile.read().clone();
+        let Some(profile) = profile else {
+            return;
+        };
+        if profile.servers.is_empty() || profile.match_domains.is_empty() {
+            return;
+        }
+        match crate::util::macos_dns::apply_split_dns(interface_name, &profile) {
+            Ok(domains) => {
+                *self.applied_dns_domains.lock() = domains;
+            }
+            Err(err) => {
+                log::warn!(
+                    "failed to apply split DNS for interface {}: {:?}",
+                    interface_name,
+                    err
+                );
+                callback.error(ErrorInfo::new_msg(
+                    ErrorType::Warn,
+                    format!("split DNS apply failed on {}: {:?}", interface_name, err),
+                ));
+            }
+        }
+    }
+
+    #[cfg(all(
+        feature = "integrated_tun",
+        any(target_os = "linux", target_os = "macos")
+    ))]
     pub fn revert_dns_on_shutdown(&self) {
         self.clear_applied_dns_profile();
     }
