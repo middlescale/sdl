@@ -40,6 +40,10 @@ impl CommandClient {
         let cmd = format!("channel_change:{}", input.trim());
         self.send_string_cmd(cmd.as_bytes())
     }
+    pub fn rename(&mut self, input: &str) -> io::Result<String> {
+        let cmd = format!("rename:{}", input);
+        self.send_string_cmd(cmd.as_bytes())
+    }
     pub fn auth(&mut self, user_id: &str, group: &str, ticket: &str) -> io::Result<String> {
         let cmd = serde_json::json!({
             "user_id": user_id,

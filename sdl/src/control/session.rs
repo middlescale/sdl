@@ -308,6 +308,20 @@ impl ControlSession {
         Ok(())
     }
 
+    pub fn send_device_rename_request(
+        &self,
+        request_id: u64,
+        new_name: String,
+    ) -> anyhow::Result<()> {
+        let packet = registrar::device_rename_request_packet(
+            request_id,
+            self.config.device_id.clone(),
+            new_name,
+        )?;
+        self.send_packet(&packet)?;
+        Ok(())
+    }
+
     pub fn send_refresh_gateway_grant_request(
         &self,
         gateway_sessions: &GatewaySessions,

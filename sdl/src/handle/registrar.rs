@@ -4,7 +4,9 @@ use std::net::Ipv4Addr;
 use protobuf::Message;
 
 use crate::handle::{CONTROL_VIP, SELF_IP};
-use crate::proto::message::{DeviceAuthProof, DeviceAuthRequest, RegistrationRequest};
+use crate::proto::message::{
+    DeviceAuthProof, DeviceAuthRequest, DeviceRenameRequest, RegistrationRequest,
+};
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 
 /// 注册数据
@@ -94,6 +96,30 @@ pub fn device_auth_proof_packet(
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Service);
     net_packet.set_transport_protocol(service_packet::Protocol::DeviceAuthProof.into());
+    net_packet.set_initial_ttl(MAX_TTL);
+    net_packet.set_payload(&bytes)?;
+    Ok(net_packet)
+}
+
+pub fn device_rename_request_packet(
+    request_id: u64,
+    device_id: String,
+    new_name: String,
+) -> anyhow::Result<NetPacket<Vec<u8>>> {
+    let mut request = DeviceRenameRequest::new();
+    request.request_id = request_id;
+    request.device_id = device_id;
+    request.new_name = new_name;
+    let bytes = request
+        .write_to_bytes()
+        .map_err(|e| anyhow!("DeviceRenameRequest {:?}", e))?;
+    let buf = vec![0u8; 12 + bytes.len()];
+    let mut net_packet = NetPacket::new(buf)?;
+    net_packet.set_destination(CONTROL_VIP);
+    net_packet.set_source(SELF_IP);
+    net_packet.set_default_version();
+    net_packet.set_protocol(Protocol::Service);
+    net_packet.set_transport_protocol(service_packet::Protocol::DeviceRenameRequest.into());
     net_packet.set_initial_ttl(MAX_TTL);
     net_packet.set_payload(&bytes)?;
     Ok(net_packet)

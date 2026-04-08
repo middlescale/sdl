@@ -5,12 +5,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn print_usage() {
-    println!("sdl <resume|list|info|route|suspend|auth|channel-change|version> [options]");
+    println!("sdl <resume|list|info|route|suspend|rename|auth|channel-change|version> [options]");
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl info [--json]");
     println!("  sdl route [--json]");
     println!("  sdl suspend [--json]                  # 挂起本地收发服务");
+    println!("  sdl rename [--json] <name>            # 修改当前节点显示名");
     println!("  sdl auth [--json] --userId/-u <user-id> [--group/-g default.ms.net] <ticket>");
     println!("  sdl channel-change [--type <relay|p2p|auto>] [--json]");
     println!("  sdl channel_change [--type <relay|p2p|auto>] [--json]");
@@ -30,6 +31,7 @@ pub fn run() -> i32 {
         "info" => handle_info(&args[2..]),
         "route" => handle_route(&args[2..]),
         "suspend" => handle_suspend(&args[2..]),
+        "rename" => handle_rename(&args[2..]),
         "auth" => handle_auth(&args[2..]),
         "channel-change" | "channel_change" => handle_channel_change(&args[2..]),
         "version" => handle_version(&args[2..]),
@@ -279,6 +281,64 @@ fn handle_suspend(args: &[String]) -> i32 {
                 eprintln!("suspend error: {}", e);
                 1
             }
+        }
+    }
+}
+
+fn handle_rename(args: &[String]) -> i32 {
+    let json = has_json_flag(args);
+    let filtered: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        let message = "usage: sdl rename [--json] <name>";
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": false,
+                    "error": message
+                }))
+                .unwrap()
+            );
+        } else {
+            eprintln!("{}", message);
+        }
+        return 2;
+    }
+    let new_name = filtered.join(" ");
+    match CommandClient::new().and_then(|mut client| client.rename(&new_name)) {
+        Ok(result) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "result": result
+                    }))
+                    .unwrap()
+                );
+            } else {
+                println!("{}", result);
+            }
+            0
+        }
+        Err(e) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "error": e.to_string()
+                    }))
+                    .unwrap()
+                );
+            } else {
+                eprintln!("rename error: {}", e);
+            }
+            1
         }
     }
 }

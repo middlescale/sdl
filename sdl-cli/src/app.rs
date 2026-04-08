@@ -23,6 +23,28 @@ struct ServiceManager {
 struct ServiceCommandHandler(Arc<ServiceManager>);
 
 impl ServiceManager {
+    fn rename_device(self: &Arc<Self>, new_name: &str) -> anyhow::Result<String> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("name cannot be empty");
+        }
+        if trimmed.len() > 128 {
+            anyhow::bail!("name too long");
+        }
+        let current_name = self.current_config().name;
+        if current_name == trimmed {
+            return Ok(format!("device name already set to {}", trimmed));
+        }
+        let runtime = self.current_runtime()?;
+        let applied_name = runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))?;
+        self.config.lock().unwrap().name = applied_name.clone();
+        self.saved_config.lock().unwrap().name = applied_name.clone();
+        self.persist_saved_config();
+        let _ = self.stop_service_runtime()?;
+        self.resume_service_runtime()?;
+        Ok(format!("device renamed to {}", applied_name))
+    }
+
     fn new(config: Config, saved_config: FileConfig) -> Self {
         Self {
             config: Mutex::new(config),
@@ -278,6 +300,12 @@ impl CommandHandler for ServiceCommandHandler {
                 UseChannelType::All => "auto",
             }
         ))
+    }
+
+    fn rename(&self, new_name: &str) -> io::Result<String> {
+        self.0
+            .rename_device(new_name)
+            .map_err(|e| io::Error::other(format!("rename failed: {e:?}")))
     }
 
     fn auth(&self, auth: AuthCommand) -> io::Result<String> {

@@ -58,5 +58,11 @@ cargo build -p sdl-cli --no-default-features
 ./target/debug/sdl-service -g default.ms.net -d <device_id> -s https://control.example.com/control
 ```
 
+前台命令可以在服务运行后修改节点显示名：
+
+```bash
+./target/debug/sdl rename office-laptop
+```
+
 
 </details>

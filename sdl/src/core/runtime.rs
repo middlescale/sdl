@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -65,12 +66,19 @@ pub struct PendingDnsQuery {
     pub created_at_ms: u64,
 }
 
+pub struct PendingRenameRequest {
+    pub responder: mpsc::Sender<Result<String, String>>,
+    pub created_at_ms: u64,
+}
+
 #[derive(Clone)]
 pub struct SdlRuntime {
     pub config: RuntimeConfig,
     pub dns_profile: Arc<RwLock<Option<DnsProfile>>>,
     pub dns_query_seq: Arc<AtomicU64>,
     pub pending_dns_queries: Arc<Mutex<HashMap<u64, PendingDnsQuery>>>,
+    pub rename_request_seq: Arc<AtomicU64>,
+    pub pending_rename_requests: Arc<Mutex<HashMap<u64, PendingRenameRequest>>>,
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
@@ -165,6 +173,39 @@ impl SdlRuntime {
 
     pub fn take_dns_query(&self, request_id: u64) -> Option<PendingDnsQuery> {
         self.pending_dns_queries.lock().remove(&request_id)
+    }
+
+    pub fn remember_rename_request(
+        &self,
+        responder: mpsc::Sender<Result<String, String>>,
+    ) -> u64 {
+        let request_id = self
+            .rename_request_seq
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let now_ms = crate::handle::now_time() as u64;
+        let mut pending = self.pending_rename_requests.lock();
+        pending.retain(|_, request| now_ms.saturating_sub(request.created_at_ms) < 30_000);
+        pending.insert(
+            request_id,
+            PendingRenameRequest {
+                responder,
+                created_at_ms: now_ms,
+            },
+        );
+        request_id
+    }
+
+    pub fn forget_rename_request(&self, request_id: u64) {
+        self.pending_rename_requests.lock().remove(&request_id);
+    }
+
+    pub fn complete_rename_request(&self, request_id: u64, result: Result<String, String>) -> bool {
+        let Some(request) = self.pending_rename_requests.lock().remove(&request_id) else {
+            return false;
+        };
+        let _ = request.responder.send(result);
+        true
     }
 
     #[cfg(feature = "integrated_tun")]

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -198,6 +199,8 @@ impl Sdl {
                 dns_profile: Arc::new(RwLock::new(None::<DnsProfile>)),
                 dns_query_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 pending_dns_queries: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                rename_request_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                pending_rename_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
@@ -368,6 +371,34 @@ impl Sdl {
             auth_request.ticket = Some(ticket);
         }
         self.runtime.control_session.send_device_auth_request()
+    }
+    pub fn request_device_rename(
+        &self,
+        new_name: String,
+        timeout: Duration,
+    ) -> anyhow::Result<String> {
+        let (sender, receiver) = mpsc::channel();
+        let request_id = self.runtime.remember_rename_request(sender);
+        if let Err(err) = self
+            .runtime
+            .control_session
+            .send_device_rename_request(request_id, new_name)
+        {
+            self.runtime.forget_rename_request(request_id);
+            return Err(err);
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(Ok(applied_name)) => Ok(applied_name),
+            Ok(Err(reason)) => anyhow::bail!("rename rejected: {}", reason),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.runtime.forget_rename_request(request_id);
+                anyhow::bail!("rename request timed out")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.runtime.forget_rename_request(request_id);
+                anyhow::bail!("rename response channel disconnected")
+            }
+        }
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
         let current_device = self.runtime.current_device.load();

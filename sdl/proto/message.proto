@@ -171,6 +171,17 @@ message DeviceAuthAck {
     int64 auth_expire_unix_ms = 6;
     bool reauth_required = 7;
 }
+message DeviceRenameRequest {
+    uint64 request_id = 1;
+    string device_id = 2;
+    string new_name = 3;
+}
+message DeviceRenameResponse {
+    uint64 request_id = 1;
+    bool ok = 2;
+    string reason = 3;
+    string applied_name = 4;
+}
 message DeviceInfo {
     string name = 1;
     fixed32 virtual_ip = 2;

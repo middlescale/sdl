@@ -31,6 +31,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn resume_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String>;
+    fn rename(&self, new_name: &str) -> io::Result<String>;
     fn auth(&self, auth: AuthCommand) -> io::Result<String>;
 }
 
@@ -107,6 +108,9 @@ where
                         Err(err) => serde_yaml::to_string(&format!("error {}", err))
                             .unwrap_or_else(|e| format!("error {:?}", e)),
                     }
+                } else if let Some(value) = cmd.strip_prefix("rename:") {
+                    serde_yaml::to_string(&handler.rename(value)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e))
                 } else if let Some(value) = cmd.strip_prefix("auth:") {
                     match serde_json::from_str::<AuthCommand>(value.trim()) {
                         Ok(auth) => {
@@ -159,6 +163,9 @@ mod tests {
         fn channel_change(&self, _use_channel_type: UseChannelType) -> io::Result<String> {
             Ok("ok".to_string())
         }
+        fn rename(&self, new_name: &str) -> io::Result<String> {
+            Ok(new_name.to_string())
+        }
         fn auth(&self, auth: AuthCommand) -> io::Result<String> {
             Ok(format!(
                 "{}:{}:{}",
@@ -185,5 +192,13 @@ mod tests {
 
         assert_eq!(parsed, "user-1:sales.ms.net:256");
         assert!(cmd.len() > 64);
+    }
+
+    #[test]
+    fn rename_command_passes_raw_name() {
+        let handler = StubHandler;
+        let out = command("rename:desktop windows", &handler).unwrap();
+        let parsed: String = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(parsed, "desktop windows");
     }
 }

@@ -20,8 +20,8 @@ use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
-    DeviceAuthAck, DeviceAuthChallenge, DeviceList, DnsQueryResponse, GatewayConnectAck,
-    HandshakeResponse, PunchAck, PunchResult, PunchResultCode, PunchStart,
+    DeviceAuthAck, DeviceAuthChallenge, DeviceList, DeviceRenameResponse, DnsQueryResponse,
+    GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult, PunchResultCode, PunchStart,
     RefreshGatewayGrantResponse, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
@@ -489,6 +489,23 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime
                     .control_session
                     .send_device_auth_proof(&challenge)?;
+            }
+            service_packet::Protocol::DeviceRenameResponse => {
+                let response = DeviceRenameResponse::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DeviceRenameResponse {:?}", e)))?;
+                if !self.runtime.complete_rename_request(
+                    response.request_id,
+                    if response.ok {
+                        Ok(response.applied_name.clone())
+                    } else {
+                        Err(response.reason.clone())
+                    },
+                ) {
+                    log::debug!(
+                        "drop rename response for unknown request_id={}",
+                        response.request_id
+                    );
+                }
             }
             service_packet::Protocol::DnsQueryResponse => {
                 let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())

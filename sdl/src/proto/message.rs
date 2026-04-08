@@ -4339,6 +4339,340 @@ impl ::protobuf::reflect::ProtobufValue for DeviceAuthAck {
 }
 
 #[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DeviceRenameRequest)
+pub struct DeviceRenameRequest {
+    // message fields
+    // @@protoc_insertion_point(field:DeviceRenameRequest.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DeviceRenameRequest.device_id)
+    pub device_id: ::std::string::String,
+    // @@protoc_insertion_point(field:DeviceRenameRequest.new_name)
+    pub new_name: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DeviceRenameRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DeviceRenameRequest {
+    fn default() -> &'a DeviceRenameRequest {
+        <DeviceRenameRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DeviceRenameRequest {
+    pub fn new() -> DeviceRenameRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DeviceRenameRequest| { &m.request_id },
+            |m: &mut DeviceRenameRequest| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "device_id",
+            |m: &DeviceRenameRequest| { &m.device_id },
+            |m: &mut DeviceRenameRequest| { &mut m.device_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "new_name",
+            |m: &DeviceRenameRequest| { &m.new_name },
+            |m: &mut DeviceRenameRequest| { &mut m.new_name },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceRenameRequest>(
+            "DeviceRenameRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DeviceRenameRequest {
+    const NAME: &'static str = "DeviceRenameRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                18 => {
+                    self.device_id = is.read_string()?;
+                },
+                26 => {
+                    self.new_name = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if !self.device_id.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.device_id);
+        }
+        if !self.new_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.new_name);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if !self.device_id.is_empty() {
+            os.write_string(2, &self.device_id)?;
+        }
+        if !self.new_name.is_empty() {
+            os.write_string(3, &self.new_name)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DeviceRenameRequest {
+        DeviceRenameRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.device_id.clear();
+        self.new_name.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DeviceRenameRequest {
+        static instance: DeviceRenameRequest = DeviceRenameRequest {
+            request_id: 0,
+            device_id: ::std::string::String::new(),
+            new_name: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DeviceRenameRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DeviceRenameRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DeviceRenameRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DeviceRenameRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DeviceRenameResponse)
+pub struct DeviceRenameResponse {
+    // message fields
+    // @@protoc_insertion_point(field:DeviceRenameResponse.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DeviceRenameResponse.ok)
+    pub ok: bool,
+    // @@protoc_insertion_point(field:DeviceRenameResponse.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:DeviceRenameResponse.applied_name)
+    pub applied_name: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DeviceRenameResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DeviceRenameResponse {
+    fn default() -> &'a DeviceRenameResponse {
+        <DeviceRenameResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DeviceRenameResponse {
+    pub fn new() -> DeviceRenameResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DeviceRenameResponse| { &m.request_id },
+            |m: &mut DeviceRenameResponse| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ok",
+            |m: &DeviceRenameResponse| { &m.ok },
+            |m: &mut DeviceRenameResponse| { &mut m.ok },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DeviceRenameResponse| { &m.reason },
+            |m: &mut DeviceRenameResponse| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "applied_name",
+            |m: &DeviceRenameResponse| { &m.applied_name },
+            |m: &mut DeviceRenameResponse| { &mut m.applied_name },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceRenameResponse>(
+            "DeviceRenameResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DeviceRenameResponse {
+    const NAME: &'static str = "DeviceRenameResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                16 => {
+                    self.ok = is.read_bool()?;
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                34 => {
+                    self.applied_name = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if self.ok != false {
+            my_size += 1 + 1;
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        if !self.applied_name.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.applied_name);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if self.ok != false {
+            os.write_bool(2, self.ok)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        if !self.applied_name.is_empty() {
+            os.write_string(4, &self.applied_name)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DeviceRenameResponse {
+        DeviceRenameResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.ok = false;
+        self.reason.clear();
+        self.applied_name.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DeviceRenameResponse {
+        static instance: DeviceRenameResponse = DeviceRenameResponse {
+            request_id: 0,
+            ok: false,
+            reason: ::std::string::String::new(),
+            applied_name: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DeviceRenameResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DeviceRenameResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DeviceRenameResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DeviceRenameResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
 // @@protoc_insertion_point(message:DeviceInfo)
 pub struct DeviceInfo {
     // message fields
@@ -6927,19 +7261,25 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x07user_id\x18\x03\x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x04\x20\
     \x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x05\x20\x01(\tR\x08deviceId\
     \x12-\n\x13auth_expire_unix_ms\x18\x06\x20\x01(\x03R\x10authExpireUnixMs\
-    \x12'\n\x0freauth_required\x18\x07\x20\x01(\x08R\x0ereauthRequired\"\xe9\
-    \x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\x12\x1d\
-    \n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\rdevice_status\
-    \x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1c\n\twireguard\x18\x06\x20\
-    \x01(\x08R\twireguard\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08device\
-    Id\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\
-    \n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceList\
-    \x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_l\
-    ist\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xdd\x03\n\
-    \tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\x03(\x07R\x0cpublicIpLi\
-    st\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\npublicPort\x12*\n\x11pu\
-    blic_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_typ\
-    e\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\
+    \x12'\n\x0freauth_required\x18\x07\x20\x01(\x08R\x0ereauthRequired\"l\n\
+    \x13DeviceRenameRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\treq\
+    uestId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x19\n\
+    \x08new_name\x18\x03\x20\x01(\tR\x07newName\"\x80\x01\n\x14DeviceRenameR\
+    esponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
+    \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
+    \tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\
+    \"\xe9\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\
+    \x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\rdevice_s\
+    tatus\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1c\n\twireguard\x18\x06\
+    \x20\x01(\x08R\twireguard\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08de\
+    viceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\
+    \x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceL\
+    ist\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_inf\
+    o_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xdd\x03\
+    \n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\x03(\x07R\x0cpublicIp\
+    List\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\npublicPort\x12*\n\x11\
+    public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_t\
+    ype\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\
     \x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\x08local_ip\x18\x07\x20\x01(\
     \x07R\x07localIp\x12\x1d\n\nlocal_port\x18\x08\x20\x01(\rR\tlocalPort\
     \x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\tipv6_port\x18\
@@ -7012,7 +7352,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(31);
+            let mut messages = ::std::vec::Vec::with_capacity(33);
             messages.push(HandshakeRequest::generated_message_descriptor_data());
             messages.push(HandshakeResponse::generated_message_descriptor_data());
             messages.push(RegistrationRequest::generated_message_descriptor_data());
@@ -7034,6 +7374,8 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(DeviceAuthChallenge::generated_message_descriptor_data());
             messages.push(DeviceAuthProof::generated_message_descriptor_data());
             messages.push(DeviceAuthAck::generated_message_descriptor_data());
+            messages.push(DeviceRenameRequest::generated_message_descriptor_data());
+            messages.push(DeviceRenameResponse::generated_message_descriptor_data());
             messages.push(DeviceInfo::generated_message_descriptor_data());
             messages.push(DeviceList::generated_message_descriptor_data());
             messages.push(PunchInfo::generated_message_descriptor_data());
