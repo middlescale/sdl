@@ -186,7 +186,6 @@ message DeviceInfo {
     string name = 1;
     fixed32 virtual_ip = 2;
     uint32 device_status = 3;
-    bool wireguard = 6;
     string device_id = 7;
     bytes device_pub_key = 8;
     bytes online_kx_pub = 9;

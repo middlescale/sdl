@@ -177,11 +177,7 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
         ("Rt".to_string(), Style::new()),
     ]);
     for item in list {
-        let name = if item.wire_guard {
-            format!("{}(wg)", item.name)
-        } else {
-            item.name
-        };
+        let name = item.name;
         if &item.status == "Online" {
             if item.nat_traversal_type.contains("p2p") {
                 out_list.push(vec![

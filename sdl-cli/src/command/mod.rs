@@ -243,7 +243,6 @@ pub fn command_list(vnt: &Sdl) -> Vec<DeviceItem> {
             nat_traversal_type,
             rt,
             status,
-            wire_guard: peer.wireguard,
         };
         list.push(item);
     }

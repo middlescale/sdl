@@ -684,7 +684,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Ipv4Addr::from(info.virtual_ip),
                     info.name,
                     info.device_status as u8,
-                    info.wireguard,
                     info.device_id,
                     info.device_pub_key,
                     info.online_kx_pub,

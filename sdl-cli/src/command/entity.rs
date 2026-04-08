@@ -48,7 +48,6 @@ pub struct DeviceItem {
     pub nat_traversal_type: String,
     pub rt: String,
     pub status: String,
-    pub wire_guard: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]

@@ -4682,8 +4682,6 @@ pub struct DeviceInfo {
     pub virtual_ip: u32,
     // @@protoc_insertion_point(field:DeviceInfo.device_status)
     pub device_status: u32,
-    // @@protoc_insertion_point(field:DeviceInfo.wireguard)
-    pub wireguard: bool,
     // @@protoc_insertion_point(field:DeviceInfo.device_id)
     pub device_id: ::std::string::String,
     // @@protoc_insertion_point(field:DeviceInfo.device_pub_key)
@@ -4707,7 +4705,7 @@ impl DeviceInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut fields = ::std::vec::Vec::with_capacity(6);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "name",
@@ -4723,11 +4721,6 @@ impl DeviceInfo {
             "device_status",
             |m: &DeviceInfo| { &m.device_status },
             |m: &mut DeviceInfo| { &mut m.device_status },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "wireguard",
-            |m: &DeviceInfo| { &m.wireguard },
-            |m: &mut DeviceInfo| { &mut m.wireguard },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "device_id",
@@ -4771,9 +4764,6 @@ impl ::protobuf::Message for DeviceInfo {
                 24 => {
                     self.device_status = is.read_uint32()?;
                 },
-                48 => {
-                    self.wireguard = is.read_bool()?;
-                },
                 58 => {
                     self.device_id = is.read_string()?;
                 },
@@ -4804,9 +4794,6 @@ impl ::protobuf::Message for DeviceInfo {
         if self.device_status != 0 {
             my_size += ::protobuf::rt::uint32_size(3, self.device_status);
         }
-        if self.wireguard != false {
-            my_size += 1 + 1;
-        }
         if !self.device_id.is_empty() {
             my_size += ::protobuf::rt::string_size(7, &self.device_id);
         }
@@ -4830,9 +4817,6 @@ impl ::protobuf::Message for DeviceInfo {
         }
         if self.device_status != 0 {
             os.write_uint32(3, self.device_status)?;
-        }
-        if self.wireguard != false {
-            os.write_bool(6, self.wireguard)?;
         }
         if !self.device_id.is_empty() {
             os.write_string(7, &self.device_id)?;
@@ -4863,7 +4847,6 @@ impl ::protobuf::Message for DeviceInfo {
         self.name.clear();
         self.virtual_ip = 0;
         self.device_status = 0;
-        self.wireguard = false;
         self.device_id.clear();
         self.device_pub_key.clear();
         self.online_kx_pub.clear();
@@ -4875,7 +4858,6 @@ impl ::protobuf::Message for DeviceInfo {
             name: ::std::string::String::new(),
             virtual_ip: 0,
             device_status: 0,
-            wireguard: false,
             device_id: ::std::string::String::new(),
             device_pub_key: ::std::vec::Vec::new(),
             online_kx_pub: ::std::vec::Vec::new(),
@@ -7268,73 +7250,72 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     esponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
     \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
     \tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\
-    \"\xe9\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\
+    \"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\
     \x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\rdevice_s\
-    tatus\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1c\n\twireguard\x18\x06\
-    \x20\x01(\x08R\twireguard\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08de\
-    viceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\
-    \x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceL\
-    ist\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_inf\
-    o_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xdd\x03\
-    \n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\x03(\x07R\x0cpublicIp\
-    List\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\npublicPort\x12*\n\x11\
-    public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_t\
-    ype\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\
-    \x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\x08local_ip\x18\x07\x20\x01(\
-    \x07R\x07localIp\x12\x1d\n\nlocal_port\x18\x08\x20\x01(\rR\tlocalPort\
-    \x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\tipv6_port\x18\
-    \n\x20\x01(\rR\x08ipv6Port\x12\x19\n\x08tcp_port\x18\x0b\x20\x01(\rR\x07\
-    tcpPort\x12\x1b\n\tudp_ports\x18\x0c\x20\x03(\rR\x08udpPorts\x12!\n\x0cp\
-    ublic_ports\x18\r\x20\x03(\rR\x0bpublicPorts\x12&\n\x0fpublic_tcp_port\
-    \x18\x0e\x20\x01(\rR\rpublicTcpPort\x12/\n\x0bpunch_model\x18\x0f\x20\
-    \x01(\x0e2\x0e.PunchNatModelR\npunchModel\"Y\n\rPunchEndpoint\x12\x0e\n\
-    \x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\x01(\rR\
-    \x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tc\
-    p\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPunchRequest\x12\x1d\n\nse\
-    ssion_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\
-    \x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06ta\
-    rget\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\r.PunchNatTypeR\rso\
-    urceNatType\x125\n\x0ftarget_nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTy\
-    peR\rtargetNatType\x129\n\x10source_endpoints\x18\x06\x20\x03(\x0b2\x0e.\
-    PunchEndpointR\x0fsourceEndpoints\x129\n\x10target_endpoints\x18\x07\x20\
-    \x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoints\x12\x18\n\x07attempt\
-    \x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\t\x20\x01(\rR\
-    \ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\x01(\x03R\x0edeadlineUn\
-    ixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\
-    \tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x18\
-    \n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\x1a\n\x08accepted\x18\
-    \x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\x18\x05\x20\x01(\tR\
-    \x06reason\"\xf5\x01\n\nPunchStart\x12\x1d\n\nsession_id\x18\x01\x20\x01\
-    (\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\
-    \x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\x0epeer_endp\
-    oints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeerEndpoints\x12\x18\n\
-    \x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\x06\
-    \x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\x07\x20\x01(\x03R\
-    \x0edeadlineUnixMs\"\xf1\x01\n\x0bPunchResult\x12\x1d\n\nsession_id\x18\
+    tatus\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1b\n\tdevice_id\x18\x07\
+    \x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\
+    \x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonlineKxP\
+    ub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\
+    \n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceIn\
+    foList\"\xdd\x03\n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\x03(\
+    \x07R\x0cpublicIpList\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\npubl\
+    icPort\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRang\
+    e\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\
+    \x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\x08local_ip\
+    \x18\x07\x20\x01(\x07R\x07localIp\x12\x1d\n\nlocal_port\x18\x08\x20\x01(\
+    \rR\tlocalPort\x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\t\
+    ipv6_port\x18\n\x20\x01(\rR\x08ipv6Port\x12\x19\n\x08tcp_port\x18\x0b\
+    \x20\x01(\rR\x07tcpPort\x12\x1b\n\tudp_ports\x18\x0c\x20\x03(\rR\x08udpP\
+    orts\x12!\n\x0cpublic_ports\x18\r\x20\x03(\rR\x0bpublicPorts\x12&\n\x0fp\
+    ublic_tcp_port\x18\x0e\x20\x01(\rR\rpublicTcpPort\x12/\n\x0bpunch_model\
+    \x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\"Y\n\rPunchEndpoin\
+    t\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\
+    \x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\
+    \x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPunchRequest\
+    \x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06sou\
+    rce\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\
+    \x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\r.PunchN\
+    atTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\x20\x01(\x0e2\r\
+    .PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\x18\x06\x20\x03\
+    (\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\x129\n\x10target_endpoints\
+    \x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoints\x12\x18\n\
+    \x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\t\
+    \x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\x01(\x03R\
+    \x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_id\x18\x01\
+    \x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06s\
+    ource\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\x1a\n\x08a\
+    ccepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\x18\x05\
+    \x20\x01(\tR\x06reason\"\xf5\x01\n\nPunchStart\x12\x1d\n\nsession_id\x18\
     \x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\
-    \x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x12\x18\n\
-    \x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\x18\x05\x20\
-    \x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\x18\x06\x20\
-    \x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\x01(\x0b2\x0e\
-    .PunchEndpointR\x10selectedEndpoint\"\xb1\x02\n\x10ClientStatusInfo\x12\
-    \x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08p2p_list\x18\
-    \x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_stream\x18\x03\
-    \x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04\
-    R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\
-    \x07natType\x12$\n\x0epublic_ip_list\x18\x06\x20\x03(\x07R\x0cpublicIpLi\
-    st\x12(\n\x10public_udp_ports\x18\x07\x20\x03(\rR\x0epublicUdpPorts\x12&\
-    \n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\"$\n\tRouteItem\
-    \x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*d\n\x12GatewayChan\
-    nelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_\
-    CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPun\
-    chNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*`\n\rPunchN\
-    atModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IP\
-    v6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\x12\x0b\n\x07IPv4Udp\x10\x04\x12\
-    \x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07IPv6Udp\x10\x06*\x89\x01\n\x0fPun\
-    chResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchRes\
-    ultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12P\
-    unchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCanceled\x10\x04b\x06p\
-    roto3\
+    \x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\
+    \x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeerEndpoin\
+    ts\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeou\
+    t_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\x07\
+    \x20\x01(\x03R\x0edeadlineUnixMs\"\xf1\x01\n\x0bPunchResult\x12\x1d\n\ns\
+    ession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\
+    \x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06ta\
+    rget\x12\x18\n\x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\
+    \x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\
+    \x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\
+    \x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\"\xb1\x02\n\x10ClientS\
+    tatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08\
+    p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_str\
+    eam\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\
+    \x20\x01(\x04R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.Pu\
+    nchNatTypeR\x07natType\x12$\n\x0epublic_ip_list\x18\x06\x20\x03(\x07R\
+    \x0cpublicIpList\x12(\n\x10public_udp_ports\x18\x07\x20\x03(\rR\x0epubli\
+    cUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\"\
+    $\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*d\n\
+    \x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\
+    \x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\
+    \x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\
+    \x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\
+    \x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\x12\x0b\n\
+    \x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07IPv6Udp\
+    \x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\
+    \x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultF\
+    ailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13Punch\
+    ResultCanceled\x10\x04b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

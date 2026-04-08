@@ -83,7 +83,7 @@ fn broadcast(
         .lock()
         .1
         .values()
-        .filter(|info| !info.wireguard && info.status.is_online())
+        .filter(|info| info.status.is_online())
         .map(|info| info.virtual_ip)
         .collect();
     if list.is_empty() {
