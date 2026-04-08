@@ -70,6 +70,13 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
 
     #[cfg(target_os = "windows")]
     {
+        let name = config
+            .device_name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_TUN_NAME.to_string());
+        if let Err(err) = delete_adapter_info_from_reg(&name) {
+            log::warn!("清理Windows网卡注册表信息失败 {}: {:?}", name, err);
+        }
         tun_builder = tun_builder.metric(0).ring_capacity(4 * 1024 * 1024);
     }
 
@@ -101,6 +108,67 @@ fn delete_device(name: &str) {
     if !delete_tun.status.success() {
         log::warn!("删除网卡失败:{:?}", delete_tun);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn delete_adapter_info_from_reg(dev_name: &str) -> io::Result<()> {
+    use std::collections::HashSet;
+    use winreg::{enums::HKEY_LOCAL_MACHINE, enums::KEY_ALL_ACCESS, RegKey};
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let profiles_key = hklm.open_subkey_with_flags(
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Profiles",
+        KEY_ALL_ACCESS,
+    )?;
+    let mut profile_guid_set = HashSet::new();
+    for sub_key_name in profiles_key.enum_keys().filter_map(Result::ok) {
+        let sub_key = profiles_key.open_subkey(&sub_key_name)?;
+        match sub_key.get_value::<String, _>("Description") {
+            Ok(profile_name) => {
+                if dev_name == profile_name {
+                    match profiles_key.delete_subkey_all(&sub_key_name) {
+                        Ok(_) => {
+                            log::info!("deleted Profiles sub_key: {}", sub_key_name);
+                            profile_guid_set.insert(sub_key_name);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to delete Profiles sub_key {}: {}", sub_key_name, e)
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!(
+                "Failed to read Description for sub_key {}: {}",
+                sub_key_name,
+                e
+            ),
+        }
+    }
+    let unmanaged_key = hklm.open_subkey_with_flags(
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Signatures\\Unmanaged",
+        KEY_ALL_ACCESS,
+    )?;
+    for sub_key_name in unmanaged_key.enum_keys().filter_map(Result::ok) {
+        let sub_key = unmanaged_key.open_subkey(&sub_key_name)?;
+        match sub_key.get_value::<String, _>("ProfileGuid") {
+            Ok(profile_guid) => {
+                if profile_guid_set.contains(&profile_guid) {
+                    match unmanaged_key.delete_subkey_all(&sub_key_name) {
+                        Ok(_) => log::info!("deleted Unmanaged sub_key: {}", sub_key_name),
+                        Err(e) => {
+                            log::warn!("Failed to delete Unmanaged sub_key {}: {}", sub_key_name, e)
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!(
+                "Failed to read Description for sub_key {}: {}",
+                sub_key_name,
+                e
+            ),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

@@ -139,72 +139,94 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         let source = net_packet.source();
         match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             ip_turn_packet::Protocol::Ipv4 => {
-                let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
-                if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
-                    && ipv4.destination_ip() == destination
+                let mut log_peer_echo_reply = None;
                 {
-                    let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
-                    if icmp_packet.kind() == Kind::EchoRequest {
-                        //开启ping
-                        icmp_packet.set_kind(Kind::EchoReply);
-                        icmp_packet.update_checksum();
-                        ipv4.set_source_ip(destination);
-                        ipv4.set_destination_ip(source);
-                        ipv4.update_checksum();
-                        net_packet.set_source(destination);
-                        net_packet.set_destination(source);
-                        self.encrypt_by_route(&source, &mut net_packet)?;
-                        self.send_reply_by_route(&net_packet, route_key)?;
-                        return Ok(());
+                    let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
+                    if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
+                        && ipv4.destination_ip() == destination
+                    {
+                        let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
+                        if icmp_packet.kind() == Kind::EchoRequest {
+                            //开启ping
+                            icmp_packet.set_kind(Kind::EchoReply);
+                            icmp_packet.update_checksum();
+                            ipv4.set_source_ip(destination);
+                            ipv4.set_destination_ip(source);
+                            ipv4.update_checksum();
+                            net_packet.set_source(destination);
+                            net_packet.set_destination(source);
+                            self.encrypt_by_route(&source, &mut net_packet)?;
+                            self.send_reply_by_route(&net_packet, route_key)?;
+                            return Ok(());
+                        } else if icmp_packet.kind() == Kind::EchoReply {
+                            log_peer_echo_reply = Some((ipv4.source_ip(), ipv4.destination_ip()));
+                        }
+                    }
+                    // ip代理只关心实际目标
+                    let real_dest = ipv4.destination_ip();
+                    if real_dest != destination
+                        && !(real_dest.is_broadcast()
+                            || real_dest.is_multicast()
+                            || real_dest == current_device.broadcast_ip
+                            || real_dest.is_unspecified())
+                    {
+                        if !self.runtime.out_external_route.allow(&real_dest) {
+                            //拦截不符合的目标
+                            return Ok(());
+                        }
+                        match ipv4.protocol() {
+                            ipv4::protocol::Protocol::Tcp => {
+                                let payload = ipv4.payload();
+                                if payload.len() < 20 {
+                                    return Ok(());
+                                }
+                                let destination_port =
+                                    u16::from_be_bytes(payload[2..4].try_into().unwrap());
+                                if self
+                                    .runtime
+                                    .nat_test
+                                    .is_local_tcp(real_dest, destination_port)
+                                {
+                                    return Ok(());
+                                }
+                            }
+                            ipv4::protocol::Protocol::Udp => {
+                                let payload = ipv4.payload();
+                                if payload.len() < 8 {
+                                    return Ok(());
+                                }
+                                let destination_port =
+                                    u16::from_be_bytes(payload[2..4].try_into().unwrap());
+                                if self
+                                    .runtime
+                                    .nat_test
+                                    .is_local_udp(real_dest, destination_port)
+                                {
+                                    return Ok(());
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
-                // ip代理只关心实际目标
-                let real_dest = ipv4.destination_ip();
-                if real_dest != destination
-                    && !(real_dest.is_broadcast()
-                        || real_dest.is_multicast()
-                        || real_dest == current_device.broadcast_ip
-                        || real_dest.is_unspecified())
-                {
-                    if !self.runtime.out_external_route.allow(&real_dest) {
-                        //拦截不符合的目标
-                        return Ok(());
-                    }
-                    match ipv4.protocol() {
-                        ipv4::protocol::Protocol::Tcp => {
-                            let payload = ipv4.payload();
-                            if payload.len() < 20 {
-                                return Ok(());
-                            }
-                            let destination_port =
-                                u16::from_be_bytes(payload[2..4].try_into().unwrap());
-                            if self
-                                .runtime
-                                .nat_test
-                                .is_local_tcp(real_dest, destination_port)
-                            {
-                                return Ok(());
-                            }
-                        }
-                        ipv4::protocol::Protocol::Udp => {
-                            let payload = ipv4.payload();
-                            if payload.len() < 8 {
-                                return Ok(());
-                            }
-                            let destination_port =
-                                u16::from_be_bytes(payload[2..4].try_into().unwrap());
-                            if self
-                                .runtime
-                                .nat_test
-                                .is_local_udp(real_dest, destination_port)
-                            {
-                                return Ok(());
-                            }
-                        }
-                        _ => {}
-                    }
+                if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
+                    log::debug!(
+                        "peer icmp echo reply received src={} dst={} via={} bytes={}",
+                        icmp_source,
+                        icmp_destination,
+                        route_key.addr,
+                        net_packet.payload().len()
+                    );
                 }
-                self.device.write(net_packet.payload())?;
+                let written = self.device.write(net_packet.payload())?;
+                if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
+                    log::debug!(
+                        "peer icmp echo reply injected into tun src={} dst={} written_bytes={}",
+                        icmp_source,
+                        icmp_destination,
+                        written
+                    );
+                }
             }
             ip_turn_packet::Protocol::WGIpv4 => {
                 // WG客户端的数据不会直接发过来，不用处理

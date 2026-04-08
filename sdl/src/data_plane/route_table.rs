@@ -1,4 +1,5 @@
 use fnv::FnvHashMap;
+use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::Instant;
 
@@ -197,6 +198,16 @@ impl RouteTable {
             }
         }
     }
+
+    pub fn clear_peer(&self, vip: &Ipv4Addr) {
+        self.route_table.write().remove(vip);
+    }
+
+    pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
+        self.route_table
+            .write()
+            .retain(|vip, _| valid_peers.contains(vip));
+    }
 }
 
 #[cfg(test)]
@@ -205,6 +216,7 @@ mod tests {
     use crate::data_plane::route::{Route, RouteKey};
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
+    use std::collections::HashSet;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     fn route_key(port: u16) -> RouteKey {
@@ -240,5 +252,19 @@ mod tests {
         let routes = table.get_routes(&vip).unwrap();
         assert_eq!(routes.len(), 1);
         assert!(routes[0].is_p2p());
+    }
+
+    #[test]
+    fn retain_peers_drops_stale_routes() {
+        let table = RouteTable::new(UseChannelType::All, false);
+        let vip1 = Ipv4Addr::new(10, 0, 0, 4);
+        let vip2 = Ipv4Addr::new(10, 0, 0, 5);
+        table.add_route(vip1, Route::from_default_rt(route_key(1002), 2));
+        table.add_route(vip2, Route::from_default_rt(route_key(1003), 2));
+
+        table.retain_peers(&HashSet::from([vip2]));
+
+        assert!(table.get_first_route(&vip1).is_none());
+        assert!(table.get_first_route(&vip2).is_some());
     }
 }

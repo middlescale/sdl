@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -141,7 +141,20 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                             let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
                             if icmp_packet.kind() == Kind::EchoReply {
                                 //网关ip ping的回应
-                                self.device.write(net_packet.payload())?;
+                                log::debug!(
+                                    "gateway icmp echo reply received src={} dst={} via={} bytes={}",
+                                    ipv4.source_ip(),
+                                    ipv4.destination_ip(),
+                                    route_key.addr,
+                                    net_packet.payload().len()
+                                );
+                                let written = self.device.write(net_packet.payload())?;
+                                log::debug!(
+                                    "gateway icmp echo reply injected into tun src={} dst={} written_bytes={}",
+                                    ipv4.source_ip(),
+                                    ipv4.destination_ip(),
+                                    written
+                                );
                                 return Ok(());
                             }
                         }
@@ -159,6 +172,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
 }
 
 impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+    fn peer_identity_key(peer: &PeerDeviceInfo) -> Vec<u8> {
+        if !peer.device_id.is_empty() {
+            return format!("id:{}", peer.device_id).into_bytes();
+        }
+        let mut key = Vec::with_capacity(peer.device_pub_key.len() + 3);
+        key.extend_from_slice(b"pk:");
+        key.extend_from_slice(&peer.device_pub_key);
+        key
+    }
+
     fn apply_gateway_grant(
         &self,
         grant: Option<&proto::message::GatewayAccessGrant>,
@@ -668,15 +691,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         Ok(())
     }
     fn set_device_info_list(&self, device_info_list: Vec<proto::message::DeviceInfo>, epoch: u16) {
-        let current_epoch = self.runtime.peer_state.lock().0;
-        if is_stale_epoch(current_epoch, epoch) {
-            log::info!(
-                "ignore stale device list: current_epoch={}, incoming_epoch={}",
-                current_epoch,
-                epoch
-            );
-            return;
-        }
+        let previous_peers = {
+            let peer_state = self.runtime.peer_state.lock();
+            let current_epoch = peer_state.0;
+            if is_stale_epoch(current_epoch, epoch) {
+                log::info!(
+                    "ignore stale device list: current_epoch={}, incoming_epoch={}",
+                    current_epoch,
+                    epoch
+                );
+                return;
+            }
+            peer_state.1.clone()
+        };
         let ip_list: Vec<PeerDeviceInfo> = device_info_list
             .into_iter()
             .map(|info| {
@@ -690,6 +717,50 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 )
             })
             .collect();
+        let active_vips: HashSet<Ipv4Addr> = ip_list.iter().map(|peer| peer.virtual_ip).collect();
+        let previous_by_identity: HashMap<Vec<u8>, Ipv4Addr> = previous_peers
+            .values()
+            .map(|peer| (Self::peer_identity_key(peer), peer.virtual_ip))
+            .collect();
+        let current_by_vip: HashMap<Ipv4Addr, Vec<u8>> = ip_list
+            .iter()
+            .map(|peer| (peer.virtual_ip, Self::peer_identity_key(peer)))
+            .collect();
+        let mut reset_vips: HashSet<Ipv4Addr> = previous_peers
+            .keys()
+            .filter(|vip| !active_vips.contains(vip))
+            .copied()
+            .collect();
+        for (vip, previous_peer) in &previous_peers {
+            if let Some(next_identity) = current_by_vip.get(vip) {
+                let previous_identity = Self::peer_identity_key(previous_peer);
+                if &previous_identity != next_identity {
+                    reset_vips.insert(*vip);
+                }
+            }
+        }
+        for peer in &ip_list {
+            let identity = Self::peer_identity_key(peer);
+            if let Some(previous_vip) = previous_by_identity.get(&identity) {
+                if *previous_vip != peer.virtual_ip {
+                    log::info!(
+                        "peer {} moved vip {} -> {}",
+                        peer.device_id,
+                        previous_vip,
+                        peer.virtual_ip
+                    );
+                    reset_vips.insert(*previous_vip);
+                }
+            }
+        }
+        for vip in &reset_vips {
+            self.runtime.route_manager.clear_peer(vip);
+        }
+        self.runtime.route_manager.retain_peers(&active_vips);
+        self.runtime
+            .peer_nat_info_map
+            .write()
+            .retain(|vip, _| active_vips.contains(vip) && !reset_vips.contains(vip));
         let mut peer_session_ciphers = std::collections::HashMap::with_capacity(ip_list.len());
         let local_online_session_key = self.runtime.peer_crypto.online_session_key();
         for peer_info in &ip_list {
@@ -729,6 +800,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         self.runtime
             .peer_crypto
             .rotate_peer_session_ciphers(peer_session_ciphers);
+        self.runtime.peer_crypto.retain_peers(&active_vips);
+        self.runtime
+            .peer_crypto
+            .clear_previous_ciphers_for(&reset_vips);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()

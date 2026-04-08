@@ -36,7 +36,8 @@ impl ServiceManager {
             return Ok(format!("device name already set to {}", trimmed));
         }
         let runtime = self.current_runtime()?;
-        let applied_name = runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))?;
+        let applied_name =
+            runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))?;
         self.config.lock().unwrap().name = applied_name.clone();
         self.saved_config.lock().unwrap().name = applied_name.clone();
         self.persist_saved_config();

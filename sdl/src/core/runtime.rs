@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 #[cfg(feature = "integrated_tun")]
@@ -175,10 +175,7 @@ impl SdlRuntime {
         self.pending_dns_queries.lock().remove(&request_id)
     }
 
-    pub fn remember_rename_request(
-        &self,
-        responder: mpsc::Sender<Result<String, String>>,
-    ) -> u64 {
+    pub fn remember_rename_request(&self, responder: mpsc::Sender<Result<String, String>>) -> u64 {
         let request_id = self
             .rename_request_seq
             .fetch_add(1, Ordering::Relaxed)

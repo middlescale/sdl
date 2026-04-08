@@ -55,6 +55,7 @@ network-interface = "2.0.0"
 gethostname = "0.4.3"
 [target.'cfg(target_os = "windows")'.dependencies]
 libloading = "0.8.0"
+winreg = "0.52.0"
 windows-sys = { version = "0.59.0", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement",

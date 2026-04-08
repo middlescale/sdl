@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -182,6 +183,14 @@ impl RouteManager {
 
     pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
         self.route_table.update_read_time(vip, route_key)
+    }
+
+    pub fn clear_peer(&self, vip: &Ipv4Addr) {
+        self.route_table.clear_peer(vip)
+    }
+
+    pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
+        self.route_table.retain_peers(valid_peers)
     }
 
     pub fn next_stale_direct_route(&self, read_idle: Duration) -> StaleDirectRoute {

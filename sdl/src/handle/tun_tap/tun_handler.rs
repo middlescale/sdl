@@ -157,6 +157,15 @@ pub(crate) fn handle(
     };
     let src_ip = ipv4_packet.source_ip();
     let dest_ip = ipv4_packet.destination_ip();
+    let protocol = ipv4_packet.protocol();
+    if protocol == Protocol::Icmp {
+        log::debug!(
+            "tun outbound icmp src={} dst={} bytes={}",
+            src_ip,
+            dest_ip,
+            data_len.saturating_sub(12)
+        );
+    }
     if src_ip == dest_ip {
         return icmp(device_writer, ipv4_packet);
     }
@@ -183,6 +192,14 @@ pub(crate) fn handle(
     net_packet.set_source(src_ip);
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
+        if protocol == Protocol::Icmp {
+            log::debug!(
+                "forwarding outbound icmp to gateway relay src={} dst={} bytes={}",
+                src_ip,
+                dest_ip,
+                data_len.saturating_sub(12)
+            );
+        }
         gateway_sessions.send_relay(&net_packet)?;
         return Ok(());
     }

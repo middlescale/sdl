@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
@@ -105,6 +105,24 @@ impl PeerCryptoManager {
         *self.grace_until.write() = Some(Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW);
     }
 
+    pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
+        self.current_ciphers
+            .write()
+            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+        self.previous_ciphers
+            .write()
+            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+    }
+
+    pub fn clear_previous_ciphers_for(&self, peers: &HashSet<Ipv4Addr>) {
+        if peers.is_empty() {
+            return;
+        }
+        self.previous_ciphers
+            .write()
+            .retain(|peer_ip, _| !peers.contains(peer_ip));
+    }
+
     pub fn is_grace_active(&self) -> bool {
         self.grace_until
             .read()
@@ -199,5 +217,42 @@ mod tests {
         assert!(manager.current_cipher(&peer).is_err());
         assert!(manager.previous_cipher(&peer).is_err());
         assert!(!manager.is_grace_active());
+    }
+
+    #[test]
+    fn retain_peers_drops_stale_ciphers() {
+        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
+        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let manager = PeerCryptoManager::new(2);
+
+        manager.rotate_peer_session_ciphers(HashMap::from([
+            (peer1, test_cipher(1)),
+            (peer2, test_cipher(2)),
+        ]));
+        manager.retain_peers(&HashSet::from([peer2]));
+
+        assert!(manager.current_cipher(&peer1).is_err());
+        assert!(manager.current_cipher(&peer2).is_ok());
+    }
+
+    #[test]
+    fn clear_previous_ciphers_for_drops_grace_cipher_only() {
+        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
+        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let manager = PeerCryptoManager::new(2);
+
+        manager.rotate_peer_session_ciphers(HashMap::from([
+            (peer1, test_cipher(1)),
+            (peer2, test_cipher(2)),
+        ]));
+        manager.rotate_peer_session_ciphers(HashMap::from([
+            (peer1, test_cipher(3)),
+            (peer2, test_cipher(4)),
+        ]));
+        manager.clear_previous_ciphers_for(&HashSet::from([peer1]));
+
+        assert!(manager.previous_cipher(&peer1).is_err());
+        assert!(manager.current_cipher(&peer1).is_ok());
+        assert!(manager.previous_cipher(&peer2).is_ok());
     }
 }
