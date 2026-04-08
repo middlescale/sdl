@@ -9,9 +9,7 @@ pub use file_config::{
 };
 
 #[cfg(not(feature = "file_config"))]
-pub fn read_config(
-    _file_path: &str,
-) -> anyhow::Result<(sdl::core::Config, bool, UnavailableFileConfig)> {
+pub fn read_config(_file_path: &str) -> anyhow::Result<(sdl::core::Config, UnavailableFileConfig)> {
     unimplemented!()
 }
 

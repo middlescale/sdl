@@ -84,10 +84,6 @@ sdl suspend
 
 设备id，每台设备的唯一标识，注意不要重复
 
-### -c
-
-关闭控制台交互式命令，后台运行时可以加此参数
-
 ### -s `<server>`
 
 注册和中继服务器地址，控制面使用 `https://host[:port]/control`；以`TXT:`开头时表示先解析 TXT 记录，TXT 记录内容必须是 `host:port` 形式的服务器地址
@@ -178,10 +174,6 @@ aes_gcm/aes_cbc/aes_ecb/sm4_cbc/chacha20_poly1305/chacha20/xor，默认使用aes
 - 例1：‘--ports 12345,12346,12347’ 表示udp监听12345、12346、12347这三个端口，tcp监听12345端口
 - 例2：‘--ports 0,0’ 表示udp监听两个未使用的端口，tcp监听一个未使用的端口
 
-### --cmd
-
-开启交互式命令，开启后可以直接在窗口下输入命令，如需后台运行请勿开启
-
 ### --latency_first
 
 优先使用低延迟通道，默认情况下优先使用p2p通道，某些情况下可能p2p比客户端中继延迟更高，可使用此参数进行优化传输
@@ -228,7 +220,6 @@ punch_model: ipv4 #打洞模式，表示只使用ipv4地址打洞，默认会同
 ports:
   - 0 #使用随机端口，tcp监听此端口
   - 0
-cmd: false #关闭控制台输入
 latency_first: false #是否优先低延迟通道，默认为false，表示优先使用p2p通道
 device_name: sdl-tun #网卡名称
 packet_loss: 0 #指定丢包率 取值0~1之间的数 用于模拟弱网

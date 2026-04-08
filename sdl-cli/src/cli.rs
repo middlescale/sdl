@@ -2,7 +2,7 @@ use crate::args_parse::{ips_parse, out_ips_parse};
 use crate::config;
 use anyhow::anyhow;
 use console::style;
-use getopts::Options;
+use getopts::{Matches, Options};
 use sdl::cipher::CipherModel;
 use sdl::compression::Compressor;
 use sdl::core::Config;
@@ -38,7 +38,7 @@ pub fn app_home() -> io::Result<PathBuf> {
     Ok(path)
 }
 
-pub fn parse_args_config() -> anyhow::Result<Option<(Config, bool, config::FileConfig)>> {
+pub fn parse_args_config() -> anyhow::Result<Option<(Config, config::FileConfig)>> {
     parse_args_config_from(std::env::args().collect())
 }
 
@@ -46,9 +46,171 @@ fn default_service_file_config() -> config::FileConfig {
     config::FileConfig::default()
 }
 
+fn load_service_file_config(conf: Option<&str>) -> anyhow::Result<config::FileConfig> {
+    if let Some(path) = conf {
+        return config::read_config(path)
+            .map(|(_, file_conf)| file_conf)
+            .map_err(|e| anyhow!("conf err {}", e));
+    }
+    if let Some((_, saved)) = config::read_saved_config()? {
+        return Ok(saved);
+    }
+    Ok(default_service_file_config())
+}
+
+fn parse_virtual_ip(ip: &str) -> anyhow::Result<Ipv4Addr> {
+    let virtual_ip = Ipv4Addr::from_str(ip).map_err(|_| anyhow!("'--ip {}' error", ip))?;
+    if virtual_ip.is_unspecified() || virtual_ip.is_broadcast() || virtual_ip.is_multicast() {
+        return Err(anyhow!("'--ip {}' invalid", virtual_ip));
+    }
+    Ok(virtual_ip)
+}
+
+fn parse_ports(raw: &str) -> Vec<u16> {
+    raw.split(',').map(|x| x.parse().unwrap_or(0)).collect()
+}
+
+fn use_channel_to_str(use_channel: UseChannelType) -> &'static str {
+    match use_channel {
+        UseChannelType::Relay => "relay",
+        UseChannelType::P2p => "p2p",
+        UseChannelType::All => "all",
+    }
+}
+
+fn punch_model_to_str(punch_model: PunchModel) -> &'static str {
+    match punch_model {
+        PunchModel::All => "all",
+        PunchModel::IPv4 => "ipv4",
+        PunchModel::IPv6 => "ipv6",
+        PunchModel::IPv4Tcp => "ipv4-tcp",
+        PunchModel::IPv4Udp => "ipv4-udp",
+        PunchModel::IPv6Tcp => "ipv6-tcp",
+        PunchModel::IPv6Udp => "ipv6-udp",
+    }
+}
+
+fn override_service_file_config(
+    mut file_conf: config::FileConfig,
+    matches: &Matches,
+    program: &str,
+    opts: &Options,
+) -> anyhow::Result<config::FileConfig> {
+    if let Some(group) = matches.opt_str("g").or_else(|| matches.opt_str("group")) {
+        file_conf.group = group;
+    }
+    if let Some(device_id) = matches.opt_str("d") {
+        file_conf.device_id = device_id;
+    }
+    if file_conf.device_id.is_empty() {
+        file_conf.device_id = config::get_device_id();
+    }
+    if file_conf.device_id.is_empty() {
+        print_usage(program, opts.clone());
+        return Err(anyhow!("parameter -d not found ."));
+    }
+    if let Some(name) = matches.opt_str("n") {
+        file_conf.name = name;
+    }
+    if let Some(server_address) = matches.opt_str("s") {
+        file_conf.server_address = server_address;
+    }
+    if matches.opt_present("e") {
+        file_conf.stun_server = matches.opt_strs("e");
+    }
+    if matches.opt_present("i") {
+        let raw_in_ips = matches.opt_strs("i");
+        ips_parse(&raw_in_ips).map_err(|e| {
+            print_usage(program, opts.clone());
+            println!();
+            println!("-i: {:?} {}", raw_in_ips, e);
+            anyhow!("example: -i 192.168.0.0/24,10.26.0.3")
+        })?;
+        file_conf.in_ips = raw_in_ips;
+    }
+    if matches.opt_present("o") {
+        let raw_out_ips = matches.opt_strs("o");
+        out_ips_parse(&raw_out_ips).map_err(|e| {
+            print_usage(program, opts.clone());
+            println!();
+            println!("-o: {:?} {}", raw_out_ips, e);
+            anyhow!("example: -o 0.0.0.0/0")
+        })?;
+        file_conf.out_ips = raw_out_ips;
+    }
+    if let Some(mtu) = matches.opt_str("u") {
+        file_conf.mtu = Some(u32::from_str(&mtu).map_err(|e| {
+            print_usage(program, opts.clone());
+            println!();
+            println!("'-u {}' {}", mtu, e);
+            anyhow!("'-u {}' {}", mtu, e)
+        })?);
+    }
+    if let Some(virtual_ip) = matches.opt_str("ip") {
+        file_conf.ip = Some(parse_virtual_ip(&virtual_ip)?.to_string());
+    }
+    if let Some(model) = matches.opt_str("model") {
+        file_conf.cipher_model = Some(
+            CipherModel::from_str(&model)
+                .map_err(|e| anyhow!("'--model ' invalid,{}", e))?
+                .to_string(),
+        );
+    }
+    if let Some(punch_model) = matches.opt_str("punch") {
+        let punch_model = PunchModel::from_str(&punch_model).map_err(|e| anyhow!("{}", e))?;
+        file_conf.punch_model = punch_model_to_str(punch_model).to_string();
+    }
+    if let Some(use_channel) = matches.opt_str("use-channel") {
+        let use_channel = UseChannelType::from_str(&use_channel).map_err(|e| anyhow!("{}", e))?;
+        file_conf.use_channel = use_channel_to_str(use_channel).to_string();
+    } else if matches.opt_present("relay") {
+        file_conf.use_channel = use_channel_to_str(UseChannelType::Relay).to_string();
+    }
+    if let Some(ports) = matches.opt_str("ports") {
+        file_conf.ports = Some(parse_ports(&ports));
+    }
+    if matches.opt_present("latency-first") {
+        file_conf.latency_first = true;
+    }
+    if let Some(packet_loss) = matches
+        .opt_get::<f64>("packet-loss")
+        .expect("--packet-loss")
+    {
+        file_conf.packet_loss = Some(packet_loss);
+    }
+    if let Some(packet_delay) = matches
+        .opt_get::<u32>("packet-delay")
+        .expect("--packet-delay")
+    {
+        file_conf.packet_delay = packet_delay;
+    }
+    #[cfg(target_os = "windows")]
+    if matches.opt_present("a") {
+        file_conf.tap = true;
+    }
+    if let Some(device_name) = matches.opt_str("nic") {
+        file_conf.device_name = Some(device_name);
+    }
+    #[cfg(feature = "port_mapping")]
+    if matches.opt_present("mapping") {
+        file_conf.mapping = matches.opt_strs("mapping");
+    }
+    if let Some(compressor) = matches.opt_str("compressor") {
+        Compressor::from_str(&compressor).map_err(|e| anyhow!("{}", e))?;
+        file_conf.compressor = Some(compressor);
+    }
+    if matches.opt_present("disable-stats") {
+        file_conf.disable_stats = true;
+    }
+    if let Some(local_dev) = matches.opt_str("local-dev") {
+        file_conf.local_dev = Some(local_dev);
+    }
+    Ok(file_conf)
+}
+
 pub fn parse_args_config_from(
     args: Vec<String>,
-) -> anyhow::Result<Option<(Config, bool, config::FileConfig)>> {
+) -> anyhow::Result<Option<(Config, config::FileConfig)>> {
     #[cfg(feature = "log")]
     {
         if let Err(e) = log4rs::init_file("log4rs.yaml", Default::default()) {
@@ -61,7 +223,6 @@ pub fn parse_args_config_from(
     opts.optopt("g", "group", "组网分组(FQDN)", "<group>");
     opts.optopt("n", "", "设备名称", "<name>");
     opts.optopt("d", "", "设备标识", "<id>");
-    opts.optflag("c", "", "关闭交互式命令");
     opts.optopt("s", "", "注册和中继服务器地址", "<server>");
     opts.optmulti("e", "", "stun服务器", "<stun-server>");
     opts.optflag("a", "", "使用tap模式");
@@ -75,7 +236,6 @@ pub fn parse_args_config_from(
     opts.optopt("", "model", "加密模式", "<model>");
     opts.optopt("", "punch", "取值ipv4/ipv6", "<punch>");
     opts.optopt("", "ports", "监听的端口", "<port,port>");
-    opts.optflag("", "cmd", "开启窗口输入");
     opts.optflag("", "latency-first", "优先延迟");
     opts.optopt("", "use-channel", "使用通道 relay/p2p", "<use-channel>");
     opts.optopt("", "packet-loss", "丢包率", "<packet-loss>");
@@ -102,207 +262,17 @@ pub fn parse_args_config_from(
             return Ok(Some(saved));
         }
         let file_conf = default_service_file_config();
-        let (config, cmd) = file_conf.clone().into_runtime_config()?;
-        return Ok(Some((config, cmd, file_conf)));
+        let config = file_conf.clone().into_runtime_config()?;
+        return Ok(Some((config, file_conf)));
     }
 
-    let conf = matches.opt_str("f");
-    let (config, cmd, file_conf) = if conf.is_some() {
-        match config::read_config(&conf.unwrap()) {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(anyhow::anyhow!("conf err {}", e));
-            }
-        }
-    } else {
-        if !(matches.opt_present("g") || matches.opt_present("group")) {
-            print_usage(&program, opts);
-            return Err(anyhow::anyhow!("parameter -g/--group not found ."));
-        }
-        let device_name = matches.opt_str("nic");
-        #[cfg(not(feature = "port_mapping"))]
-        let port_mapping_list: Vec<String> = vec![];
-        let group = matches
-            .opt_str("g")
-            .or_else(|| matches.opt_str("group"))
-            .unwrap();
-        let device_id = matches.opt_get_default("d", String::new()).unwrap();
-        let device_id = if device_id.is_empty() {
-            config::get_device_id()
-        } else {
-            device_id
-        };
-        if device_id.is_empty() {
-            print_usage(&program, opts);
-            return Err(anyhow::anyhow!("parameter -d not found ."));
-        }
-        let name = matches
-            .opt_get_default(
-                "n",
-                gethostname::gethostname()
-                    .to_str()
-                    .unwrap_or("UnknownName")
-                    .to_string(),
-            )
-            .unwrap();
-        let server_address_str = matches
-            .opt_get_default("s", config::DEFAULT_SERVICE_SERVER.to_string())
-            .unwrap();
-
-        let mut stun_server = matches.opt_strs("e");
-        if stun_server.is_empty() {
-            for x in sdl::core::PUB_STUN {
-                stun_server.push(x.to_string());
-            }
-        }
-        let raw_in_ips = matches.opt_strs("i");
-        let _in_ip = match ips_parse(&raw_in_ips) {
-            Ok(in_ip) => in_ip,
-            Err(e) => {
-                print_usage(&program, opts);
-                println!();
-                println!("-i: {:?} {}", raw_in_ips, e);
-                return Err(anyhow::anyhow!("example: -i 192.168.0.0/24,10.26.0.3"));
-            }
-        };
-        let raw_out_ips = matches.opt_strs("o");
-        let _out_ip = match out_ips_parse(&raw_out_ips) {
-            Ok(out_ip) => out_ip,
-            Err(e) => {
-                print_usage(&program, opts);
-                println!();
-                println!("-o: {:?} {}", raw_out_ips, e);
-                return Err(anyhow::anyhow!("example: -o 0.0.0.0/0"));
-            }
-        };
-        let mtu: Option<String> = matches.opt_get("u").unwrap();
-        let mtu = if let Some(mtu) = mtu {
-            match u32::from_str(&mtu) {
-                Ok(mtu) => Some(mtu),
-                Err(e) => {
-                    print_usage(&program, opts);
-                    println!();
-                    println!("'-u {}' {}", mtu, e);
-                    return Err(anyhow::anyhow!("'-u {}' {}", mtu, e));
-                }
-            }
-        } else {
-            None
-        };
-        let virtual_ip: Option<String> = matches.opt_get("ip").unwrap();
-        let virtual_ip = virtual_ip
-            .map(|v| Ipv4Addr::from_str(&v).unwrap_or_else(|_| panic!("'--ip {}' error", v)));
-        if let Some(virtual_ip) = virtual_ip {
-            if virtual_ip.is_unspecified() || virtual_ip.is_broadcast() || virtual_ip.is_multicast()
-            {
-                return Err(anyhow::anyhow!("'--ip {}' invalid", virtual_ip));
-            }
-        }
-        let relay = matches.opt_present("relay");
-
-        let cipher_model = match matches.opt_get::<CipherModel>("model") {
-            Ok(model) => {
-                #[cfg(not(feature = "aes_gcm"))]
-                {
-                    model.unwrap_or(CipherModel::None)
-                }
-                #[cfg(feature = "aes_gcm")]
-                model.unwrap_or(CipherModel::AesGcm)
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!("'--model ' invalid,{}", e));
-            }
-        };
-
-        let punch_model = matches
-            .opt_get::<PunchModel>("punch")
-            .unwrap()
-            .unwrap_or(PunchModel::All);
-        let use_channel_type = matches
-            .opt_get::<UseChannelType>("use-channel")
-            .unwrap()
-            .unwrap_or_else(|| {
-                if relay {
-                    UseChannelType::Relay
-                } else {
-                    UseChannelType::All
-                }
-            });
-
-        let ports = matches
-            .opt_get::<String>("ports")
-            .unwrap_or(None)
-            .map(|v| v.split(",").map(|x| x.parse().unwrap_or(0)).collect());
-
-        let cmd = matches.opt_present("cmd");
-        let latency_first = matches.opt_present("latency-first");
-        let packet_loss = matches
-            .opt_get::<f64>("packet-loss")
-            .expect("--packet-loss");
-        let packet_delay = matches
-            .opt_get::<u32>("packet-delay")
-            .expect("--packet-delay")
-            .unwrap_or(0);
-        #[cfg(feature = "port_mapping")]
-        let port_mapping_list = matches.opt_strs("mapping");
-        let local_dev: Option<String> = matches.opt_get("local-dev").unwrap();
-
-        let disable_stats = matches.opt_present("disable-stats");
-        let raw_compressor = matches.opt_str("compressor");
-        let _compressor = if let Some(compressor) = raw_compressor.as_ref() {
-            Compressor::from_str(compressor)
-                .map_err(|e| anyhow!("{}", e))
-                .unwrap()
-        } else {
-            Compressor::None
-        };
-        let file_conf = config::FileConfig {
-            #[cfg(target_os = "windows")]
-            tap: false,
-            group,
-            device_id,
-            name,
-            server_address: server_address_str,
-            stun_server,
-            in_ips: raw_in_ips,
-            out_ips: raw_out_ips,
-            mtu,
-            tcp: false,
-            ip: virtual_ip.map(|v| v.to_string()),
-            use_channel: match use_channel_type {
-                UseChannelType::Relay => "relay".to_string(),
-                UseChannelType::P2p => "p2p".to_string(),
-                UseChannelType::All => "all".to_string(),
-            },
-            cipher_model: Some(cipher_model.to_string()),
-            punch_model: match punch_model {
-                PunchModel::All => "all".to_string(),
-                PunchModel::IPv4 => "ipv4".to_string(),
-                PunchModel::IPv6 => "ipv6".to_string(),
-                PunchModel::IPv4Tcp => "ipv4-tcp".to_string(),
-                PunchModel::IPv4Udp => "ipv4-udp".to_string(),
-                PunchModel::IPv6Tcp => "ipv6-tcp".to_string(),
-                PunchModel::IPv6Udp => "ipv6-udp".to_string(),
-            },
-            ports,
-            cmd,
-            latency_first,
-            device_name,
-            packet_loss,
-            packet_delay,
-            #[cfg(feature = "port_mapping")]
-            mapping: port_mapping_list,
-            compressor: raw_compressor,
-            disable_stats,
-            local_dev,
-        };
-        let (config, cmd) = file_conf.clone().into_runtime_config()?;
-        (config, cmd, file_conf)
-    };
+    let base_file_conf = load_service_file_config(matches.opt_str("f").as_deref())?;
+    let file_conf = override_service_file_config(base_file_conf, &matches, &program, &opts)?;
+    let config = file_conf.clone().into_runtime_config()?;
     let build_version = crate::build_version_string();
     println!("version {}", build_version);
     log::info!("version:{}", build_version);
-    Ok(Some((config, cmd, file_conf)))
+    Ok(Some((config, file_conf)))
 }
 
 fn get_description(key: &str, language: &str) -> String {
@@ -321,7 +291,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--model <model>", ("加密模式(默认aes_gcm),仅支持 aes_gcm/none", "Encryption mode (default aes_gcm), only aes_gcm/none are supported")),
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
-        ("--cmd", ("开启交互式命令,使用此参数开启控制台输入", "Enable interactive command mode, use this parameter to enable console input")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
         ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
@@ -432,11 +401,6 @@ fn print_usage(program: &str, _opts: Options) {
         "  --ports <port,port> {}",
         get_description("--ports <port,port>", &language)
     );
-    #[cfg(feature = "command")]
-    println!(
-        "  --cmd               {}",
-        get_description("--cmd", &language)
-    );
     println!(
         "  --latency-first     {}",
         get_description("--first-latency", &language)
@@ -539,6 +503,17 @@ fn print_usage(program: &str, _opts: Options) {
 mod tests {
     use super::parse_args_config_from;
     use crate::config::{DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
+    use std::fs;
+
+    fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "sdl-cli-args-{}-{}.yaml",
+            std::process::id(),
+            suffix
+        ));
+        fs::write(&path, contents).expect("write temp config");
+        path
+    }
 
     #[test]
     fn parse_args_uses_default_service_config_without_args() {
@@ -546,10 +521,55 @@ mod tests {
             .expect("parse args should succeed")
             .expect("default config should be returned");
 
-        let (config, show_cmd, _) = result;
+        let (config, _) = result;
         assert_eq!(config.token, DEFAULT_SERVICE_GROUP);
         assert_eq!(config.server_address_str, DEFAULT_SERVICE_SERVER);
-        assert!(!show_cmd);
+    }
+
+    #[test]
+    fn parse_args_service_allows_ports_without_group() {
+        let result = parse_args_config_from(vec![
+            "sdl-service".to_string(),
+            "--ports".to_string(),
+            "41642".to_string(),
+        ])
+        .expect("parse args should succeed")
+        .expect("config should be returned");
+
+        let (config, _) = result;
+        assert_eq!(config.ports, Some(vec![41642]));
+    }
+
+    #[test]
+    fn parse_args_service_overrides_file_config() {
+        let path = write_temp_config(
+            r#"
+group: test.ms.net
+device_id: dev-1
+name: test-node
+server_address: https://control.middlescale.net/control
+ports: [30001]
+"#,
+            "override-file",
+        );
+        let result = parse_args_config_from(vec![
+            "sdl-service".to_string(),
+            "-f".to_string(),
+            path.to_str().unwrap().to_string(),
+            "--ports".to_string(),
+            "41642".to_string(),
+        ])
+        .expect("parse args should succeed")
+        .expect("config should be returned");
+
+        let (config, _) = result;
+        assert_eq!(config.token, "test.ms.net");
+        assert_eq!(
+            config.server_address_str,
+            "https://control.middlescale.net/control"
+        );
+        assert_eq!(config.ports, Some(vec![41642]));
+        let _ = fs::remove_file(path);
     }
 }
 

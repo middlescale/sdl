@@ -34,7 +34,6 @@ pub struct FileConfig {
     pub cipher_model: Option<String>,
     pub punch_model: String,
     pub ports: Option<Vec<u16>>,
-    pub cmd: bool,
     pub latency_first: bool,
     pub device_name: Option<String>,
     pub packet_loss: Option<f64>,
@@ -72,7 +71,6 @@ impl Default for FileConfig {
             cipher_model: None,
             punch_model: "all".to_string(),
             ports: None,
-            cmd: false,
             latency_first: false,
             device_name: None,
             packet_loss: None,
@@ -87,8 +85,7 @@ impl Default for FileConfig {
 }
 
 impl FileConfig {
-    pub fn into_runtime_config(self) -> anyhow::Result<(Config, bool)> {
-        let cmd = self.cmd;
+    pub fn into_runtime_config(self) -> anyhow::Result<Config> {
         let in_ips = match args_parse::ips_parse(&self.in_ips) {
             Ok(in_ips) => in_ips,
             Err(e) => {
@@ -159,7 +156,7 @@ impl FileConfig {
             None,
         )?;
 
-        Ok((config, cmd))
+        Ok(config)
     }
 }
 
@@ -168,11 +165,21 @@ pub fn saved_config_path() -> std::io::Result<PathBuf> {
 }
 
 fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
-    let file_conf = match serde_yaml::from_str::<FileConfig>(conf) {
+    let mut conf_value = match serde_yaml::from_str::<serde_yaml::Value>(conf) {
         Ok(val) => val,
         Err(e) => {
             log::error!("serde_yaml::from_str {:?}", e);
             return Err(anyhow!("serde_yaml::from_str {:?}", e));
+        }
+    };
+    if let serde_yaml::Value::Mapping(mapping) = &mut conf_value {
+        mapping.remove(serde_yaml::Value::String("cmd".to_string()));
+    }
+    let file_conf = match serde_yaml::from_value::<FileConfig>(conf_value) {
+        Ok(val) => val,
+        Err(e) => {
+            log::error!("serde_yaml::from_value {:?}", e);
+            return Err(anyhow!("serde_yaml::from_value {:?}", e));
         }
     };
     if file_conf.group.is_empty() {
@@ -181,21 +188,21 @@ fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
     Ok(file_conf)
 }
 
-pub fn read_config(file_path: &str) -> anyhow::Result<(Config, bool, FileConfig)> {
+pub fn read_config(file_path: &str) -> anyhow::Result<(Config, FileConfig)> {
     let conf = std::fs::read_to_string(file_path)?;
     let file_conf = parse_config_str(&conf)?;
-    let (config, cmd) = file_conf.clone().into_runtime_config()?;
-    Ok((config, cmd, file_conf))
+    let config = file_conf.clone().into_runtime_config()?;
+    Ok((config, file_conf))
 }
 
-pub fn read_config_from_path(path: &Path) -> anyhow::Result<(Config, bool, FileConfig)> {
+pub fn read_config_from_path(path: &Path) -> anyhow::Result<(Config, FileConfig)> {
     read_config(
         path.to_str()
             .ok_or_else(|| anyhow!("invalid config path"))?,
     )
 }
 
-pub fn read_saved_config() -> anyhow::Result<Option<(Config, bool, FileConfig)>> {
+pub fn read_saved_config() -> anyhow::Result<Option<(Config, FileConfig)>> {
     let path = saved_config_path()?;
     if !path.exists() {
         return Ok(None);
@@ -237,8 +244,7 @@ server_address: https://control.middlescale.net/control
 "#,
             "group",
         );
-        let (config, _, _) =
-            read_config(path.to_str().unwrap()).expect("group config should parse");
+        let (config, _) = read_config(path.to_str().unwrap()).expect("group config should parse");
         assert_eq!(config.token, "default.ms.net");
         let _ = fs::remove_file(path);
     }
@@ -281,6 +287,25 @@ dns:
         );
         let err = read_config(path.to_str().unwrap()).expect_err("legacy dns config should fail");
         assert!(err.to_string().contains("unknown field `dns`"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_ignores_legacy_cmd_field() {
+        let path = write_temp_config(
+            r#"
+group: default.ms.net
+device_id: dev-4
+name: test-node
+server_address: https://control.middlescale.net/control
+cmd: true
+"#,
+            "legacy-cmd",
+        );
+        let (config, file_conf) =
+            read_config(path.to_str().unwrap()).expect("legacy cmd config should parse");
+        assert_eq!(config.token, DEFAULT_SERVICE_GROUP);
+        assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
         let _ = fs::remove_file(path);
     }
 }

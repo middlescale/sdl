@@ -185,7 +185,7 @@ impl ServiceManager {
 
     fn record_auth_success(&self) {
         let mut config = self.config.lock().unwrap();
-        let mut saved = self.saved_config.lock().unwrap();
+        let saved = self.saved_config.lock().unwrap();
         let authenticated_user_id = config.auth_user_id.clone();
         let authenticated_group = config.auth_group.clone();
         config.auth_ticket = None;
@@ -200,7 +200,6 @@ impl ServiceManager {
         if let Some(user_id) = authenticated_user_id {
             log::info!("persisting authenticated user_id={}", user_id);
         }
-        saved.cmd = false;
         if let Err(e) = write_saved_config(&saved) {
             log::warn!("write saved config after auth failed: {:?}", e);
         }
@@ -427,7 +426,7 @@ impl SdlCallback for ServiceCallback {
 }
 
 pub fn run_service_from_args(args: Vec<String>) -> i32 {
-    let (config, show_cmd, saved_config) = match crate::cli::parse_args_config_from(args) {
+    let (config, saved_config) = match crate::cli::parse_args_config_from(args) {
         Ok(rs) => match rs {
             Some(rs) => rs,
             None => return 0,
@@ -438,10 +437,10 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
             return 1;
         }
     };
-    run_service(config, show_cmd, saved_config)
+    run_service(config, saved_config)
 }
 
-pub fn run_service(config: Config, show_cmd: bool, saved_config: FileConfig) -> i32 {
+pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
     if !root_check::is_app_elevated() {
         println!("Please run sdl-service with administrator or root privileges");
         return 1;
@@ -510,82 +509,6 @@ pub fn run_service(config: Config, show_cmd: bool, saved_config: FileConfig) -> 
                         break;
                     }
                     _ => {}
-                }
-            }
-        });
-    }
-
-    if show_cmd {
-        let shutdown_sender = shutdown_sender.clone();
-        std::thread::spawn(move || loop {
-            let mut cmd = String::new();
-            println!(
-                "======== input:resume,list,info,route,all,suspend,chart_a,chart_b[:ip],channel_change:<relay|p2p|auto> ========"
-            );
-            match std::io::stdin().read_line(&mut cmd) {
-                Ok(_) => {
-                    let cmd = cmd.trim();
-                    if cmd.is_empty() {
-                        continue;
-                    }
-                    if cmd.eq_ignore_ascii_case("exit") || cmd.eq_ignore_ascii_case("quit") {
-                        let _ = shutdown_sender.send(());
-                        break;
-                    }
-                    match crate::command::client::CommandClient::new() {
-                        Ok(mut client) => {
-                            let result = if cmd == "resume" {
-                                client.resume().map(|out| {
-                                    println!("{}", out);
-                                })
-                            } else if cmd == "suspend" {
-                                client.suspend().map(|out| {
-                                    println!("{}", out);
-                                })
-                            } else if let Some(value) = cmd.strip_prefix("channel_change:") {
-                                client.channel_change(value).map(|out| println!("{}", out))
-                            } else {
-                                match cmd {
-                                    "list" => client.list().map(|list| {
-                                        crate::console_out::console_device_list(list);
-                                    }),
-                                    "info" => client.info().map(|info| {
-                                        crate::console_out::console_info(info);
-                                    }),
-                                    "route" => client.route().map(|route| {
-                                        crate::console_out::console_route_table(route);
-                                    }),
-                                    "all" => client.list().map(|list| {
-                                        crate::console_out::console_device_list_all(list);
-                                    }),
-                                    "chart_a" => client.chart_a().map(|chart| {
-                                        crate::console_out::console_chart_a(chart);
-                                    }),
-                                    _ if cmd.starts_with("chart_b") => {
-                                        let input = cmd
-                                            .split_once(':')
-                                            .map(|(_, right)| right.to_string())
-                                            .unwrap_or_default();
-                                        client.chart_b(&input).map(|chart| {
-                                            crate::console_out::console_chart_b(chart);
-                                        })
-                                    }
-                                    _ => Err(io::Error::other("unknown command")),
-                                }
-                            };
-                            if let Err(e) = result {
-                                println!("input err:{}", e);
-                            }
-                        }
-                        Err(e) => {
-                            println!("input err:{}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("input err:{}", e);
-                    let _ = shutdown_sender.send(());
-                    break;
                 }
             }
         });
