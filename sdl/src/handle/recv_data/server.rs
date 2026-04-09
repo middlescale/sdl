@@ -506,6 +506,30 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.runtime
                         .control_session
                         .trigger_status_report_with_nat_ready();
+                    if should_refresh_gateway_grant_after_registration(
+                        old.status.offline(),
+                        response.gateway_access_grant.as_ref().is_some(),
+                    ) {
+                        match self
+                            .runtime
+                            .control_session
+                            .send_refresh_gateway_grant_request(
+                                &self.runtime.gateway_sessions,
+                                false,
+                            ) {
+                            Ok(_) => {
+                                log::info!(
+                                    "registration recovered from offline without gateway grant, requested dedicated gateway grant refresh"
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "registration recovered from offline but gateway grant refresh failed: {:?}",
+                                    e
+                                );
+                            }
+                        }
+                    }
                     if old.status.offline() {
                         self.callback.success();
                     }
@@ -1200,11 +1224,18 @@ fn observed_udp_port_from_registration(
     }
 }
 
+fn should_refresh_gateway_grant_after_registration(
+    was_offline: bool,
+    registration_has_gateway_grant: bool,
+) -> bool {
+    was_offline && !registration_has_gateway_grant
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        observed_udp_port_from_registration,
+        observed_udp_port_from_registration, should_refresh_gateway_grant_after_registration,
     };
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
@@ -1290,5 +1321,14 @@ mod tests {
             observed_udp_port_from_registration(ConnectProtocol::TCP, 443),
             0
         );
+    }
+
+    #[test]
+    fn refresh_gateway_grant_after_registration_only_for_offline_recovery_without_grant() {
+        assert!(should_refresh_gateway_grant_after_registration(true, false));
+        assert!(!should_refresh_gateway_grant_after_registration(true, true));
+        assert!(!should_refresh_gateway_grant_after_registration(
+            false, false
+        ));
     }
 }
