@@ -422,6 +422,9 @@ impl ControlSession {
             .collect();
         message.public_udp_ports = nat_info.public_ports.iter().map(|p| *p as u32).collect();
         message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
+        if let Some(ipv6) = nat_info.ipv6() {
+            message.public_ipv6 = ipv6.octets().to_vec();
+        }
         let buf = message.write_to_bytes().map_err(|e| {
             io::Error::new(io::ErrorKind::Other, format!("up_status_packet {:?}", e))
         })?;

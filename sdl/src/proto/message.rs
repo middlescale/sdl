@@ -7812,6 +7812,8 @@ pub struct ClientStatusInfo {
     pub public_udp_ports: ::std::vec::Vec<u32>,
     // @@protoc_insertion_point(field:ClientStatusInfo.local_udp_ports)
     pub local_udp_ports: ::std::vec::Vec<u32>,
+    // @@protoc_insertion_point(field:ClientStatusInfo.public_ipv6)
+    pub public_ipv6: ::std::vec::Vec<u8>,
     // special fields
     // @@protoc_insertion_point(special_field:ClientStatusInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -7829,7 +7831,7 @@ impl ClientStatusInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(9);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "source",
@@ -7870,6 +7872,11 @@ impl ClientStatusInfo {
             "local_udp_ports",
             |m: &ClientStatusInfo| { &m.local_udp_ports },
             |m: &mut ClientStatusInfo| { &mut m.local_udp_ports },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "public_ipv6",
+            |m: &ClientStatusInfo| { &m.public_ipv6 },
+            |m: &mut ClientStatusInfo| { &mut m.public_ipv6 },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ClientStatusInfo>(
             "ClientStatusInfo",
@@ -7922,6 +7929,9 @@ impl ::protobuf::Message for ClientStatusInfo {
                 64 => {
                     self.local_udp_ports.push(is.read_uint32()?);
                 },
+                74 => {
+                    self.public_ipv6 = is.read_bytes()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -7957,6 +7967,9 @@ impl ::protobuf::Message for ClientStatusInfo {
         for value in &self.local_udp_ports {
             my_size += ::protobuf::rt::uint32_size(8, *value);
         };
+        if !self.public_ipv6.is_empty() {
+            my_size += ::protobuf::rt::bytes_size(9, &self.public_ipv6);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -7987,6 +8000,9 @@ impl ::protobuf::Message for ClientStatusInfo {
         for v in &self.local_udp_ports {
             os.write_uint32(8, *v)?;
         };
+        if !self.public_ipv6.is_empty() {
+            os.write_bytes(9, &self.public_ipv6)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -8012,6 +8028,7 @@ impl ::protobuf::Message for ClientStatusInfo {
         self.public_ip_list.clear();
         self.public_udp_ports.clear();
         self.local_udp_ports.clear();
+        self.public_ipv6.clear();
         self.special_fields.clear();
     }
 
@@ -8025,6 +8042,7 @@ impl ::protobuf::Message for ClientStatusInfo {
             public_ip_list: ::std::vec::Vec::new(),
             public_udp_ports: ::std::vec::Vec::new(),
             local_udp_ports: ::std::vec::Vec::new(),
+            public_ipv6: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8611,24 +8629,25 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     R\x07attempt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\
     \x04code\x12\x16\n\x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11sel\
     ected_endpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpo\
-    int\"\xb1\x02\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\
+    int\"\xd2\x02\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\
     \x07R\x06source\x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\
     \x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\
     \x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_ty\
     pe\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12$\n\x0epublic_ip_\
     list\x18\x06\x20\x03(\x07R\x0cpublicIpList\x12(\n\x10public_udp_ports\
     \x18\x07\x20\x03(\rR\x0epublicUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\
-    \x20\x03(\rR\rlocalUdpPorts\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\
-    \x20\x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_\
-    CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\
-    \x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\
-    \x10\0\x12\x08\n\x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\
-    \0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4\
-    Tcp\x10\x03\x12\x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\
-    \x12\x0b\n\x07IPv6Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\
-    \x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\
-    \x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\
-    \x03\x12\x17\n\x13PunchResultCanceled\x10\x04b\x06proto3\
+    \x20\x03(\rR\rlocalUdpPorts\x12\x1f\n\x0bpublic_ipv6\x18\t\x20\x01(\x0cR\
+    \npublicIpv6\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\
+    \x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOW\
+    N\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CH\
+    ANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\
+    \n\x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\
+    \x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\
+    \x12\x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07\
+    IPv6Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUn\
+    known\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchRe\
+    sultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13\
+    PunchResultCanceled\x10\x04b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

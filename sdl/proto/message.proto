@@ -331,6 +331,7 @@ message ClientStatusInfo {
     repeated fixed32 public_ip_list = 6;
     repeated uint32 public_udp_ports = 7;
     repeated uint32 local_udp_ports = 8;
+    bytes public_ipv6 = 9;
 }
 message RouteItem {
     fixed32 next_ip = 1;
