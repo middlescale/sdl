@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -23,7 +23,8 @@ use crate::proto::message::{
     DebugCollectRequest, DebugCollectResponse, DebugWatchStartRequest, DebugWatchStartResponse,
     DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge, DeviceList,
     DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck, HandshakeResponse, PunchAck,
-    PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
+    PunchEndpoint, PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse,
+    RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -296,14 +297,21 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         reason: &str,
     ) -> anyhow::Result<()> {
         let _ = current_device;
+        let selected_endpoint = selected_endpoint_for_result(
+            code,
+            self.runtime
+                .route_manager()
+                .direct_route(&Ipv4Addr::from(target)),
+        );
         log::info!(
-            "sending PunchResult session_id={} source={} target={} attempt={} code={:?} reason={}",
+            "sending PunchResult session_id={} source={} target={} attempt={} code={:?} reason={} selected_endpoint={}",
             session_id,
             Ipv4Addr::from(source),
             Ipv4Addr::from(target),
             attempt,
             code,
-            reason
+            reason,
+            format_punch_endpoint(selected_endpoint.as_ref())
         );
         send_punch_result_via_control(
             &self.runtime.control_session,
@@ -313,6 +321,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             attempt,
             code,
             reason,
+            selected_endpoint,
         )
     }
 
@@ -362,6 +371,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             "reason": reason,
                         }),
                     );
+                    let selected_endpoint =
+                        selected_endpoint_for_result(code, runtime.route_manager().direct_route(&peer_ip));
                     if let Err(err) = send_punch_result_via_control(
                         &runtime.control_session,
                         session.session_id,
@@ -370,6 +381,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         session.attempt,
                         code,
                         reason,
+                        selected_endpoint,
                     ) {
                         log::warn!(
                             "send punch result from watchdog failed peer={} session_id={} attempt={} err={:?}",
@@ -1132,6 +1144,7 @@ fn build_punch_result(
     attempt: u32,
     code: PunchResultCode,
     reason: &str,
+    selected_endpoint: Option<PunchEndpoint>,
 ) -> PunchResult {
     let mut result = PunchResult::new();
     result.session_id = session_id;
@@ -1140,6 +1153,9 @@ fn build_punch_result(
     result.attempt = attempt;
     result.code = protobuf::EnumOrUnknown::new(code);
     result.reason = reason.to_string();
+    if let Some(endpoint) = selected_endpoint {
+        result.selected_endpoint = protobuf::MessageField::some(endpoint);
+    }
     result
 }
 
@@ -1151,13 +1167,69 @@ fn send_punch_result_via_control(
     attempt: u32,
     code: PunchResultCode,
     reason: &str,
+    selected_endpoint: Option<PunchEndpoint>,
 ) -> anyhow::Result<()> {
-    let result = build_punch_result(session_id, source, target, attempt, code, reason);
+    let result = build_punch_result(
+        session_id,
+        source,
+        target,
+        attempt,
+        code,
+        reason,
+        selected_endpoint,
+    );
     let bytes = result
         .write_to_bytes()
         .map_err(|e| anyhow!("PunchResult {:?}", e))?;
     control_session.send_service_payload(service_packet::Protocol::PunchResult, &bytes)?;
     Ok(())
+}
+
+fn selected_endpoint_for_result(
+    code: PunchResultCode,
+    route: Option<Route>,
+) -> Option<PunchEndpoint> {
+    if code != PunchResultCode::PunchResultSuccess {
+        return None;
+    }
+    route.map(punch_endpoint_from_route)
+}
+
+fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
+    let mut endpoint = PunchEndpoint::new();
+    match route.addr {
+        SocketAddr::V4(addr) => {
+            endpoint.ip = u32::from(*addr.ip());
+            endpoint.port = u32::from(addr.port());
+        }
+        SocketAddr::V6(addr) => {
+            endpoint.ipv6 = addr.ip().octets().to_vec();
+            endpoint.port = u32::from(addr.port());
+        }
+    }
+    endpoint.tcp = route.protocol.is_base_tcp() && !route.protocol.is_quic();
+    endpoint
+}
+
+fn format_punch_endpoint(endpoint: Option<&PunchEndpoint>) -> String {
+    let Some(endpoint) = endpoint else {
+        return "-".to_string();
+    };
+    let proto = if endpoint.tcp { "tcp" } else { "udp" };
+    if endpoint.ip != 0 {
+        return format!(
+            "{}:{}/{}",
+            Ipv4Addr::from(endpoint.ip),
+            endpoint.port,
+            proto
+        );
+    }
+    if endpoint.ipv6.len() == 16 {
+        let mut ipv6 = [0u8; 16];
+        ipv6.copy_from_slice(&endpoint.ipv6);
+        return format!("[{}]:{}/{}", Ipv6Addr::from(ipv6), endpoint.port, proto);
+    }
+    format!("-:{}/{}", endpoint.port, proto)
 }
 
 fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, NatInfo) {
@@ -1235,12 +1307,14 @@ fn should_refresh_gateway_grant_after_registration(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        observed_udp_port_from_registration, should_refresh_gateway_grant_after_registration,
+        format_punch_endpoint, observed_udp_port_from_registration, punch_endpoint_from_route,
+        selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
     };
+    use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
     use crate::transport::connect_protocol::ConnectProtocol;
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
     fn build_peer_nat_info_from_punch_start_uses_endpoints_and_tcp_flag() {
@@ -1294,8 +1368,15 @@ mod tests {
 
     #[test]
     fn build_punch_result_sets_code_and_reason() {
-        let result =
-            build_punch_result(12, 3, 4, 5, PunchResultCode::PunchResultTimeout, "timeout");
+        let result = build_punch_result(
+            12,
+            3,
+            4,
+            5,
+            PunchResultCode::PunchResultTimeout,
+            "timeout",
+            None,
+        );
         assert_eq!(result.session_id, 12);
         assert_eq!(result.source, 3);
         assert_eq!(result.target, 4);
@@ -1305,6 +1386,43 @@ mod tests {
             PunchResultCode::PunchResultTimeout
         );
         assert_eq!(result.reason, "timeout");
+    }
+
+    #[test]
+    fn selected_endpoint_for_success_uses_direct_route() {
+        let endpoint = selected_endpoint_for_result(
+            PunchResultCode::PunchResultSuccess,
+            Some(Route::new(
+                ConnectProtocol::UDP,
+                "1.2.3.4:51820".parse::<SocketAddr>().unwrap(),
+                1,
+                1,
+            )),
+        )
+        .expect("selected endpoint");
+        assert_eq!(endpoint.ip, u32::from(Ipv4Addr::new(1, 2, 3, 4)));
+        assert_eq!(endpoint.port, 51820);
+        assert!(!endpoint.tcp);
+    }
+
+    #[test]
+    fn punch_endpoint_from_tcp_route_marks_tcp() {
+        let endpoint = punch_endpoint_from_route(Route::new(
+            ConnectProtocol::TCP,
+            "[2001:db8::1]:443".parse::<SocketAddr>().unwrap(),
+            1,
+            1,
+        ));
+        assert!(endpoint.tcp);
+        assert_eq!(endpoint.ipv6.len(), 16);
+    }
+
+    #[test]
+    fn format_punch_endpoint_formats_ipv4() {
+        let mut endpoint = PunchEndpoint::new();
+        endpoint.ip = u32::from(Ipv4Addr::new(1, 2, 3, 4));
+        endpoint.port = 51820;
+        assert_eq!(format_punch_endpoint(Some(&endpoint)), "1.2.3.4:51820/udp");
     }
 
     #[test]
