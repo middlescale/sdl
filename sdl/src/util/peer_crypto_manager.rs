@@ -130,6 +130,14 @@ impl PeerCryptoManager {
             .map(|deadline| Instant::now() <= *deadline)
             .unwrap_or(false)
     }
+
+    pub fn debug_counts(&self) -> (usize, usize, bool) {
+        (
+            self.current_ciphers.read().len(),
+            self.previous_ciphers.read().len(),
+            self.is_grace_active(),
+        )
+    }
 }
 
 #[cfg(test)]

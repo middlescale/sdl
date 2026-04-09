@@ -165,6 +165,15 @@ pub(crate) fn handle(
             dest_ip,
             data_len.saturating_sub(12)
         );
+        data_channel.emit_debug_watch_event(
+            "icmp",
+            "tun_outbound",
+            serde_json::json!({
+                "src": src_ip.to_string(),
+                "dst": dest_ip.to_string(),
+                "bytes": data_len.saturating_sub(12),
+            }),
+        );
     }
     if src_ip == dest_ip {
         return icmp(device_writer, ipv4_packet);
@@ -198,6 +207,15 @@ pub(crate) fn handle(
                 src_ip,
                 dest_ip,
                 data_len.saturating_sub(12)
+            );
+            data_channel.emit_debug_watch_event(
+                "icmp",
+                "gateway_relay_forward",
+                serde_json::json!({
+                    "src": src_ip.to_string(),
+                    "dst": dest_ip.to_string(),
+                    "bytes": data_len.saturating_sub(12),
+                }),
             );
         }
         gateway_sessions.send_relay(&net_packet)?;

@@ -20,9 +20,10 @@ use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
-    DeviceAuthAck, DeviceAuthChallenge, DeviceList, DeviceRenameResponse, DnsQueryResponse,
-    GatewayConnectAck, HandshakeResponse, PunchAck, PunchResult, PunchResultCode, PunchStart,
-    RefreshGatewayGrantResponse, RegistrationResponse,
+    DebugCollectRequest, DebugCollectResponse, DebugWatchStartRequest, DebugWatchStartResponse,
+    DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge, DeviceList,
+    DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck, HandshakeResponse, PunchAck,
+    PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -90,11 +91,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         self.reconcile_punch_sessions(current_device)?;
         if net_packet.protocol() == Protocol::Error
             && net_packet.transport_protocol()
-                == crate::protocol::error_packet::Protocol::NoKey.into()
+                == Into::<u8>::into(crate::protocol::error_packet::Protocol::NoKey)
         {
             return Ok(());
         } else if net_packet.protocol() == Protocol::Service
-            && net_packet.transport_protocol() == service_packet::Protocol::HandshakeResponse.into()
+            && net_packet.transport_protocol()
+                == Into::<u8>::into(service_packet::Protocol::HandshakeResponse)
         {
             let response = HandshakeResponse::parse_from_bytes(net_packet.payload())
                 .map_err(|e| anyhow!("HandshakeResponse {:?}", e))?;
@@ -148,12 +150,31 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     route_key.addr,
                                     net_packet.payload().len()
                                 );
+                                self.runtime.debug_watch.emit(
+                                    "icmp",
+                                    "gateway_echo_reply_received",
+                                    serde_json::json!({
+                                        "src": ipv4.source_ip().to_string(),
+                                        "dst": ipv4.destination_ip().to_string(),
+                                        "via": route_key.addr.to_string(),
+                                        "bytes": net_packet.payload().len(),
+                                    }),
+                                );
                                 let written = self.device.write(net_packet.payload())?;
                                 log::debug!(
                                     "gateway icmp echo reply injected into tun src={} dst={} written_bytes={}",
                                     ipv4.source_ip(),
                                     ipv4.destination_ip(),
                                     written
+                                );
+                                self.runtime.debug_watch.emit(
+                                    "icmp",
+                                    "gateway_echo_reply_injected",
+                                    serde_json::json!({
+                                        "src": ipv4.source_ip().to_string(),
+                                        "dst": ipv4.destination_ip().to_string(),
+                                        "written_bytes": written,
+                                    }),
                                 );
                                 return Ok(());
                             }
@@ -329,6 +350,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         session.attempt,
                         code,
                         reason
+                    );
+                    runtime.debug_watch.emit(
+                        "punch",
+                        "watchdog_outcome",
+                        serde_json::json!({
+                            "peer_ip": peer_ip.to_string(),
+                            "session_id": session.session_id,
+                            "attempt": session.attempt,
+                            "code": format!("{:?}", code),
+                            "reason": reason,
+                        }),
                     );
                     if let Err(err) = send_punch_result_via_control(
                         &runtime.control_session,
@@ -530,6 +562,98 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                 }
             }
+            service_packet::Protocol::DebugCollectRequest => {
+                let request = DebugCollectRequest::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DebugCollectRequest {:?}", e)))?;
+                log::info!(
+                    "received debug collect request request_id={} sections={:?} reason={}",
+                    request.request_id,
+                    request.sections,
+                    request.reason
+                );
+                let mut response = DebugCollectResponse::new();
+                response.request_id = request.request_id;
+                response.collected_at_unix_ms = crate::handle::now_time() as i64;
+                match self.runtime.debug_snapshot_json(&request.sections) {
+                    Ok(snapshot_json) => {
+                        response.ok = true;
+                        response.snapshot_json = snapshot_json;
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "debug collect failed request_id={} err={:?}",
+                            request.request_id,
+                            err
+                        );
+                        response.ok = false;
+                        response.reason = err.to_string();
+                    }
+                }
+                let bytes = response
+                    .write_to_bytes()
+                    .map_err(|e| io::Error::other(format!("DebugCollectResponse {:?}", e)))?;
+                self.send_service_packet(
+                    current_device,
+                    service_packet::Protocol::DebugCollectResponse,
+                    &bytes,
+                )?;
+            }
+            service_packet::Protocol::DebugWatchStartRequest => {
+                let request = DebugWatchStartRequest::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DebugWatchStartRequest {:?}", e)))?;
+                let (started_at_unix_ms, expire_at_unix_ms) = self.runtime.debug_watch.start(
+                    request.request_id,
+                    &request.sections,
+                    request.duration_sec.max(1),
+                );
+                let mut response = DebugWatchStartResponse::new();
+                response.request_id = request.request_id;
+                response.ok = true;
+                response.watch_id = request.request_id;
+                response.started_at_unix_ms = started_at_unix_ms;
+                response.expire_at_unix_ms = expire_at_unix_ms;
+                let bytes = response
+                    .write_to_bytes()
+                    .map_err(|e| io::Error::other(format!("DebugWatchStartResponse {:?}", e)))?;
+                self.send_service_packet(
+                    current_device,
+                    service_packet::Protocol::DebugWatchStartResponse,
+                    &bytes,
+                )?;
+                self.runtime.debug_watch.emit(
+                    "runtime",
+                    "watch_started",
+                    serde_json::json!({
+                        "watch_id": request.request_id,
+                        "sections": request.sections,
+                        "duration_sec": request.duration_sec,
+                        "reason": request.reason,
+                    }),
+                );
+            }
+            service_packet::Protocol::DebugWatchStopRequest => {
+                let request = DebugWatchStopRequest::parse_from_bytes(net_packet.payload())
+                    .map_err(|e| io::Error::other(format!("DebugWatchStopRequest {:?}", e)))?;
+                let stopped_watch_id = self.runtime.debug_watch.stop(Some(request.watch_id));
+                let mut response = DebugWatchStopResponse::new();
+                response.request_id = request.request_id;
+                response.watch_id = stopped_watch_id.unwrap_or(request.watch_id);
+                response.stopped_at_unix_ms = crate::handle::now_time() as i64;
+                if stopped_watch_id.is_some() {
+                    response.ok = true;
+                } else {
+                    response.ok = false;
+                    response.reason = "no matching active debug watch".to_string();
+                }
+                let bytes = response
+                    .write_to_bytes()
+                    .map_err(|e| io::Error::other(format!("DebugWatchStopResponse {:?}", e)))?;
+                self.send_service_packet(
+                    current_device,
+                    service_packet::Protocol::DebugWatchStopResponse,
+                    &bytes,
+                )?;
+            }
             service_packet::Protocol::DnsQueryResponse => {
                 let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DnsQueryResponse {:?}", e)))?;
@@ -574,6 +698,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     peer_nat_info.public_ips,
                     peer_nat_info.public_ports,
                     peer_nat_info.local_ipv4()
+                );
+                self.runtime.debug_watch.emit(
+                    "punch",
+                    "start_received",
+                    serde_json::json!({
+                        "peer_ip": peer_ip.to_string(),
+                        "session_id": punch_start.session_id,
+                        "attempt": punch_start.attempt,
+                        "endpoint_count": punch_start.peer_endpoints.len(),
+                        "public_ips": peer_nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "public_ports": peer_nat_info.public_ports,
+                        "local_ipv4": peer_nat_info.local_ipv4().map(|ip| ip.to_string()),
+                    }),
                 );
                 let deadline_unix_ms = if punch_start.deadline_unix_ms > 0 {
                     punch_start.deadline_unix_ms

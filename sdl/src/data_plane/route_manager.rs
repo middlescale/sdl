@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(packet.protocol(), Protocol::Control);
         assert_eq!(
             packet.transport_protocol(),
-            crate::protocol::control_packet::Protocol::Ping.into()
+            Into::<u8>::into(crate::protocol::control_packet::Protocol::Ping)
         );
     }
 

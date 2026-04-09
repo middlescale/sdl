@@ -20,7 +20,7 @@ use crate::proto::message::{
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
-use crate::util::StopManager;
+use crate::util::{DebugWatch, StopManager};
 
 #[derive(Clone)]
 struct GatewayRuntime {
@@ -52,6 +52,7 @@ pub struct GatewaySession {
     state: Arc<Mutex<GatewaySessionState>>,
     channel: GatewayTransport,
     started: Arc<AtomicCell<bool>>,
+    debug_watch: DebugWatch,
 }
 
 #[derive(Clone)]
@@ -61,16 +62,21 @@ enum GatewayTransport {
 }
 
 impl GatewaySession {
-    fn new_quic(endpoint: SocketAddr) -> Self {
+    fn new_quic(endpoint: SocketAddr, debug_watch: DebugWatch) -> Self {
         Self {
             endpoint,
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
             channel: GatewayTransport::Quic(QuicChannel::new(endpoint, endpoint.ip().to_string())),
             started: Arc::new(AtomicCell::new(false)),
+            debug_watch,
         }
     }
 
-    fn new_udp(endpoint: SocketAddr, grant: &GatewayAccessGrant) -> anyhow::Result<Self> {
+    fn new_udp(
+        endpoint: SocketAddr,
+        grant: &GatewayAccessGrant,
+        debug_watch: DebugWatch,
+    ) -> anyhow::Result<Self> {
         let gateway_udp_public_key: [u8; 32] =
             grant
                 .gateway_udp_public_key
@@ -87,6 +93,7 @@ impl GatewaySession {
                 grant.session_id,
             )?),
             started: Arc::new(AtomicCell::new(false)),
+            debug_watch,
         })
     }
 
@@ -212,6 +219,15 @@ impl GatewaySession {
             current_device.virtual_ip,
             current_device.virtual_gateway
         );
+        self.debug_watch.emit(
+            "gateway",
+            "connect_hello",
+            serde_json::json!({
+                "endpoint": self.endpoint.to_string(),
+                "source": current_device.virtual_ip.to_string(),
+                "gateway": current_device.virtual_gateway.to_string(),
+            }),
+        );
         if let Err(e) = self.send_packet(&packet) {
             self.state.lock().authenticated = false;
             return Err(e.into());
@@ -291,6 +307,18 @@ impl GatewaySession {
                 ack.grace_expire_unix_ms,
                 ack.reauth_required
             );
+            self.debug_watch.emit(
+                "gateway",
+                "authenticated",
+                serde_json::json!({
+                    "session_id": ack.session_id,
+                    "endpoint": self.endpoint.to_string(),
+                    "keepalive_secs": ack.keepalive_secs,
+                    "lease_expire_unix_ms": ack.lease_expire_unix_ms,
+                    "grace_expire_unix_ms": ack.grace_expire_unix_ms,
+                    "reauth_required": ack.reauth_required,
+                }),
+            );
         } else {
             guard.keepalive_secs = 0;
             guard.lease_expire_unix_ms = 0;
@@ -302,6 +330,16 @@ impl GatewaySession {
                 self.endpoint,
                 ack.reason,
                 ack.reauth_required
+            );
+            self.debug_watch.emit(
+                "gateway",
+                "auth_rejected",
+                serde_json::json!({
+                    "session_id": ack.session_id,
+                    "endpoint": self.endpoint.to_string(),
+                    "reason": ack.reason,
+                    "reauth_required": ack.reauth_required,
+                }),
             );
         }
     }
@@ -380,15 +418,20 @@ pub struct GatewaySessions {
     runtime: Arc<Mutex<Option<GatewayRuntime>>>,
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     worker_started: Arc<AtomicCell<bool>>,
+    debug_watch: DebugWatch,
 }
 
 impl GatewaySessions {
-    pub fn new(current_device: Arc<AtomicCell<CurrentDeviceInfo>>) -> Self {
+    pub fn new(
+        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+        debug_watch: DebugWatch,
+    ) -> Self {
         Self {
             current_device,
             runtime: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             worker_started: Arc::new(AtomicCell::new(false)),
+            debug_watch,
         }
     }
 
@@ -524,7 +567,7 @@ impl GatewaySessions {
             } else {
                 let created = match kind {
                     GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
-                        match GatewaySession::new_udp(endpoint, grant) {
+                        match GatewaySession::new_udp(endpoint, grant, self.debug_watch.clone()) {
                             Ok(session) => session,
                             Err(e) => {
                                 log::warn!(
@@ -536,7 +579,7 @@ impl GatewaySessions {
                             }
                         }
                     }
-                    _ => GatewaySession::new_quic(endpoint),
+                    _ => GatewaySession::new_quic(endpoint, self.debug_watch.clone()),
                 };
                 guard.insert(endpoint, created.clone());
                 created
@@ -642,9 +685,12 @@ impl GatewaySessions {
 
 impl Default for GatewaySessions {
     fn default() -> Self {
-        Self::new(Arc::new(AtomicCell::new(CurrentDeviceInfo::new0(
-            "0.0.0.0:0".parse().unwrap(),
-        ))))
+        Self::new(
+            Arc::new(AtomicCell::new(CurrentDeviceInfo::new0(
+                "0.0.0.0:0".parse().unwrap(),
+            ))),
+            DebugWatch::default(),
+        )
     }
 }
 

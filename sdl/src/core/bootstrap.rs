@@ -27,7 +27,7 @@ use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{load_or_create_device_signing_key, PeerCryptoManager, StopManager};
+use crate::util::{load_or_create_device_signing_key, DebugWatch, PeerCryptoManager, StopManager};
 use crate::{nat, DnsProfile, SdlCallback};
 
 #[derive(Clone)]
@@ -134,7 +134,8 @@ impl Sdl {
         let external_route = ExternalRoute::new(config.in_ips.clone());
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
         let punch_coordinator = PunchCoordinator::new();
-        let gateway_sessions = GatewaySessions::new(current_device.clone());
+        let debug_watch = DebugWatch::default();
+        let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
@@ -167,10 +168,44 @@ impl Sdl {
         );
         {
             let control_session = control_session.clone();
+            debug_watch.set_sender(move |event| {
+                use protobuf::Message;
+
+                let mut message = crate::proto::message::DebugWatchEvent::new();
+                message.watch_id = event.watch_id;
+                message.section = event.section;
+                message.event_type = event.event_type;
+                message.event_unix_ms = event.event_unix_ms;
+                message.payload_json = event.payload_json;
+                match message.write_to_bytes() {
+                    Ok(bytes) => {
+                        if let Err(err) = control_session.send_service_payload(
+                            crate::protocol::service_packet::Protocol::DebugWatchEvent,
+                            &bytes,
+                        ) {
+                            log::debug!("send debug watch event failed: {:?}", err);
+                        }
+                    }
+                    Err(err) => {
+                        log::debug!("encode debug watch event failed: {:?}", err);
+                    }
+                }
+            });
+        }
+        {
+            let control_session = control_session.clone();
+            let debug_watch = debug_watch.clone();
             route_manager.set_direct_route_timeout_handler(Arc::new(move |peer_ip| {
                 log::info!(
                     "last direct route expired for {}, triggering repunch",
                     peer_ip
+                );
+                debug_watch.emit(
+                    "route",
+                    "direct_route_expired",
+                    serde_json::json!({
+                        "peer_ip": peer_ip.to_string(),
+                    }),
                 );
                 control_session.trigger_status_report_with_nat_ready();
             }));
@@ -204,6 +239,7 @@ impl Sdl {
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
+                debug_watch: debug_watch.clone(),
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),
                 peer_nat_info_map: peer_nat_info_map.clone(),

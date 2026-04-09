@@ -182,6 +182,51 @@ message DeviceRenameResponse {
     string reason = 3;
     string applied_name = 4;
 }
+message DebugCollectRequest {
+    uint64 request_id = 1;
+    repeated string sections = 2;
+    string reason = 3;
+}
+message DebugCollectResponse {
+    uint64 request_id = 1;
+    bool ok = 2;
+    string reason = 3;
+    int64 collected_at_unix_ms = 4;
+    string snapshot_json = 5;
+}
+message DebugWatchStartRequest {
+    uint64 request_id = 1;
+    repeated string sections = 2;
+    uint32 duration_sec = 3;
+    string reason = 4;
+}
+message DebugWatchStartResponse {
+    uint64 request_id = 1;
+    bool ok = 2;
+    string reason = 3;
+    uint64 watch_id = 4;
+    int64 started_at_unix_ms = 5;
+    int64 expire_at_unix_ms = 6;
+}
+message DebugWatchStopRequest {
+    uint64 request_id = 1;
+    uint64 watch_id = 2;
+    string reason = 3;
+}
+message DebugWatchStopResponse {
+    uint64 request_id = 1;
+    bool ok = 2;
+    string reason = 3;
+    uint64 watch_id = 4;
+    int64 stopped_at_unix_ms = 5;
+}
+message DebugWatchEvent {
+    uint64 watch_id = 1;
+    string section = 2;
+    string event_type = 3;
+    int64 event_unix_ms = 4;
+    string payload_json = 5;
+}
 message DeviceInfo {
     string name = 1;
     fixed32 virtual_ip = 2;

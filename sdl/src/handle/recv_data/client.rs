@@ -217,6 +217,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         route_key.addr,
                         net_packet.payload().len()
                     );
+                    self.runtime.debug_watch.emit(
+                        "icmp",
+                        "peer_echo_reply_received",
+                        serde_json::json!({
+                            "src": icmp_source.to_string(),
+                            "dst": icmp_destination.to_string(),
+                            "via": route_key.addr.to_string(),
+                            "bytes": net_packet.payload().len(),
+                        }),
+                    );
                 }
                 let written = self.device.write(net_packet.payload())?;
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
@@ -225,6 +235,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         icmp_source,
                         icmp_destination,
                         written
+                    );
+                    self.runtime.debug_watch.emit(
+                        "icmp",
+                        "peer_echo_reply_injected",
+                        serde_json::json!({
+                            "src": icmp_source.to_string(),
+                            "dst": icmp_destination.to_string(),
+                            "written_bytes": written,
+                        }),
                     );
                 }
             }

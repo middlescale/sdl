@@ -2,6 +2,8 @@ use std::io;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Weak};
 
+use serde_json::Value;
+
 use crate::cipher::CipherModel;
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
@@ -103,6 +105,12 @@ impl DataChannel {
             return Err(io::Error::other(err));
         }
         Ok(())
+    }
+
+    pub fn emit_debug_watch_event(&self, section: &str, event_type: &str, payload: Value) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.debug_watch.emit(section, event_type, payload);
+        }
     }
 
     fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {

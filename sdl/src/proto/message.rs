@@ -4673,6 +4673,1292 @@ impl ::protobuf::reflect::ProtobufValue for DeviceRenameResponse {
 }
 
 #[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugCollectRequest)
+pub struct DebugCollectRequest {
+    // message fields
+    // @@protoc_insertion_point(field:DebugCollectRequest.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugCollectRequest.sections)
+    pub sections: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DebugCollectRequest.reason)
+    pub reason: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugCollectRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugCollectRequest {
+    fn default() -> &'a DebugCollectRequest {
+        <DebugCollectRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugCollectRequest {
+    pub fn new() -> DebugCollectRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugCollectRequest| { &m.request_id },
+            |m: &mut DebugCollectRequest| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "sections",
+            |m: &DebugCollectRequest| { &m.sections },
+            |m: &mut DebugCollectRequest| { &mut m.sections },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugCollectRequest| { &m.reason },
+            |m: &mut DebugCollectRequest| { &mut m.reason },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugCollectRequest>(
+            "DebugCollectRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugCollectRequest {
+    const NAME: &'static str = "DebugCollectRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                18 => {
+                    self.sections.push(is.read_string()?);
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        for value in &self.sections {
+            my_size += ::protobuf::rt::string_size(2, &value);
+        };
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        for v in &self.sections {
+            os.write_string(2, &v)?;
+        };
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugCollectRequest {
+        DebugCollectRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.sections.clear();
+        self.reason.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugCollectRequest {
+        static instance: DebugCollectRequest = DebugCollectRequest {
+            request_id: 0,
+            sections: ::std::vec::Vec::new(),
+            reason: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugCollectRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugCollectRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugCollectRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugCollectRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugCollectResponse)
+pub struct DebugCollectResponse {
+    // message fields
+    // @@protoc_insertion_point(field:DebugCollectResponse.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugCollectResponse.ok)
+    pub ok: bool,
+    // @@protoc_insertion_point(field:DebugCollectResponse.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:DebugCollectResponse.collected_at_unix_ms)
+    pub collected_at_unix_ms: i64,
+    // @@protoc_insertion_point(field:DebugCollectResponse.snapshot_json)
+    pub snapshot_json: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugCollectResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugCollectResponse {
+    fn default() -> &'a DebugCollectResponse {
+        <DebugCollectResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugCollectResponse {
+    pub fn new() -> DebugCollectResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugCollectResponse| { &m.request_id },
+            |m: &mut DebugCollectResponse| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ok",
+            |m: &DebugCollectResponse| { &m.ok },
+            |m: &mut DebugCollectResponse| { &mut m.ok },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugCollectResponse| { &m.reason },
+            |m: &mut DebugCollectResponse| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "collected_at_unix_ms",
+            |m: &DebugCollectResponse| { &m.collected_at_unix_ms },
+            |m: &mut DebugCollectResponse| { &mut m.collected_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "snapshot_json",
+            |m: &DebugCollectResponse| { &m.snapshot_json },
+            |m: &mut DebugCollectResponse| { &mut m.snapshot_json },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugCollectResponse>(
+            "DebugCollectResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugCollectResponse {
+    const NAME: &'static str = "DebugCollectResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                16 => {
+                    self.ok = is.read_bool()?;
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                32 => {
+                    self.collected_at_unix_ms = is.read_int64()?;
+                },
+                42 => {
+                    self.snapshot_json = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if self.ok != false {
+            my_size += 1 + 1;
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        if self.collected_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::int64_size(4, self.collected_at_unix_ms);
+        }
+        if !self.snapshot_json.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.snapshot_json);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if self.ok != false {
+            os.write_bool(2, self.ok)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        if self.collected_at_unix_ms != 0 {
+            os.write_int64(4, self.collected_at_unix_ms)?;
+        }
+        if !self.snapshot_json.is_empty() {
+            os.write_string(5, &self.snapshot_json)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugCollectResponse {
+        DebugCollectResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.ok = false;
+        self.reason.clear();
+        self.collected_at_unix_ms = 0;
+        self.snapshot_json.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugCollectResponse {
+        static instance: DebugCollectResponse = DebugCollectResponse {
+            request_id: 0,
+            ok: false,
+            reason: ::std::string::String::new(),
+            collected_at_unix_ms: 0,
+            snapshot_json: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugCollectResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugCollectResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugCollectResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugCollectResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugWatchStartRequest)
+pub struct DebugWatchStartRequest {
+    // message fields
+    // @@protoc_insertion_point(field:DebugWatchStartRequest.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStartRequest.sections)
+    pub sections: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DebugWatchStartRequest.duration_sec)
+    pub duration_sec: u32,
+    // @@protoc_insertion_point(field:DebugWatchStartRequest.reason)
+    pub reason: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugWatchStartRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugWatchStartRequest {
+    fn default() -> &'a DebugWatchStartRequest {
+        <DebugWatchStartRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugWatchStartRequest {
+    pub fn new() -> DebugWatchStartRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugWatchStartRequest| { &m.request_id },
+            |m: &mut DebugWatchStartRequest| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "sections",
+            |m: &DebugWatchStartRequest| { &m.sections },
+            |m: &mut DebugWatchStartRequest| { &mut m.sections },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "duration_sec",
+            |m: &DebugWatchStartRequest| { &m.duration_sec },
+            |m: &mut DebugWatchStartRequest| { &mut m.duration_sec },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugWatchStartRequest| { &m.reason },
+            |m: &mut DebugWatchStartRequest| { &mut m.reason },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugWatchStartRequest>(
+            "DebugWatchStartRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugWatchStartRequest {
+    const NAME: &'static str = "DebugWatchStartRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                18 => {
+                    self.sections.push(is.read_string()?);
+                },
+                24 => {
+                    self.duration_sec = is.read_uint32()?;
+                },
+                34 => {
+                    self.reason = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        for value in &self.sections {
+            my_size += ::protobuf::rt::string_size(2, &value);
+        };
+        if self.duration_sec != 0 {
+            my_size += ::protobuf::rt::uint32_size(3, self.duration_sec);
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(4, &self.reason);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        for v in &self.sections {
+            os.write_string(2, &v)?;
+        };
+        if self.duration_sec != 0 {
+            os.write_uint32(3, self.duration_sec)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(4, &self.reason)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugWatchStartRequest {
+        DebugWatchStartRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.sections.clear();
+        self.duration_sec = 0;
+        self.reason.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugWatchStartRequest {
+        static instance: DebugWatchStartRequest = DebugWatchStartRequest {
+            request_id: 0,
+            sections: ::std::vec::Vec::new(),
+            duration_sec: 0,
+            reason: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugWatchStartRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugWatchStartRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugWatchStartRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugWatchStartRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugWatchStartResponse)
+pub struct DebugWatchStartResponse {
+    // message fields
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.ok)
+    pub ok: bool,
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.watch_id)
+    pub watch_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.started_at_unix_ms)
+    pub started_at_unix_ms: i64,
+    // @@protoc_insertion_point(field:DebugWatchStartResponse.expire_at_unix_ms)
+    pub expire_at_unix_ms: i64,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugWatchStartResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugWatchStartResponse {
+    fn default() -> &'a DebugWatchStartResponse {
+        <DebugWatchStartResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugWatchStartResponse {
+    pub fn new() -> DebugWatchStartResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugWatchStartResponse| { &m.request_id },
+            |m: &mut DebugWatchStartResponse| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ok",
+            |m: &DebugWatchStartResponse| { &m.ok },
+            |m: &mut DebugWatchStartResponse| { &mut m.ok },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugWatchStartResponse| { &m.reason },
+            |m: &mut DebugWatchStartResponse| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "watch_id",
+            |m: &DebugWatchStartResponse| { &m.watch_id },
+            |m: &mut DebugWatchStartResponse| { &mut m.watch_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "started_at_unix_ms",
+            |m: &DebugWatchStartResponse| { &m.started_at_unix_ms },
+            |m: &mut DebugWatchStartResponse| { &mut m.started_at_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "expire_at_unix_ms",
+            |m: &DebugWatchStartResponse| { &m.expire_at_unix_ms },
+            |m: &mut DebugWatchStartResponse| { &mut m.expire_at_unix_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugWatchStartResponse>(
+            "DebugWatchStartResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugWatchStartResponse {
+    const NAME: &'static str = "DebugWatchStartResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                16 => {
+                    self.ok = is.read_bool()?;
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                32 => {
+                    self.watch_id = is.read_uint64()?;
+                },
+                40 => {
+                    self.started_at_unix_ms = is.read_int64()?;
+                },
+                48 => {
+                    self.expire_at_unix_ms = is.read_int64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if self.ok != false {
+            my_size += 1 + 1;
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        if self.watch_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.watch_id);
+        }
+        if self.started_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::int64_size(5, self.started_at_unix_ms);
+        }
+        if self.expire_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::int64_size(6, self.expire_at_unix_ms);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if self.ok != false {
+            os.write_bool(2, self.ok)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        if self.watch_id != 0 {
+            os.write_uint64(4, self.watch_id)?;
+        }
+        if self.started_at_unix_ms != 0 {
+            os.write_int64(5, self.started_at_unix_ms)?;
+        }
+        if self.expire_at_unix_ms != 0 {
+            os.write_int64(6, self.expire_at_unix_ms)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugWatchStartResponse {
+        DebugWatchStartResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.ok = false;
+        self.reason.clear();
+        self.watch_id = 0;
+        self.started_at_unix_ms = 0;
+        self.expire_at_unix_ms = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugWatchStartResponse {
+        static instance: DebugWatchStartResponse = DebugWatchStartResponse {
+            request_id: 0,
+            ok: false,
+            reason: ::std::string::String::new(),
+            watch_id: 0,
+            started_at_unix_ms: 0,
+            expire_at_unix_ms: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugWatchStartResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugWatchStartResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugWatchStartResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugWatchStartResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugWatchStopRequest)
+pub struct DebugWatchStopRequest {
+    // message fields
+    // @@protoc_insertion_point(field:DebugWatchStopRequest.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStopRequest.watch_id)
+    pub watch_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStopRequest.reason)
+    pub reason: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugWatchStopRequest.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugWatchStopRequest {
+    fn default() -> &'a DebugWatchStopRequest {
+        <DebugWatchStopRequest as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugWatchStopRequest {
+    pub fn new() -> DebugWatchStopRequest {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugWatchStopRequest| { &m.request_id },
+            |m: &mut DebugWatchStopRequest| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "watch_id",
+            |m: &DebugWatchStopRequest| { &m.watch_id },
+            |m: &mut DebugWatchStopRequest| { &mut m.watch_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugWatchStopRequest| { &m.reason },
+            |m: &mut DebugWatchStopRequest| { &mut m.reason },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugWatchStopRequest>(
+            "DebugWatchStopRequest",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugWatchStopRequest {
+    const NAME: &'static str = "DebugWatchStopRequest";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                16 => {
+                    self.watch_id = is.read_uint64()?;
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if self.watch_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(2, self.watch_id);
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if self.watch_id != 0 {
+            os.write_uint64(2, self.watch_id)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugWatchStopRequest {
+        DebugWatchStopRequest::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.watch_id = 0;
+        self.reason.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugWatchStopRequest {
+        static instance: DebugWatchStopRequest = DebugWatchStopRequest {
+            request_id: 0,
+            watch_id: 0,
+            reason: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugWatchStopRequest {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugWatchStopRequest").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugWatchStopRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugWatchStopRequest {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugWatchStopResponse)
+pub struct DebugWatchStopResponse {
+    // message fields
+    // @@protoc_insertion_point(field:DebugWatchStopResponse.request_id)
+    pub request_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStopResponse.ok)
+    pub ok: bool,
+    // @@protoc_insertion_point(field:DebugWatchStopResponse.reason)
+    pub reason: ::std::string::String,
+    // @@protoc_insertion_point(field:DebugWatchStopResponse.watch_id)
+    pub watch_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchStopResponse.stopped_at_unix_ms)
+    pub stopped_at_unix_ms: i64,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugWatchStopResponse.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugWatchStopResponse {
+    fn default() -> &'a DebugWatchStopResponse {
+        <DebugWatchStopResponse as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugWatchStopResponse {
+    pub fn new() -> DebugWatchStopResponse {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "request_id",
+            |m: &DebugWatchStopResponse| { &m.request_id },
+            |m: &mut DebugWatchStopResponse| { &mut m.request_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "ok",
+            |m: &DebugWatchStopResponse| { &m.ok },
+            |m: &mut DebugWatchStopResponse| { &mut m.ok },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "reason",
+            |m: &DebugWatchStopResponse| { &m.reason },
+            |m: &mut DebugWatchStopResponse| { &mut m.reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "watch_id",
+            |m: &DebugWatchStopResponse| { &m.watch_id },
+            |m: &mut DebugWatchStopResponse| { &mut m.watch_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "stopped_at_unix_ms",
+            |m: &DebugWatchStopResponse| { &m.stopped_at_unix_ms },
+            |m: &mut DebugWatchStopResponse| { &mut m.stopped_at_unix_ms },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugWatchStopResponse>(
+            "DebugWatchStopResponse",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugWatchStopResponse {
+    const NAME: &'static str = "DebugWatchStopResponse";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.request_id = is.read_uint64()?;
+                },
+                16 => {
+                    self.ok = is.read_bool()?;
+                },
+                26 => {
+                    self.reason = is.read_string()?;
+                },
+                32 => {
+                    self.watch_id = is.read_uint64()?;
+                },
+                40 => {
+                    self.stopped_at_unix_ms = is.read_int64()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.request_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.request_id);
+        }
+        if self.ok != false {
+            my_size += 1 + 1;
+        }
+        if !self.reason.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.reason);
+        }
+        if self.watch_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.watch_id);
+        }
+        if self.stopped_at_unix_ms != 0 {
+            my_size += ::protobuf::rt::int64_size(5, self.stopped_at_unix_ms);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.request_id != 0 {
+            os.write_uint64(1, self.request_id)?;
+        }
+        if self.ok != false {
+            os.write_bool(2, self.ok)?;
+        }
+        if !self.reason.is_empty() {
+            os.write_string(3, &self.reason)?;
+        }
+        if self.watch_id != 0 {
+            os.write_uint64(4, self.watch_id)?;
+        }
+        if self.stopped_at_unix_ms != 0 {
+            os.write_int64(5, self.stopped_at_unix_ms)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugWatchStopResponse {
+        DebugWatchStopResponse::new()
+    }
+
+    fn clear(&mut self) {
+        self.request_id = 0;
+        self.ok = false;
+        self.reason.clear();
+        self.watch_id = 0;
+        self.stopped_at_unix_ms = 0;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugWatchStopResponse {
+        static instance: DebugWatchStopResponse = DebugWatchStopResponse {
+            request_id: 0,
+            ok: false,
+            reason: ::std::string::String::new(),
+            watch_id: 0,
+            stopped_at_unix_ms: 0,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugWatchStopResponse {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugWatchStopResponse").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugWatchStopResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugWatchStopResponse {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
+// @@protoc_insertion_point(message:DebugWatchEvent)
+pub struct DebugWatchEvent {
+    // message fields
+    // @@protoc_insertion_point(field:DebugWatchEvent.watch_id)
+    pub watch_id: u64,
+    // @@protoc_insertion_point(field:DebugWatchEvent.section)
+    pub section: ::std::string::String,
+    // @@protoc_insertion_point(field:DebugWatchEvent.event_type)
+    pub event_type: ::std::string::String,
+    // @@protoc_insertion_point(field:DebugWatchEvent.event_unix_ms)
+    pub event_unix_ms: i64,
+    // @@protoc_insertion_point(field:DebugWatchEvent.payload_json)
+    pub payload_json: ::std::string::String,
+    // special fields
+    // @@protoc_insertion_point(special_field:DebugWatchEvent.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DebugWatchEvent {
+    fn default() -> &'a DebugWatchEvent {
+        <DebugWatchEvent as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DebugWatchEvent {
+    pub fn new() -> DebugWatchEvent {
+        ::std::default::Default::default()
+    }
+
+    fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
+        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut oneofs = ::std::vec::Vec::with_capacity(0);
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "watch_id",
+            |m: &DebugWatchEvent| { &m.watch_id },
+            |m: &mut DebugWatchEvent| { &mut m.watch_id },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "section",
+            |m: &DebugWatchEvent| { &m.section },
+            |m: &mut DebugWatchEvent| { &mut m.section },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "event_type",
+            |m: &DebugWatchEvent| { &m.event_type },
+            |m: &mut DebugWatchEvent| { &mut m.event_type },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "event_unix_ms",
+            |m: &DebugWatchEvent| { &m.event_unix_ms },
+            |m: &mut DebugWatchEvent| { &mut m.event_unix_ms },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "payload_json",
+            |m: &DebugWatchEvent| { &m.payload_json },
+            |m: &mut DebugWatchEvent| { &mut m.payload_json },
+        ));
+        ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DebugWatchEvent>(
+            "DebugWatchEvent",
+            fields,
+            oneofs,
+        )
+    }
+}
+
+impl ::protobuf::Message for DebugWatchEvent {
+    const NAME: &'static str = "DebugWatchEvent";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                8 => {
+                    self.watch_id = is.read_uint64()?;
+                },
+                18 => {
+                    self.section = is.read_string()?;
+                },
+                26 => {
+                    self.event_type = is.read_string()?;
+                },
+                32 => {
+                    self.event_unix_ms = is.read_int64()?;
+                },
+                42 => {
+                    self.payload_json = is.read_string()?;
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if self.watch_id != 0 {
+            my_size += ::protobuf::rt::uint64_size(1, self.watch_id);
+        }
+        if !self.section.is_empty() {
+            my_size += ::protobuf::rt::string_size(2, &self.section);
+        }
+        if !self.event_type.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.event_type);
+        }
+        if self.event_unix_ms != 0 {
+            my_size += ::protobuf::rt::int64_size(4, self.event_unix_ms);
+        }
+        if !self.payload_json.is_empty() {
+            my_size += ::protobuf::rt::string_size(5, &self.payload_json);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if self.watch_id != 0 {
+            os.write_uint64(1, self.watch_id)?;
+        }
+        if !self.section.is_empty() {
+            os.write_string(2, &self.section)?;
+        }
+        if !self.event_type.is_empty() {
+            os.write_string(3, &self.event_type)?;
+        }
+        if self.event_unix_ms != 0 {
+            os.write_int64(4, self.event_unix_ms)?;
+        }
+        if !self.payload_json.is_empty() {
+            os.write_string(5, &self.payload_json)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DebugWatchEvent {
+        DebugWatchEvent::new()
+    }
+
+    fn clear(&mut self) {
+        self.watch_id = 0;
+        self.section.clear();
+        self.event_type.clear();
+        self.event_unix_ms = 0;
+        self.payload_json.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DebugWatchEvent {
+        static instance: DebugWatchEvent = DebugWatchEvent {
+            watch_id: 0,
+            section: ::std::string::String::new(),
+            event_type: ::std::string::String::new(),
+            event_unix_ms: 0,
+            payload_json: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+impl ::protobuf::MessageFull for DebugWatchEvent {
+    fn descriptor() -> ::protobuf::reflect::MessageDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::MessageDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().message_by_package_relative_name("DebugWatchEvent").unwrap()).clone()
+    }
+}
+
+impl ::std::fmt::Display for DebugWatchEvent {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        ::protobuf::text_format::fmt(self, f)
+    }
+}
+
+impl ::protobuf::reflect::ProtobufValue for DebugWatchEvent {
+    type RuntimeType = ::protobuf::reflect::rt::RuntimeTypeMessage<Self>;
+}
+
+#[derive(PartialEq,Clone,Default,Debug)]
 // @@protoc_insertion_point(message:DeviceInfo)
 pub struct DeviceInfo {
     // message fields
@@ -7250,72 +8536,99 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     esponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
     \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
     \tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\
-    \"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\
-    \x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\rdevice_s\
-    tatus\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1b\n\tdevice_id\x18\x07\
-    \x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\
-    \x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\x0bonlineKxP\
-    ub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\
-    \n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceIn\
-    foList\"\xdd\x03\n\tPunchInfo\x12$\n\x0epublic_ip_list\x18\x02\x20\x03(\
-    \x07R\x0cpublicIpList\x12\x1f\n\x0bpublic_port\x18\x03\x20\x01(\rR\npubl\
-    icPort\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRang\
-    e\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\
-    \x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12\x19\n\x08local_ip\
-    \x18\x07\x20\x01(\x07R\x07localIp\x12\x1d\n\nlocal_port\x18\x08\x20\x01(\
-    \rR\tlocalPort\x12\x12\n\x04ipv6\x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\t\
-    ipv6_port\x18\n\x20\x01(\rR\x08ipv6Port\x12\x19\n\x08tcp_port\x18\x0b\
-    \x20\x01(\rR\x07tcpPort\x12\x1b\n\tudp_ports\x18\x0c\x20\x03(\rR\x08udpP\
-    orts\x12!\n\x0cpublic_ports\x18\r\x20\x03(\rR\x0bpublicPorts\x12&\n\x0fp\
-    ublic_tcp_port\x18\x0e\x20\x01(\rR\rpublicTcpPort\x12/\n\x0bpunch_model\
-    \x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\"Y\n\rPunchEndpoin\
-    t\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\
-    \x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\
-    \x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPunchRequest\
-    \x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06sou\
-    rce\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\
-    \x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\r.PunchN\
-    atTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\x20\x01(\x0e2\r\
-    .PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\x18\x06\x20\x03\
-    (\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\x129\n\x10target_endpoints\
-    \x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoints\x12\x18\n\
-    \x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\t\
-    \x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\x01(\x03R\
-    \x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_id\x18\x01\
-    \x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06s\
-    ource\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\x1a\n\x08a\
-    ccepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\x18\x05\
-    \x20\x01(\tR\x06reason\"\xf5\x01\n\nPunchStart\x12\x1d\n\nsession_id\x18\
-    \x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\
-    \x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\
-    \x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeerEndpoin\
-    ts\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeou\
-    t_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\x07\
-    \x20\x01(\x03R\x0edeadlineUnixMs\"\xf1\x01\n\x0bPunchResult\x12\x1d\n\ns\
-    ession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\
-    \x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06ta\
-    rget\x12\x18\n\x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\
-    \x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\
-    \x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\
-    \x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\"\xb1\x02\n\x10ClientS\
-    tatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08\
-    p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_str\
-    eam\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\
-    \x20\x01(\x04R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.Pu\
-    nchNatTypeR\x07natType\x12$\n\x0epublic_ip_list\x18\x06\x20\x03(\x07R\
-    \x0cpublicIpList\x12(\n\x10public_udp_ports\x18\x07\x20\x03(\rR\x0epubli\
-    cUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\"\
-    $\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*d\n\
-    \x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\
-    \x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\
-    \x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\
-    \x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\
-    \x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\x12\x0b\n\
-    \x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07IPv6Udp\
-    \x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\
-    \x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultF\
-    ailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13Punch\
-    ResultCanceled\x10\x04b\x06proto3\
+    \"h\n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\
+    \trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\x12\
+    \x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugColle\
+    ctResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
+    \x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\
+    \x01(\tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\x03R\
+    \x11collectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0csnaps\
+    hotJson\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\x18\
+    \x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\
+    \x08sections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSec\
+    \x12\x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17DebugW\
+    atchStartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
+    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
+    \x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07wa\
+    tchId\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstartedAtUni\
+    xMs\x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtUnixMs\
+    \"i\n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
+    \x04R\trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07watchId\
+    \x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16DebugW\
+    atchStopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
+    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
+    \x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07wa\
+    tchId\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppedAtUni\
+    xMs\"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\x20\x01\
+    (\x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\
+    \x12\x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_uni\
+    x_ms\x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\
+    \x20\x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\
+    \x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\
+    \tvirtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\
+    \x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_p\
+    ub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\
+    \t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\
+    \x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\
+    \x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xdd\x03\n\tPunchInfo\x12$\n\
+    \x0epublic_ip_list\x18\x02\x20\x03(\x07R\x0cpublicIpList\x12\x1f\n\x0bpu\
+    blic_port\x18\x03\x20\x01(\rR\npublicPort\x12*\n\x11public_port_range\
+    \x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\
+    \x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01\
+    (\x08R\x05reply\x12\x19\n\x08local_ip\x18\x07\x20\x01(\x07R\x07localIp\
+    \x12\x1d\n\nlocal_port\x18\x08\x20\x01(\rR\tlocalPort\x12\x12\n\x04ipv6\
+    \x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\tipv6_port\x18\n\x20\x01(\rR\x08i\
+    pv6Port\x12\x19\n\x08tcp_port\x18\x0b\x20\x01(\rR\x07tcpPort\x12\x1b\n\t\
+    udp_ports\x18\x0c\x20\x03(\rR\x08udpPorts\x12!\n\x0cpublic_ports\x18\r\
+    \x20\x03(\rR\x0bpublicPorts\x12&\n\x0fpublic_tcp_port\x18\x0e\x20\x01(\r\
+    R\rpublicTcpPort\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNa\
+    tModelR\npunchModel\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\
+    \x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04i\
+    pv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\
+    \x03tcp\"\xa4\x03\n\x0cPunchRequest\x12\x1d\n\nsession_id\x18\x01\x20\
+    \x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06sourc\
+    e\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\x0fsource_n\
+    at_type\x18\x04\x20\x01(\x0e2\r.PunchNatTypeR\rsourceNatType\x125\n\x0ft\
+    arget_nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\
+    \n\x10source_endpoints\x18\x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourc\
+    eEndpoints\x129\n\x10target_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEnd\
+    pointR\x0ftargetEndpoints\x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07at\
+    tempt\x12\x1d\n\ntimeout_ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadl\
+    ine_unix_ms\x18\n\x20\x01(\x03R\x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAc\
+    k\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06so\
+    urce\x18\x02\x20\x01(\x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\
+    \x01(\rR\x07attempt\x12\x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accep\
+    ted\x12\x16\n\x06reason\x18\x05\x20\x01(\tR\x06reason\"\xf5\x01\n\nPunch\
+    Start\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\
+    \x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\
+    \x20\x01(\x07R\x06target\x125\n\x0epeer_endpoints\x18\x04\x20\x03(\x0b2\
+    \x0e.PunchEndpointR\rpeerEndpoints\x12\x18\n\x07attempt\x18\x05\x20\x01(\
+    \rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\
+    \n\x10deadline_unix_ms\x18\x07\x20\x01(\x03R\x0edeadlineUnixMs\"\xf1\x01\
+    \n\x0bPunchResult\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\
+    \x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\
+    \x18\x03\x20\x01(\x07R\x06target\x12\x18\n\x07attempt\x18\x04\x20\x01(\r\
+    R\x07attempt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\
+    \x04code\x12\x16\n\x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11sel\
+    ected_endpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpo\
+    int\"\xb1\x02\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\
+    \x07R\x06source\x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\
+    \x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\
+    \x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_ty\
+    pe\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12$\n\x0epublic_ip_\
+    list\x18\x06\x20\x03(\x07R\x0cpublicIpList\x12(\n\x10public_udp_ports\
+    \x18\x07\x20\x03(\rR\x0epublicUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\
+    \x20\x03(\rR\rlocalUdpPorts\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\
+    \x20\x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_\
+    CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\
+    \x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\
+    \x10\0\x12\x08\n\x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\
+    \0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4\
+    Tcp\x10\x03\x12\x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\
+    \x12\x0b\n\x07IPv6Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\
+    \x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\
+    \x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\
+    \x03\x12\x17\n\x13PunchResultCanceled\x10\x04b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -7333,7 +8646,7 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
     file_descriptor.get(|| {
         let generated_file_descriptor = generated_file_descriptor_lazy.get(|| {
             let mut deps = ::std::vec::Vec::with_capacity(0);
-            let mut messages = ::std::vec::Vec::with_capacity(33);
+            let mut messages = ::std::vec::Vec::with_capacity(40);
             messages.push(HandshakeRequest::generated_message_descriptor_data());
             messages.push(HandshakeResponse::generated_message_descriptor_data());
             messages.push(RegistrationRequest::generated_message_descriptor_data());
@@ -7357,6 +8670,13 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(DeviceAuthAck::generated_message_descriptor_data());
             messages.push(DeviceRenameRequest::generated_message_descriptor_data());
             messages.push(DeviceRenameResponse::generated_message_descriptor_data());
+            messages.push(DebugCollectRequest::generated_message_descriptor_data());
+            messages.push(DebugCollectResponse::generated_message_descriptor_data());
+            messages.push(DebugWatchStartRequest::generated_message_descriptor_data());
+            messages.push(DebugWatchStartResponse::generated_message_descriptor_data());
+            messages.push(DebugWatchStopRequest::generated_message_descriptor_data());
+            messages.push(DebugWatchStopResponse::generated_message_descriptor_data());
+            messages.push(DebugWatchEvent::generated_message_descriptor_data());
             messages.push(DeviceInfo::generated_message_descriptor_data());
             messages.push(DeviceList::generated_message_descriptor_data());
             messages.push(PunchInfo::generated_message_descriptor_data());

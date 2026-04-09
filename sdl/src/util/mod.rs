@@ -9,6 +9,8 @@ pub(crate) mod dns_tunnel;
 pub use dns_query::*;
 mod device_identity;
 pub use device_identity::*;
+mod debug_watch;
+pub use debug_watch::*;
 #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
 pub(crate) mod linux_dns;
 #[cfg(any(test, all(feature = "integrated_tun", target_os = "macos")))]

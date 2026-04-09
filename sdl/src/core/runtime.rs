@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use crossbeam_utils::atomic::AtomicCell;
 use ed25519_dalek::SigningKey;
 use parking_lot::{Mutex, RwLock};
+use serde_json::{json, Map, Value};
 
 use crate::cipher::CipherModel;
 use crate::control::ControlSession;
@@ -26,7 +27,7 @@ use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::create_device;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
-use crate::util::PeerCryptoManager;
+use crate::util::{DebugWatch, PeerCryptoManager};
 #[cfg(feature = "integrated_tun")]
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
@@ -82,6 +83,7 @@ pub struct SdlRuntime {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
+    pub debug_watch: DebugWatch,
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
@@ -408,5 +410,191 @@ impl SdlRuntime {
     ))]
     pub fn revert_dns_on_shutdown(&self) {
         self.clear_applied_dns_profile();
+    }
+
+    pub fn debug_snapshot_json(&self, sections: &[String]) -> anyhow::Result<String> {
+        let include_all = sections.is_empty() || sections.iter().any(|section| section == "all");
+        let wants = |name: &str| include_all || sections.iter().any(|section| section == name);
+        let current_device = self.current_device.load();
+        let mut root = Map::new();
+        root.insert(
+            "collected_at_unix_ms".into(),
+            json!(crate::handle::now_time() as i64),
+        );
+        root.insert(
+            "selected_sections".into(),
+            json!(if include_all {
+                vec!["all".to_string()]
+            } else {
+                sections.to_vec()
+            }),
+        );
+
+        if wants("runtime") {
+            let dns_profile = self.dns_profile.read().clone();
+            let auth_request = self.config.auth_request.read().clone();
+            root.insert(
+                "runtime".into(),
+                json!({
+                    "name": self.config.name,
+                    "device_id": self.config.device_id,
+                    "server_addr": self.config.server_addr,
+                    "mtu": self.config.mtu,
+                    "virtual_ip": current_device.virtual_ip.to_string(),
+                    "virtual_gateway": current_device.virtual_gateway.to_string(),
+                    "virtual_netmask": current_device.virtual_netmask.to_string(),
+                    "virtual_network": current_device.virtual_network.to_string(),
+                    "broadcast_ip": current_device.broadcast_ip.to_string(),
+                    "control_server": current_device.control_server.to_string(),
+                    "connect_status": format!("{:?}", current_device.status),
+                    "use_channel_type": format!("{:?}", self.route_manager.use_channel_type()),
+                    "dns_profile": dns_profile.as_ref().map(|profile| json!({
+                        "servers": profile.servers,
+                        "match_domains": profile.match_domains,
+                    })).unwrap_or(Value::Null),
+                    "auth_request": {
+                        "user_id": auth_request.user_id,
+                        "group": auth_request.group,
+                        "ticket_present": auth_request.ticket.as_ref().map(|ticket| !ticket.is_empty()).unwrap_or(false),
+                    },
+                }),
+            );
+        }
+
+        if wants("gateway") {
+            let summary = self.gateway_sessions.session_summary();
+            let grant = self.gateway_sessions.current_grant_snapshot();
+            root.insert(
+                "gateway".into(),
+                json!({
+                    "configured": summary.configured,
+                    "authenticated": summary.authenticated,
+                    "endpoint": summary.endpoint.map(|endpoint| endpoint.to_string()),
+                    "channel_name": summary.channel_name,
+                    "reauth_required": summary.reauth_required,
+                    "grant": grant.as_ref().map(|grant| json!({
+                        "session_id": grant.session_id,
+                        "policy_rev": grant.policy_rev,
+                        "ticket_expire_unix_ms": grant.ticket_expire_unix_ms,
+                    })).unwrap_or(Value::Null),
+                }),
+            );
+        }
+
+        if wants("nat") {
+            let nat_info = self.nat_test.nat_info();
+            root.insert(
+                "nat".into(),
+                json!({
+                    "nat_type": format!("{:?}", nat_info.nat_type),
+                    "punch_model": format!("{:?}", nat_info.punch_model),
+                    "public_ips": nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "public_ports": nat_info.public_ports,
+                    "public_port_range": nat_info.public_port_range,
+                    "udp_ports": nat_info.udp_ports,
+                    "tcp_port": nat_info.tcp_port,
+                    "public_tcp_port": nat_info.public_tcp_port,
+                    "local_ipv4": nat_info.local_ipv4.map(|ip| ip.to_string()),
+                    "ipv6": nat_info.ipv6.map(|ip| ip.to_string()),
+                }),
+            );
+        }
+
+        if wants("peers") {
+            let (peer_epoch, mut peer_items) = {
+                let peer_state = self.peer_state.lock();
+                let peers = peer_state
+                    .1
+                    .values()
+                    .map(|peer| {
+                        json!({
+                            "virtual_ip": peer.virtual_ip.to_string(),
+                            "name": peer.name,
+                            "status": format!("{:?}", peer.status),
+                            "device_id": peer.device_id,
+                            "device_pub_key_len": peer.device_pub_key.len(),
+                            "online_kx_pub_len": peer.online_kx_pub.len(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (peer_state.0, peers)
+            };
+            peer_items.sort_by(|a, b| a["virtual_ip"].as_str().cmp(&b["virtual_ip"].as_str()));
+            let mut peer_nat_items = self
+                .peer_nat_info_map
+                .read()
+                .iter()
+                .map(|(peer_ip, info)| {
+                    json!({
+                        "peer_ip": peer_ip.to_string(),
+                        "nat_type": format!("{:?}", info.nat_type),
+                        "public_ips": info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "public_ports": info.public_ports,
+                    })
+                })
+                .collect::<Vec<_>>();
+            peer_nat_items.sort_by(|a, b| a["peer_ip"].as_str().cmp(&b["peer_ip"].as_str()));
+            let (current_cipher_count, previous_cipher_count, grace_active) =
+                self.peer_crypto.debug_counts();
+            root.insert(
+                "peers".into(),
+                json!({
+                    "epoch": peer_epoch,
+                    "peer_count": peer_items.len(),
+                    "peer_nat_count": peer_nat_items.len(),
+                    "current_cipher_count": current_cipher_count,
+                    "previous_cipher_count": previous_cipher_count,
+                    "cipher_grace_active": grace_active,
+                    "items": peer_items,
+                    "nat_items": peer_nat_items,
+                }),
+            );
+        }
+
+        if wants("routes") {
+            let mut route_items = self
+                .route_manager
+                .snapshot_route_states(current_device.virtual_gateway)
+                .into_iter()
+                .flat_map(|(_, states)| states)
+                .map(|state| {
+                    json!({
+                        "peer_ip": state.peer_ip.to_string(),
+                        "kind": format!("{:?}", state.kind),
+                        "transport": format!("{:?}", state.transport),
+                        "addr": state.addr.to_string(),
+                        "metric": state.metric,
+                        "rt": state.rt,
+                    })
+                })
+                .collect::<Vec<_>>();
+            route_items.sort_by(|a, b| {
+                a["peer_ip"]
+                    .as_str()
+                    .cmp(&b["peer_ip"].as_str())
+                    .then_with(|| a["addr"].as_str().cmp(&b["addr"].as_str()))
+            });
+            root.insert(
+                "routes".into(),
+                json!({
+                    "count": route_items.len(),
+                    "items": route_items,
+                }),
+            );
+        }
+
+        if wants("traffic") {
+            root.insert(
+                "traffic".into(),
+                json!({
+                    "up_total": self.data_plane_stats.up_traffic_total(),
+                    "up_channels": self.data_plane_stats.up_traffic_all().map(|(_, channels)| channels),
+                    "down_total": self.data_plane_stats.down_traffic_total(),
+                    "down_channels": self.data_plane_stats.down_traffic_all().map(|(_, channels)| channels),
+                }),
+            );
+        }
+
+        serde_json::to_string_pretty(&Value::Object(root)).map_err(Into::into)
     }
 }
