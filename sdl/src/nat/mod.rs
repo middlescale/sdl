@@ -121,7 +121,6 @@ pub struct NatTest {
     info: Arc<Mutex<NatInfo>>,
     time: Arc<AtomicCell<Instant>>,
     udp_ports: Vec<u16>,
-    tcp_port: u16,
     #[cfg(feature = "upnp")]
     upnp: UPnP,
     pub(crate) update_local_ipv4: bool,
@@ -135,7 +134,6 @@ impl NatTest {
         local_ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
         udp_ports: Vec<u16>,
-        tcp_port: u16,
         update_local_ipv4: bool,
         punch_model: PunchModel,
     ) -> NatTest {
@@ -143,12 +141,11 @@ impl NatTest {
         let nat_info = NatInfo::new(
             Vec::new(),
             ports,
+            Vec::new(),
             0,
             local_ipv4,
             ipv6,
             udp_ports.clone(),
-            tcp_port,
-            0,
             NatType::Cone,
             punch_model,
         );
@@ -159,8 +156,6 @@ impl NatTest {
         for port in &udp_ports {
             upnp.add_udp_port(*port);
         }
-        #[cfg(feature = "upnp")]
-        upnp.add_tcp_port(tcp_port);
         let instant = Instant::now();
         NatTest {
             stun_server,
@@ -173,7 +168,6 @@ impl NatTest {
                     .unwrap_or(instant),
             )),
             udp_ports,
-            tcp_port,
             #[cfg(feature = "upnp")]
             upnp,
             update_local_ipv4,
@@ -213,16 +207,11 @@ impl NatTest {
     }
     pub fn has_public_udp_endpoints(&self) -> bool {
         let guard = self.info.lock();
-        !guard.public_ips.is_empty()
-            && !guard.public_ports.is_empty()
-            && !guard.public_ports.contains(&0)
+        !guard.public_udp_endpoints.is_empty()
     }
     pub fn public_addr_retry_delay(&self) -> Duration {
         let guard = self.info.lock();
-        if !guard.public_ips.is_empty()
-            && !guard.public_ports.is_empty()
-            && !guard.public_ports.contains(&0)
-        {
+        if !guard.public_udp_endpoints.is_empty() {
             if guard.nat_type == NatType::Symmetric {
                 Duration::from_secs(600)
             } else {
@@ -251,18 +240,10 @@ impl NatTest {
         }
         false
     }
-    pub fn is_local_tcp(&self, ipv4: Ipv4Addr, port: u16) -> bool {
-        if self.tcp_port == port {
-            let guard = self.info.lock();
-            if let Some(ip) = guard.local_ipv4 {
-                if ipv4 == ip {
-                    return true;
-                }
-            }
-        }
-        false
-    }
     pub fn is_local_address(&self, is_tcp: bool, addr: SocketAddr) -> bool {
+        if is_tcp {
+            return false;
+        }
         let port = addr.port();
         let check_ip = || {
             let guard = self.info.lock();
@@ -284,15 +265,9 @@ impl NatTest {
             }
             false
         };
-        if is_tcp {
-            if self.tcp_port == port {
+        for x in &self.udp_ports {
+            if x == &port {
                 return check_ip();
-            }
-        } else {
-            for x in &self.udp_ports {
-                if x == &port {
-                    return check_ip();
-                }
             }
         }
         false
@@ -300,10 +275,6 @@ impl NatTest {
     pub fn update_addr(&self, ip: Ipv4Addr, port: u16) -> bool {
         let mut guard = self.info.lock();
         guard.update_addr(ip, port)
-    }
-    pub fn update_tcp_port(&self, port: u16) {
-        let mut guard = self.info.lock();
-        guard.update_tcp_port(port)
     }
     pub fn re_test(
         &self,
@@ -317,14 +288,25 @@ impl NatTest {
             stun_server.truncate(5);
             log::info!("stun_server truncate {:?}", stun_server);
         }
-        let (nat_type, public_ips, port_range) =
+        let (nat_type, public_udp_endpoints, port_range) =
             stun::stun_test_nat(stun_server, default_interface)?;
-        if public_ips.is_empty() {
-            Err(anyhow!("public_ips.is_empty"))?
+        if public_udp_endpoints.is_empty() {
+            Err(anyhow!("public_udp_endpoints.is_empty"))?
         }
         let mut guard = self.info.lock();
         guard.nat_type = nat_type;
-        guard.public_ips = public_ips;
+        guard.public_udp_endpoints = public_udp_endpoints.clone();
+        guard.public_ips = public_udp_endpoints
+            .iter()
+            .filter_map(|addr| match addr {
+                SocketAddr::V4(addr) => Some(*addr.ip()),
+                SocketAddr::V6(_) => None,
+            })
+            .collect();
+        guard.public_ports = public_udp_endpoints
+            .iter()
+            .map(SocketAddr::port)
+            .collect();
         guard.public_port_range = port_range;
         if local_ipv4.is_some() {
             guard.local_ipv4 = local_ipv4;

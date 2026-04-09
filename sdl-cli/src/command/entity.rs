@@ -24,7 +24,6 @@ pub struct Info {
     pub in_ips: Vec<(u32, u32, Ipv4Addr)>,
     pub out_ips: Vec<(u32, u32)>,
     pub udp_listen_addr: Vec<String>,
-    pub tcp_listen_addr: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

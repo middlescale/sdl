@@ -12,18 +12,18 @@ use stun_format::Attr;
 pub fn stun_test_nat(
     stun_servers: Vec<String>,
     default_interface: &LocalInterface,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> anyhow::Result<(NatType, Vec<SocketAddr>, u16)> {
     let mut nat_type = NatType::Cone;
     let mut port_range = 0;
     let mut hash_set = HashSet::new();
     for _ in 0..2 {
         let stun_servers = stun_servers.clone();
         match stun_test_nat0(stun_servers, default_interface) {
-            Ok((nat_type_t, ip_list_t, port_range_t)) => {
+            Ok((nat_type_t, endpoints_t, port_range_t)) => {
                 if nat_type_t == NatType::Symmetric {
                     nat_type = NatType::Symmetric;
                 }
-                for x in ip_list_t {
+                for x in endpoints_t {
                     hash_set.insert(x);
                 }
                 if port_range < port_range_t {
@@ -41,7 +41,7 @@ pub fn stun_test_nat(
 pub fn stun_test_nat0(
     stun_servers: Vec<String>,
     default_interface: &LocalInterface,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> anyhow::Result<(NatType, Vec<SocketAddr>, u16)> {
     let udp = bind_udp("0.0.0.0:0".parse().unwrap(), default_interface)?;
     udp.set_nonblocking(false)?;
     let udp: UdpSocket = udp.into();
@@ -49,7 +49,6 @@ pub fn stun_test_nat0(
     let mut nat_type = NatType::Cone;
     let mut min_port = u16::MAX;
     let mut max_port = 0;
-    let mut hash_set = HashSet::new();
     let mut pub_addrs = HashSet::new();
     for x in &stun_servers {
         match test_nat(&udp, x) {
@@ -66,7 +65,6 @@ pub fn stun_test_nat0(
     }
     for addr in &pub_addrs {
         if let SocketAddr::V4(addr) = addr {
-            hash_set.insert(*addr.ip());
             if min_port > addr.port() {
                 min_port = addr.port()
             }
@@ -75,12 +73,12 @@ pub fn stun_test_nat0(
             }
         }
     }
-    if hash_set.is_empty() {
+    if pub_addrs.is_empty() {
         Ok((nat_type, vec![], 0))
     } else {
         Ok((
             nat_type,
-            hash_set.into_iter().collect(),
+            pub_addrs.into_iter().collect(),
             max_port - min_port,
         ))
     }

@@ -83,9 +83,7 @@ fn punch_model_to_str(punch_model: PunchModel) -> &'static str {
         PunchModel::All => "all",
         PunchModel::IPv4 => "ipv4",
         PunchModel::IPv6 => "ipv6",
-        PunchModel::IPv4Tcp => "ipv4-tcp",
         PunchModel::IPv4Udp => "ipv4-udp",
-        PunchModel::IPv6Tcp => "ipv6-tcp",
         PunchModel::IPv6Udp => "ipv6-udp",
     }
 }
@@ -289,7 +287,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("-f <conf_file>", ("读取配置文件中的配置", "Read configuration from file")),
         ("--ip <ip>", ("指定虚拟ip,指定的ip不能和其他设备重复,必须有效并且在服务端所属网段下,默认情况由服务端分配", "Specify virtual IP, must be unique and valid within server subnet, by default allocated by server")),
         ("--model <model>", ("加密模式(默认aes_gcm),仅支持 aes_gcm/none", "Encryption mode (default aes_gcm), only aes_gcm/none are supported")),
-        ("--punch <punch>", ("取值ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
+        ("--punch <punch>", ("取值ipv4/ipv6/ipv4-udp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-udp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),

@@ -456,10 +456,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.runtime
                         .nat_test
                         .update_addr(public_ip, observed_udp_port);
-                    if route_key.protocol().is_tcp() {
-                        log::info!("更新公网tcp端口 {public_port}");
-                        self.runtime.nat_test.update_tcp_port(public_port);
-                    }
                     let old = current_device;
                     let dns_changed = self.runtime.replace_dns_profile(dns_profile);
                     let mut cur = *current_device;
@@ -1238,9 +1234,11 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
     let mut public_ports = Vec::new();
     let mut local_ipv4: Option<Ipv4Addr> = None;
     let mut ipv6: Option<Ipv6Addr> = None;
-    let mut use_tcp = false;
+    let mut has_ipv4 = false;
+    let mut has_ipv6 = false;
     for ep in &punch_start.peer_endpoints {
         if ep.ip != 0 {
+            has_ipv4 = true;
             let ip = Ipv4Addr::from(ep.ip);
             if crate::nat::is_ipv4_global(&ip) {
                 public_ips.push(ip);
@@ -1255,30 +1253,56 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
             public_ports.push(ep.port as u16);
         }
         if ipv6.is_none() && ep.ipv6.len() == 16 {
+            has_ipv6 = true;
             let mut v6 = [0u8; 16];
             v6.copy_from_slice(&ep.ipv6);
             ipv6 = Some(Ipv6Addr::from(v6));
         }
-        if ep.tcp {
-            use_tcp = true;
-        }
     }
-    let punch_model = if use_tcp {
-        PunchModel::IPv4Tcp
-    } else {
+    let punch_model = if has_ipv4 && has_ipv6 {
+        PunchModel::All
+    } else if has_ipv6 {
+        PunchModel::IPv6Udp
+    } else if has_ipv4 {
         PunchModel::IPv4Udp
+    } else {
+        PunchModel::All
     };
     (
         peer_ip,
         NatInfo::new(
             public_ips,
             public_ports.clone(),
+            punch_start
+                .peer_endpoints
+                .iter()
+                .filter_map(|ep| {
+                    if ep.port == 0 {
+                        return None;
+                    }
+                    if ep.ip != 0 {
+                        return Some(SocketAddr::V4(std::net::SocketAddrV4::new(
+                            Ipv4Addr::from(ep.ip),
+                            ep.port as u16,
+                        )));
+                    }
+                    if ep.ipv6.len() == 16 {
+                        let mut v6 = [0u8; 16];
+                        v6.copy_from_slice(&ep.ipv6);
+                        return Some(SocketAddr::V6(std::net::SocketAddrV6::new(
+                            Ipv6Addr::from(v6),
+                            ep.port as u16,
+                            0,
+                            0,
+                        )));
+                    }
+                    None
+                })
+                .collect(),
             0,
             local_ipv4,
             ipv6,
             public_ports,
-            0,
-            0,
             NatType::Cone,
             punch_model,
         ),
@@ -1317,7 +1341,7 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
-    fn build_peer_nat_info_from_punch_start_uses_endpoints_and_tcp_flag() {
+    fn build_peer_nat_info_from_punch_start_uses_endpoints() {
         let mut start = PunchStart::new();
         start.target = u32::from(Ipv4Addr::new(10, 26, 0, 3));
         let mut ep1 = PunchEndpoint::new();
@@ -1328,7 +1352,6 @@ mod tests {
         ep2.port = 10002;
         let ipv6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
         ep2.ipv6 = ipv6.octets().to_vec();
-        ep2.tcp = true;
         start.peer_endpoints.push(ep1);
         start.peer_endpoints.push(ep2);
 
@@ -1337,7 +1360,7 @@ mod tests {
         assert_eq!(nat_info.public_ips.len(), 2);
         assert_eq!(nat_info.public_ports, vec![10001, 10002]);
         assert_eq!(nat_info.ipv6(), Some(ipv6));
-        assert_eq!(nat_info.punch_model, PunchModel::IPv4Tcp);
+        assert_eq!(nat_info.punch_model, PunchModel::All);
     }
 
     #[test]

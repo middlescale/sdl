@@ -6315,34 +6315,18 @@ impl ::protobuf::reflect::ProtobufValue for DeviceList {
 // @@protoc_insertion_point(message:PunchInfo)
 pub struct PunchInfo {
     // message fields
-    // @@protoc_insertion_point(field:PunchInfo.public_ip_list)
-    pub public_ip_list: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:PunchInfo.public_port)
-    pub public_port: u32,
     // @@protoc_insertion_point(field:PunchInfo.public_port_range)
     pub public_port_range: u32,
     // @@protoc_insertion_point(field:PunchInfo.nat_type)
     pub nat_type: ::protobuf::EnumOrUnknown<PunchNatType>,
     // @@protoc_insertion_point(field:PunchInfo.reply)
     pub reply: bool,
-    // @@protoc_insertion_point(field:PunchInfo.local_ip)
-    pub local_ip: u32,
-    // @@protoc_insertion_point(field:PunchInfo.local_port)
-    pub local_port: u32,
-    // @@protoc_insertion_point(field:PunchInfo.ipv6)
-    pub ipv6: ::std::vec::Vec<u8>,
-    // @@protoc_insertion_point(field:PunchInfo.ipv6_port)
-    pub ipv6_port: u32,
-    // @@protoc_insertion_point(field:PunchInfo.tcp_port)
-    pub tcp_port: u32,
-    // @@protoc_insertion_point(field:PunchInfo.udp_ports)
-    pub udp_ports: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:PunchInfo.public_ports)
-    pub public_ports: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:PunchInfo.public_tcp_port)
-    pub public_tcp_port: u32,
     // @@protoc_insertion_point(field:PunchInfo.punch_model)
     pub punch_model: ::protobuf::EnumOrUnknown<PunchNatModel>,
+    // @@protoc_insertion_point(field:PunchInfo.public_udp_endpoints)
+    pub public_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
+    // @@protoc_insertion_point(field:PunchInfo.local_udp_endpoints)
+    pub local_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
     // special fields
     // @@protoc_insertion_point(special_field:PunchInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -6360,18 +6344,8 @@ impl PunchInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(14);
+        let mut fields = ::std::vec::Vec::with_capacity(6);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "public_ip_list",
-            |m: &PunchInfo| { &m.public_ip_list },
-            |m: &mut PunchInfo| { &mut m.public_ip_list },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "public_port",
-            |m: &PunchInfo| { &m.public_port },
-            |m: &mut PunchInfo| { &mut m.public_port },
-        ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "public_port_range",
             |m: &PunchInfo| { &m.public_port_range },
@@ -6388,49 +6362,19 @@ impl PunchInfo {
             |m: &mut PunchInfo| { &mut m.reply },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "local_ip",
-            |m: &PunchInfo| { &m.local_ip },
-            |m: &mut PunchInfo| { &mut m.local_ip },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "local_port",
-            |m: &PunchInfo| { &m.local_port },
-            |m: &mut PunchInfo| { &mut m.local_port },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "ipv6",
-            |m: &PunchInfo| { &m.ipv6 },
-            |m: &mut PunchInfo| { &mut m.ipv6 },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "ipv6_port",
-            |m: &PunchInfo| { &m.ipv6_port },
-            |m: &mut PunchInfo| { &mut m.ipv6_port },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "tcp_port",
-            |m: &PunchInfo| { &m.tcp_port },
-            |m: &mut PunchInfo| { &mut m.tcp_port },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "udp_ports",
-            |m: &PunchInfo| { &m.udp_ports },
-            |m: &mut PunchInfo| { &mut m.udp_ports },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "public_ports",
-            |m: &PunchInfo| { &m.public_ports },
-            |m: &mut PunchInfo| { &mut m.public_ports },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "public_tcp_port",
-            |m: &PunchInfo| { &m.public_tcp_port },
-            |m: &mut PunchInfo| { &mut m.public_tcp_port },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "punch_model",
             |m: &PunchInfo| { &m.punch_model },
             |m: &mut PunchInfo| { &mut m.punch_model },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "public_udp_endpoints",
+            |m: &PunchInfo| { &m.public_udp_endpoints },
+            |m: &mut PunchInfo| { &mut m.public_udp_endpoints },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "local_udp_endpoints",
+            |m: &PunchInfo| { &m.local_udp_endpoints },
+            |m: &mut PunchInfo| { &mut m.local_udp_endpoints },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PunchInfo>(
             "PunchInfo",
@@ -6450,15 +6394,6 @@ impl ::protobuf::Message for PunchInfo {
     fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
         while let Some(tag) = is.read_raw_tag_or_eof()? {
             match tag {
-                18 => {
-                    is.read_repeated_packed_fixed32_into(&mut self.public_ip_list)?;
-                },
-                21 => {
-                    self.public_ip_list.push(is.read_fixed32()?);
-                },
-                24 => {
-                    self.public_port = is.read_uint32()?;
-                },
                 32 => {
                     self.public_port_range = is.read_uint32()?;
                 },
@@ -6468,38 +6403,14 @@ impl ::protobuf::Message for PunchInfo {
                 48 => {
                     self.reply = is.read_bool()?;
                 },
-                61 => {
-                    self.local_ip = is.read_fixed32()?;
-                },
-                64 => {
-                    self.local_port = is.read_uint32()?;
-                },
-                74 => {
-                    self.ipv6 = is.read_bytes()?;
-                },
-                80 => {
-                    self.ipv6_port = is.read_uint32()?;
-                },
-                88 => {
-                    self.tcp_port = is.read_uint32()?;
-                },
-                98 => {
-                    is.read_repeated_packed_uint32_into(&mut self.udp_ports)?;
-                },
-                96 => {
-                    self.udp_ports.push(is.read_uint32()?);
-                },
-                106 => {
-                    is.read_repeated_packed_uint32_into(&mut self.public_ports)?;
-                },
-                104 => {
-                    self.public_ports.push(is.read_uint32()?);
-                },
-                112 => {
-                    self.public_tcp_port = is.read_uint32()?;
-                },
                 120 => {
                     self.punch_model = is.read_enum_or_unknown()?;
+                },
+                130 => {
+                    self.public_udp_endpoints.push(is.read_message()?);
+                },
+                138 => {
+                    self.local_udp_endpoints.push(is.read_message()?);
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -6513,10 +6424,6 @@ impl ::protobuf::Message for PunchInfo {
     #[allow(unused_variables)]
     fn compute_size(&self) -> u64 {
         let mut my_size = 0;
-        my_size += 5 * self.public_ip_list.len() as u64;
-        if self.public_port != 0 {
-            my_size += ::protobuf::rt::uint32_size(3, self.public_port);
-        }
         if self.public_port_range != 0 {
             my_size += ::protobuf::rt::uint32_size(4, self.public_port_range);
         }
@@ -6526,45 +6433,23 @@ impl ::protobuf::Message for PunchInfo {
         if self.reply != false {
             my_size += 1 + 1;
         }
-        if self.local_ip != 0 {
-            my_size += 1 + 4;
-        }
-        if self.local_port != 0 {
-            my_size += ::protobuf::rt::uint32_size(8, self.local_port);
-        }
-        if !self.ipv6.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(9, &self.ipv6);
-        }
-        if self.ipv6_port != 0 {
-            my_size += ::protobuf::rt::uint32_size(10, self.ipv6_port);
-        }
-        if self.tcp_port != 0 {
-            my_size += ::protobuf::rt::uint32_size(11, self.tcp_port);
-        }
-        for value in &self.udp_ports {
-            my_size += ::protobuf::rt::uint32_size(12, *value);
-        };
-        for value in &self.public_ports {
-            my_size += ::protobuf::rt::uint32_size(13, *value);
-        };
-        if self.public_tcp_port != 0 {
-            my_size += ::protobuf::rt::uint32_size(14, self.public_tcp_port);
-        }
         if self.punch_model != ::protobuf::EnumOrUnknown::new(PunchNatModel::All) {
             my_size += ::protobuf::rt::int32_size(15, self.punch_model.value());
         }
+        for value in &self.public_udp_endpoints {
+            let len = value.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        for value in &self.local_udp_endpoints {
+            let len = value.compute_size();
+            my_size += 2 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
     }
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
-        for v in &self.public_ip_list {
-            os.write_fixed32(2, *v)?;
-        };
-        if self.public_port != 0 {
-            os.write_uint32(3, self.public_port)?;
-        }
         if self.public_port_range != 0 {
             os.write_uint32(4, self.public_port_range)?;
         }
@@ -6574,33 +6459,15 @@ impl ::protobuf::Message for PunchInfo {
         if self.reply != false {
             os.write_bool(6, self.reply)?;
         }
-        if self.local_ip != 0 {
-            os.write_fixed32(7, self.local_ip)?;
-        }
-        if self.local_port != 0 {
-            os.write_uint32(8, self.local_port)?;
-        }
-        if !self.ipv6.is_empty() {
-            os.write_bytes(9, &self.ipv6)?;
-        }
-        if self.ipv6_port != 0 {
-            os.write_uint32(10, self.ipv6_port)?;
-        }
-        if self.tcp_port != 0 {
-            os.write_uint32(11, self.tcp_port)?;
-        }
-        for v in &self.udp_ports {
-            os.write_uint32(12, *v)?;
-        };
-        for v in &self.public_ports {
-            os.write_uint32(13, *v)?;
-        };
-        if self.public_tcp_port != 0 {
-            os.write_uint32(14, self.public_tcp_port)?;
-        }
         if self.punch_model != ::protobuf::EnumOrUnknown::new(PunchNatModel::All) {
             os.write_enum(15, ::protobuf::EnumOrUnknown::value(&self.punch_model))?;
         }
+        for v in &self.public_udp_endpoints {
+            ::protobuf::rt::write_message_field_with_cached_size(16, v, os)?;
+        };
+        for v in &self.local_udp_endpoints {
+            ::protobuf::rt::write_message_field_with_cached_size(17, v, os)?;
+        };
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -6618,39 +6485,23 @@ impl ::protobuf::Message for PunchInfo {
     }
 
     fn clear(&mut self) {
-        self.public_ip_list.clear();
-        self.public_port = 0;
         self.public_port_range = 0;
         self.nat_type = ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric);
         self.reply = false;
-        self.local_ip = 0;
-        self.local_port = 0;
-        self.ipv6.clear();
-        self.ipv6_port = 0;
-        self.tcp_port = 0;
-        self.udp_ports.clear();
-        self.public_ports.clear();
-        self.public_tcp_port = 0;
         self.punch_model = ::protobuf::EnumOrUnknown::new(PunchNatModel::All);
+        self.public_udp_endpoints.clear();
+        self.local_udp_endpoints.clear();
         self.special_fields.clear();
     }
 
     fn default_instance() -> &'static PunchInfo {
         static instance: PunchInfo = PunchInfo {
-            public_ip_list: ::std::vec::Vec::new(),
-            public_port: 0,
             public_port_range: 0,
             nat_type: ::protobuf::EnumOrUnknown::from_i32(0),
             reply: false,
-            local_ip: 0,
-            local_port: 0,
-            ipv6: ::std::vec::Vec::new(),
-            ipv6_port: 0,
-            tcp_port: 0,
-            udp_ports: ::std::vec::Vec::new(),
-            public_ports: ::std::vec::Vec::new(),
-            public_tcp_port: 0,
             punch_model: ::protobuf::EnumOrUnknown::from_i32(0),
+            public_udp_endpoints: ::std::vec::Vec::new(),
+            local_udp_endpoints: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7806,14 +7657,10 @@ pub struct ClientStatusInfo {
     pub down_stream: u64,
     // @@protoc_insertion_point(field:ClientStatusInfo.nat_type)
     pub nat_type: ::protobuf::EnumOrUnknown<PunchNatType>,
-    // @@protoc_insertion_point(field:ClientStatusInfo.public_ip_list)
-    pub public_ip_list: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:ClientStatusInfo.public_udp_ports)
-    pub public_udp_ports: ::std::vec::Vec<u32>,
     // @@protoc_insertion_point(field:ClientStatusInfo.local_udp_ports)
     pub local_udp_ports: ::std::vec::Vec<u32>,
-    // @@protoc_insertion_point(field:ClientStatusInfo.public_ipv6)
-    pub public_ipv6: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:ClientStatusInfo.public_udp_endpoints)
+    pub public_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
     // special fields
     // @@protoc_insertion_point(special_field:ClientStatusInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -7831,7 +7678,7 @@ impl ClientStatusInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(9);
+        let mut fields = ::std::vec::Vec::with_capacity(7);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "source",
@@ -7859,24 +7706,14 @@ impl ClientStatusInfo {
             |m: &mut ClientStatusInfo| { &mut m.nat_type },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "public_ip_list",
-            |m: &ClientStatusInfo| { &m.public_ip_list },
-            |m: &mut ClientStatusInfo| { &mut m.public_ip_list },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "public_udp_ports",
-            |m: &ClientStatusInfo| { &m.public_udp_ports },
-            |m: &mut ClientStatusInfo| { &mut m.public_udp_ports },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
             "local_udp_ports",
             |m: &ClientStatusInfo| { &m.local_udp_ports },
             |m: &mut ClientStatusInfo| { &mut m.local_udp_ports },
         ));
-        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
-            "public_ipv6",
-            |m: &ClientStatusInfo| { &m.public_ipv6 },
-            |m: &mut ClientStatusInfo| { &mut m.public_ipv6 },
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "public_udp_endpoints",
+            |m: &ClientStatusInfo| { &m.public_udp_endpoints },
+            |m: &mut ClientStatusInfo| { &mut m.public_udp_endpoints },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ClientStatusInfo>(
             "ClientStatusInfo",
@@ -7911,26 +7748,14 @@ impl ::protobuf::Message for ClientStatusInfo {
                 40 => {
                     self.nat_type = is.read_enum_or_unknown()?;
                 },
-                50 => {
-                    is.read_repeated_packed_fixed32_into(&mut self.public_ip_list)?;
-                },
-                53 => {
-                    self.public_ip_list.push(is.read_fixed32()?);
-                },
-                58 => {
-                    is.read_repeated_packed_uint32_into(&mut self.public_udp_ports)?;
-                },
-                56 => {
-                    self.public_udp_ports.push(is.read_uint32()?);
-                },
                 66 => {
                     is.read_repeated_packed_uint32_into(&mut self.local_udp_ports)?;
                 },
                 64 => {
                     self.local_udp_ports.push(is.read_uint32()?);
                 },
-                74 => {
-                    self.public_ipv6 = is.read_bytes()?;
+                82 => {
+                    self.public_udp_endpoints.push(is.read_message()?);
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -7960,16 +7785,13 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.nat_type != ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric) {
             my_size += ::protobuf::rt::int32_size(5, self.nat_type.value());
         }
-        my_size += 5 * self.public_ip_list.len() as u64;
-        for value in &self.public_udp_ports {
-            my_size += ::protobuf::rt::uint32_size(7, *value);
-        };
         for value in &self.local_udp_ports {
             my_size += ::protobuf::rt::uint32_size(8, *value);
         };
-        if !self.public_ipv6.is_empty() {
-            my_size += ::protobuf::rt::bytes_size(9, &self.public_ipv6);
-        }
+        for value in &self.public_udp_endpoints {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -7991,18 +7813,12 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.nat_type != ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric) {
             os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.nat_type))?;
         }
-        for v in &self.public_ip_list {
-            os.write_fixed32(6, *v)?;
-        };
-        for v in &self.public_udp_ports {
-            os.write_uint32(7, *v)?;
-        };
         for v in &self.local_udp_ports {
             os.write_uint32(8, *v)?;
         };
-        if !self.public_ipv6.is_empty() {
-            os.write_bytes(9, &self.public_ipv6)?;
-        }
+        for v in &self.public_udp_endpoints {
+            ::protobuf::rt::write_message_field_with_cached_size(10, v, os)?;
+        };
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -8025,10 +7841,8 @@ impl ::protobuf::Message for ClientStatusInfo {
         self.up_stream = 0;
         self.down_stream = 0;
         self.nat_type = ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric);
-        self.public_ip_list.clear();
-        self.public_udp_ports.clear();
         self.local_udp_ports.clear();
-        self.public_ipv6.clear();
+        self.public_udp_endpoints.clear();
         self.special_fields.clear();
     }
 
@@ -8039,10 +7853,8 @@ impl ::protobuf::Message for ClientStatusInfo {
             up_stream: 0,
             down_stream: 0,
             nat_type: ::protobuf::EnumOrUnknown::from_i32(0),
-            public_ip_list: ::std::vec::Vec::new(),
-            public_udp_ports: ::std::vec::Vec::new(),
             local_udp_ports: ::std::vec::Vec::new(),
-            public_ipv6: ::std::vec::Vec::new(),
+            public_udp_endpoints: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8309,14 +8121,10 @@ pub enum PunchNatModel {
     IPv4 = 1,
     // @@protoc_insertion_point(enum_value:PunchNatModel.IPv6)
     IPv6 = 2,
-    // @@protoc_insertion_point(enum_value:PunchNatModel.IPv4Tcp)
-    IPv4Tcp = 3,
     // @@protoc_insertion_point(enum_value:PunchNatModel.IPv4Udp)
-    IPv4Udp = 4,
-    // @@protoc_insertion_point(enum_value:PunchNatModel.IPv6Tcp)
-    IPv6Tcp = 5,
+    IPv4Udp = 3,
     // @@protoc_insertion_point(enum_value:PunchNatModel.IPv6Udp)
-    IPv6Udp = 6,
+    IPv6Udp = 4,
 }
 
 impl ::protobuf::Enum for PunchNatModel {
@@ -8331,10 +8139,8 @@ impl ::protobuf::Enum for PunchNatModel {
             0 => ::std::option::Option::Some(PunchNatModel::All),
             1 => ::std::option::Option::Some(PunchNatModel::IPv4),
             2 => ::std::option::Option::Some(PunchNatModel::IPv6),
-            3 => ::std::option::Option::Some(PunchNatModel::IPv4Tcp),
-            4 => ::std::option::Option::Some(PunchNatModel::IPv4Udp),
-            5 => ::std::option::Option::Some(PunchNatModel::IPv6Tcp),
-            6 => ::std::option::Option::Some(PunchNatModel::IPv6Udp),
+            3 => ::std::option::Option::Some(PunchNatModel::IPv4Udp),
+            4 => ::std::option::Option::Some(PunchNatModel::IPv6Udp),
             _ => ::std::option::Option::None
         }
     }
@@ -8343,9 +8149,7 @@ impl ::protobuf::Enum for PunchNatModel {
         PunchNatModel::All,
         PunchNatModel::IPv4,
         PunchNatModel::IPv6,
-        PunchNatModel::IPv4Tcp,
         PunchNatModel::IPv4Udp,
-        PunchNatModel::IPv6Tcp,
         PunchNatModel::IPv6Udp,
     ];
 }
@@ -8588,66 +8392,63 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     ub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\
     \t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\
     \x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\
-    \x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xdd\x03\n\tPunchInfo\x12$\n\
-    \x0epublic_ip_list\x18\x02\x20\x03(\x07R\x0cpublicIpList\x12\x1f\n\x0bpu\
-    blic_port\x18\x03\x20\x01(\rR\npublicPort\x12*\n\x11public_port_range\
-    \x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\
-    \x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01\
-    (\x08R\x05reply\x12\x19\n\x08local_ip\x18\x07\x20\x01(\x07R\x07localIp\
-    \x12\x1d\n\nlocal_port\x18\x08\x20\x01(\rR\tlocalPort\x12\x12\n\x04ipv6\
-    \x18\t\x20\x01(\x0cR\x04ipv6\x12\x1b\n\tipv6_port\x18\n\x20\x01(\rR\x08i\
-    pv6Port\x12\x19\n\x08tcp_port\x18\x0b\x20\x01(\rR\x07tcpPort\x12\x1b\n\t\
-    udp_ports\x18\x0c\x20\x03(\rR\x08udpPorts\x12!\n\x0cpublic_ports\x18\r\
-    \x20\x03(\rR\x0bpublicPorts\x12&\n\x0fpublic_tcp_port\x18\x0e\x20\x01(\r\
-    R\rpublicTcpPort\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNa\
-    tModelR\npunchModel\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\
-    \x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04i\
-    pv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\
-    \x03tcp\"\xa4\x03\n\x0cPunchRequest\x12\x1d\n\nsession_id\x18\x01\x20\
-    \x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06sourc\
-    e\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\x0fsource_n\
-    at_type\x18\x04\x20\x01(\x0e2\r.PunchNatTypeR\rsourceNatType\x125\n\x0ft\
-    arget_nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\
-    \n\x10source_endpoints\x18\x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourc\
-    eEndpoints\x129\n\x10target_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEnd\
-    pointR\x0ftargetEndpoints\x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07at\
-    tempt\x12\x1d\n\ntimeout_ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadl\
-    ine_unix_ms\x18\n\x20\x01(\x03R\x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAc\
-    k\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06so\
-    urce\x18\x02\x20\x01(\x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\
-    \x01(\rR\x07attempt\x12\x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accep\
-    ted\x12\x16\n\x06reason\x18\x05\x20\x01(\tR\x06reason\"\xf5\x01\n\nPunch\
-    Start\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\
-    \x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\
-    \x20\x01(\x07R\x06target\x125\n\x0epeer_endpoints\x18\x04\x20\x03(\x0b2\
-    \x0e.PunchEndpointR\rpeerEndpoints\x12\x18\n\x07attempt\x18\x05\x20\x01(\
-    \rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\
-    \n\x10deadline_unix_ms\x18\x07\x20\x01(\x03R\x0edeadlineUnixMs\"\xf1\x01\
-    \n\x0bPunchResult\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\
-    \x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\
-    \x18\x03\x20\x01(\x07R\x06target\x12\x18\n\x07attempt\x18\x04\x20\x01(\r\
-    R\x07attempt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\
-    \x04code\x12\x16\n\x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11sel\
-    ected_endpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpo\
-    int\"\xd2\x02\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\
-    \x07R\x06source\x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\
-    \x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\
-    \x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_ty\
-    pe\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12$\n\x0epublic_ip_\
-    list\x18\x06\x20\x03(\x07R\x0cpublicIpList\x12(\n\x10public_udp_ports\
-    \x18\x07\x20\x03(\rR\x0epublicUdpPorts\x12&\n\x0flocal_udp_ports\x18\x08\
-    \x20\x03(\rR\rlocalUdpPorts\x12\x1f\n\x0bpublic_ipv6\x18\t\x20\x01(\x0cR\
-    \npublicIpv6\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\
-    \x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOW\
-    N\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CH\
-    ANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\
-    \n\x04Cone\x10\x01*`\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\
-    \x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Tcp\x10\x03\
-    \x12\x0b\n\x07IPv4Udp\x10\x04\x12\x0b\n\x07IPv6Tcp\x10\x05\x12\x0b\n\x07\
-    IPv6Udp\x10\x06*\x89\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUn\
-    known\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchRe\
-    sultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13\
-    PunchResultCanceled\x10\x04b\x06proto3\
+    \x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xe6\x02\n\tPunchInfo\x12*\n\
+    \x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08n\
+    at_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05re\
+    ply\x18\x06\x20\x01(\x08R\x05reply\x12/\n\x0bpunch_model\x18\x0f\x20\x01\
+    (\x0e2\x0e.PunchNatModelR\npunchModel\x12@\n\x14public_udp_endpoints\x18\
+    \x10\x20\x03(\x0b2\x0e.PunchEndpointR\x12publicUdpEndpoints\x12>\n\x13lo\
+    cal_udp_endpoints\x18\x11\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEn\
+    dpointsJ\x04\x08\x02\x10\x03J\x04\x08\x03\x10\x04J\x04\x08\x07\x10\x08J\
+    \x04\x08\x08\x10\tJ\x04\x08\t\x10\nJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\
+    \x0cJ\x04\x08\x0c\x10\rJ\x04\x08\r\x10\x0eJ\x04\x08\x0e\x10\x0f\"Y\n\rPu\
+    nchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04por\
+    t\x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\
+    \x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xa4\x03\n\x0cPu\
+    nchRequest\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\
+    \x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\
+    \x03\x20\x01(\x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\
+    \x0e2\r.PunchNatTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\
+    \x20\x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\
+    \x18\x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\x129\n\x10t\
+    arget_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0ftargetEndpoi\
+    nts\x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeo\
+    ut_ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\n\x20\
+    \x01(\x03R\x0edeadlineUnixMs\"\x8f\x01\n\x08PunchAck\x12\x1d\n\nsession_\
+    id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\
+    \x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\
+    \x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\
+    \x18\x05\x20\x01(\tR\x06reason\"\xf5\x01\n\nPunchStart\x12\x1d\n\nsessio\
+    n_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\
+    \x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\
+    \x125\n\x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeer\
+    Endpoints\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\
+    \ntimeout_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\
+    \x18\x07\x20\x01(\x03R\x0edeadlineUnixMs\"\xf1\x01\n\x0bPunchResult\x12\
+    \x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\
+    \x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\
+    \x07R\x06target\x12\x18\n\x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\
+    \n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\
+    \x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\
+    \x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\"\xb5\x02\n\
+    \x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\
+    \x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\
+    \x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_st\
+    ream\x18\x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\
+    \x01(\x0e2\r.PunchNatTypeR\x07natType\x12&\n\x0flocal_udp_ports\x18\x08\
+    \x20\x03(\rR\rlocalUdpPorts\x12@\n\x14public_udp_endpoints\x18\n\x20\x03\
+    (\x0b2\x0e.PunchEndpointR\x12publicUdpEndpointsJ\x04\x08\x06\x10\x07J\
+    \x04\x08\x07\x10\x08J\x04\x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next_\
+    ip\x18\x01\x20\x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\
+    \x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\
+    \x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\
+    \n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\x12\x07\
+    \n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\
+    \x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\x89\x01\n\x0fPun\
+    chResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchRes\
+    ultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12P\
+    unchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCanceled\x10\x04b\x06p\
+    roto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

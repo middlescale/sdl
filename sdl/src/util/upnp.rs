@@ -24,9 +24,6 @@ pub struct UpnpInner {
 }
 
 impl UpnpInner {
-    pub fn add_tcp_port(&self, port: u16) {
-        self.list.lock().push((PortMappingProtocol::TCP, port));
-    }
     pub fn add_udp_port(&self, port: u16) {
         self.list.lock().push((PortMappingProtocol::UDP, port));
     }

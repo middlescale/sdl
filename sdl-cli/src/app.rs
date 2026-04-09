@@ -119,7 +119,6 @@ impl ServiceManager {
             in_ips: config.in_ips,
             out_ips: config.out_ips,
             udp_listen_addr: vec![],
-            tcp_listen_addr: String::new(),
         }
     }
 

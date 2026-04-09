@@ -21,26 +21,22 @@ pub enum PunchModel {
     All,
     IPv4,
     IPv6,
-    IPv4Tcp,
     IPv4Udp,
-    IPv6Tcp,
     IPv6Udp,
 }
 
 impl PunchModel {
     pub fn use_udp(&self) -> bool {
-        self != &PunchModel::IPv4Tcp && self != &PunchModel::IPv6Tcp
+        true
     }
     pub fn use_ipv6(&self) -> bool {
         self == &PunchModel::All
             || self == &PunchModel::IPv6
-            || self == &PunchModel::IPv6Tcp
             || self == &PunchModel::IPv6Udp
     }
     pub fn use_ipv4(&self) -> bool {
         self == &PunchModel::All
             || self == &PunchModel::IPv4
-            || self == &PunchModel::IPv4Tcp
             || self == &PunchModel::IPv4Udp
     }
 }
@@ -52,13 +48,11 @@ impl FromStr for PunchModel {
         match s.to_lowercase().trim() {
             "ipv4" => Ok(PunchModel::IPv4),
             "ipv6" => Ok(PunchModel::IPv6),
-            "ipv4-tcp" => Ok(PunchModel::IPv4Tcp),
             "ipv4-udp" => Ok(PunchModel::IPv4Udp),
-            "ipv6-tcp" => Ok(PunchModel::IPv6Tcp),
             "ipv6-udp" => Ok(PunchModel::IPv6Udp),
             "all" => Ok(PunchModel::All),
             _ => Err(format!(
-                "not match '{}', enum: ipv4/ipv4-tcp/ipv4-udp/ipv6/ipv6-tcp/ipv6-udp/all",
+                "not match '{}', enum: ipv4/ipv4-udp/ipv6/ipv6-udp/all",
                 s
             )),
         }
@@ -76,9 +70,7 @@ impl From<PunchModel> for PunchNatModel {
             PunchModel::All => PunchNatModel::All,
             PunchModel::IPv4 => PunchNatModel::IPv4,
             PunchModel::IPv6 => PunchNatModel::IPv6,
-            PunchModel::IPv4Tcp => PunchNatModel::IPv4Tcp,
             PunchModel::IPv4Udp => PunchNatModel::IPv4Udp,
-            PunchModel::IPv6Tcp => PunchNatModel::IPv6Tcp,
             PunchModel::IPv6Udp => PunchNatModel::IPv6Udp,
         }
     }
@@ -90,9 +82,7 @@ impl Into<PunchModel> for PunchNatModel {
             PunchNatModel::All => PunchModel::All,
             PunchNatModel::IPv4 => PunchModel::IPv4,
             PunchNatModel::IPv6 => PunchModel::IPv6,
-            PunchNatModel::IPv4Tcp => PunchModel::IPv4Tcp,
             PunchNatModel::IPv4Udp => PunchModel::IPv4Udp,
-            PunchNatModel::IPv6Tcp => PunchModel::IPv6Tcp,
             PunchNatModel::IPv6Udp => PunchModel::IPv6Udp,
         }
     }
@@ -102,13 +92,12 @@ impl Into<PunchModel> for PunchNatModel {
 pub struct NatInfo {
     pub public_ips: Vec<Ipv4Addr>,
     pub public_ports: Vec<u16>,
+    pub public_udp_endpoints: Vec<SocketAddr>,
     pub public_port_range: u16,
     pub nat_type: NatType,
     pub(crate) local_ipv4: Option<Ipv4Addr>,
     pub(crate) ipv6: Option<Ipv6Addr>,
     pub udp_ports: Vec<u16>,
-    pub tcp_port: u16,
-    pub public_tcp_port: u16,
     pub punch_model: PunchModel,
 }
 
@@ -145,12 +134,11 @@ impl NatInfo {
     pub fn new(
         mut public_ips: Vec<Ipv4Addr>,
         public_ports: Vec<u16>,
+        mut public_udp_endpoints: Vec<SocketAddr>,
         public_port_range: u16,
         mut local_ipv4: Option<Ipv4Addr>,
         mut ipv6: Option<Ipv6Addr>,
         udp_ports: Vec<u16>,
-        tcp_port: u16,
-        public_tcp_port: u16,
         mut nat_type: NatType,
         punch_model: PunchModel,
     ) -> Self {
@@ -163,6 +151,27 @@ impl NatInfo {
         });
         if public_ips.len() > 1 {
             nat_type = NatType::Symmetric;
+        }
+        public_udp_endpoints.retain(|addr| match addr {
+            SocketAddr::V4(addr) => is_ipv4_global(addr.ip()) && addr.port() != 0,
+            SocketAddr::V6(addr) => !addr.ip().is_multicast()
+                && !addr.ip().is_unspecified()
+                && !addr.ip().is_loopback()
+                && addr.port() != 0,
+        });
+        for addr in &public_udp_endpoints {
+            match addr {
+                SocketAddr::V4(addr) => {
+                    if !public_ips.contains(addr.ip()) {
+                        public_ips.push(*addr.ip());
+                    }
+                }
+                SocketAddr::V6(addr) => {
+                    if ipv6.is_none() {
+                        ipv6 = Some(*addr.ip());
+                    }
+                }
+            }
         }
         if let Some(ip) = local_ipv4 {
             if ip.is_multicast() || ip.is_broadcast() || ip.is_unspecified() || ip.is_loopback() {
@@ -177,12 +186,11 @@ impl NatInfo {
         Self {
             public_ips,
             public_ports,
+            public_udp_endpoints,
             public_port_range,
             local_ipv4,
             ipv6,
             udp_ports,
-            tcp_port,
-            public_tcp_port,
             nat_type,
             punch_model,
         }
@@ -197,6 +205,11 @@ impl NatInfo {
                 }
                 *public_port = port;
             }
+            let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
+            if !self.public_udp_endpoints.contains(&addr) {
+                self.public_udp_endpoints.push(addr);
+                updated = true;
+            }
         }
         if is_ipv4_global(&ip) {
             if !self.public_ips.contains(&ip) {
@@ -206,9 +219,6 @@ impl NatInfo {
             }
         }
         updated
-    }
-    pub fn update_tcp_port(&mut self, port: u16) {
-        self.public_tcp_port = port;
     }
     pub fn local_ipv4(&self) -> Option<Ipv4Addr> {
         self.local_ipv4
@@ -231,6 +241,21 @@ impl NatInfo {
         } else {
             None
         }
+    }
+    pub fn local_udp_endpoints(&self) -> Vec<SocketAddr> {
+        let mut endpoints = Vec::with_capacity(self.udp_ports.len() * 2);
+        for port in &self.udp_ports {
+            if *port == 0 {
+                continue;
+            }
+            if let Some(local_ipv4) = self.local_ipv4 {
+                endpoints.push(SocketAddr::V4(SocketAddrV4::new(local_ipv4, *port)));
+            }
+            if let Some(ipv6) = self.ipv6 {
+                endpoints.push(SocketAddr::V6(SocketAddrV6::new(ipv6, *port, 0, 0)));
+            }
+        }
+        endpoints
     }
 }
 
@@ -303,6 +328,13 @@ impl Punch {
                 }
             }
         }
+        let has_explicit_public_endpoints = !nat_info.public_udp_endpoints.is_empty();
+        for addr in &nat_info.public_udp_endpoints {
+            if !self.nat_test.is_local_address(false, *addr) {
+                let _ = self.udp_channel.send_to(buf, *addr);
+                thread::sleep(Duration::from_millis(3));
+            }
+        }
         if !self.punch_model.use_ipv4() || !nat_info.punch_model.use_ipv4() {
             return Ok(());
         }
@@ -311,18 +343,20 @@ impl Punch {
                 let _ = self.udp_channel.send_to(buf, ipv4_addr);
             }
         }
-        // 可能是开放了端口的，需要打洞
-        for port in &nat_info.udp_ports {
-            if *port == 0 {
-                continue;
-            }
-            for ip in &nat_info.public_ips {
-                if ip.is_unspecified() {
+        if !has_explicit_public_endpoints {
+            // 可能是开放了端口的，需要打洞
+            for port in &nat_info.udp_ports {
+                if *port == 0 {
                     continue;
                 }
-                let addr = SocketAddrV4::new(*ip, *port);
-                let _ = self.udp_channel.send_to(buf, addr.into());
-                thread::sleep(Duration::from_millis(3));
+                for ip in &nat_info.public_ips {
+                    if ip.is_unspecified() {
+                        continue;
+                    }
+                    let addr = SocketAddrV4::new(*ip, *port);
+                    let _ = self.udp_channel.send_to(buf, addr.into());
+                    thread::sleep(Duration::from_millis(3));
+                }
             }
         }
 

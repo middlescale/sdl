@@ -19,7 +19,7 @@ use crate::handle::PeerDeviceInfo;
 use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
 use crate::nat::NatTest;
 use crate::proto::message::{
-    ClientStatusInfo, DeviceAuthChallenge, HandshakeRequest, PunchNatType,
+    ClientStatusInfo, DeviceAuthChallenge, HandshakeRequest, PunchEndpoint, PunchNatType,
     RefreshGatewayGrantRequest, RouteItem,
 };
 use crate::protocol::control_packet::PingPacket;
@@ -415,16 +415,24 @@ impl ControlSession {
                 PunchNatType::Symmetric
             });
         let nat_info = self.deps.nat_test.nat_info();
-        message.public_ip_list = nat_info
-            .public_ips
-            .iter()
-            .map(|ip| u32::from(*ip))
-            .collect();
-        message.public_udp_ports = nat_info.public_ports.iter().map(|p| *p as u32).collect();
         message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
-        if let Some(ipv6) = nat_info.ipv6() {
-            message.public_ipv6 = ipv6.octets().to_vec();
-        }
+        message.public_udp_endpoints = nat_info
+            .public_udp_endpoints
+            .iter()
+            .map(|addr| {
+                let mut endpoint = PunchEndpoint::new();
+                endpoint.port = u32::from(addr.port());
+                match addr {
+                    std::net::SocketAddr::V4(addr) => {
+                        endpoint.ip = u32::from(*addr.ip());
+                    }
+                    std::net::SocketAddr::V6(addr) => {
+                        endpoint.ipv6 = addr.ip().octets().to_vec();
+                    }
+                }
+                endpoint
+            })
+            .collect();
         let buf = message.write_to_bytes().map_err(|e| {
             io::Error::new(io::ErrorKind::Other, format!("up_status_packet {:?}", e))
         })?;

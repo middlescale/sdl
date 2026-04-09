@@ -312,7 +312,6 @@ pub fn command_info(vnt: &Sdl) -> Info {
         .iter()
         .map(|port| format!("0.0.0.0:{}", port))
         .collect();
-    let tcp_listen_addr = format!("0.0.0.0:{}", nat_info.tcp_port);
     Info {
         name,
         virtual_ip,
@@ -334,7 +333,6 @@ pub fn command_info(vnt: &Sdl) -> Info {
         in_ips,
         out_ips,
         udp_listen_addr,
-        tcp_listen_addr,
     }
 }
 

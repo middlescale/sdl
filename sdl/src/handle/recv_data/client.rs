@@ -180,15 +180,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 if payload.len() < 20 {
                                     return Ok(());
                                 }
-                                let destination_port =
+                                let _destination_port =
                                     u16::from_be_bytes(payload[2..4].try_into().unwrap());
-                                if self
-                                    .runtime
-                                    .nat_test
-                                    .is_local_tcp(real_dest, destination_port)
-                                {
-                                    return Ok(());
-                                }
                             }
                             ipv4::protocol::Protocol::Udp => {
                                 let payload = ipv4.payload();
@@ -377,39 +370,83 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         let source = net_packet.source();
         match other_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             other_turn_packet::Protocol::Punch => {
-                let mut punch_info = PunchInfo::parse_from_bytes(net_packet.payload())
+                let punch_info = PunchInfo::parse_from_bytes(net_packet.payload())
                     .map_err(|e| anyhow!("PunchInfo {:?}", e))?;
-                let public_ips = punch_info
-                    .public_ip_list
+                let public_udp_endpoints: Vec<std::net::SocketAddr> = punch_info
+                    .public_udp_endpoints
                     .iter()
-                    .map(|v: &u32| Ipv4Addr::from(v.to_be_bytes()))
+                    .filter_map(|endpoint| {
+                        if endpoint.port == 0 {
+                            return None;
+                        }
+                        if endpoint.ip != 0 {
+                            return Some(std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                                Ipv4Addr::from(endpoint.ip),
+                                endpoint.port as u16,
+                            )));
+                        }
+                        if endpoint.ipv6.len() == 16 {
+                            let ipv6: [u8; 16] = endpoint.ipv6.clone().try_into().ok()?;
+                            return Some(std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+                                Ipv6Addr::from(ipv6),
+                                endpoint.port as u16,
+                                0,
+                                0,
+                            )));
+                        }
+                        None
+                    })
                     .collect();
-                let local_ipv4 = Some(Ipv4Addr::from(punch_info.local_ip.to_be_bytes()));
-                let tcp_port = punch_info.tcp_port as u16;
-                let public_tcp_port = punch_info.public_tcp_port as u16;
-                let ipv6 = if punch_info.ipv6.len() == 16 {
-                    let ipv6: [u8; 16] = punch_info.ipv6.try_into().unwrap();
-                    Some(Ipv6Addr::from(ipv6))
-                } else {
-                    None
-                };
-                //兼容旧版本
-                if punch_info.public_ports.is_empty() {
-                    punch_info.public_ports.push(punch_info.public_port);
-                }
-                //兼容旧版本
-                if punch_info.udp_ports.is_empty() {
-                    punch_info.udp_ports.push(punch_info.local_port);
-                }
+                let local_udp_endpoints: Vec<std::net::SocketAddr> = punch_info
+                    .local_udp_endpoints
+                    .iter()
+                    .filter_map(|endpoint| {
+                        if endpoint.port == 0 {
+                            return None;
+                        }
+                        if endpoint.ip != 0 {
+                            return Some(std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
+                                Ipv4Addr::from(endpoint.ip),
+                                endpoint.port as u16,
+                            )));
+                        }
+                        if endpoint.ipv6.len() == 16 {
+                            let ipv6: [u8; 16] = endpoint.ipv6.clone().try_into().ok()?;
+                            return Some(std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
+                                Ipv6Addr::from(ipv6),
+                                endpoint.port as u16,
+                                0,
+                                0,
+                            )));
+                        }
+                        None
+                    })
+                    .collect();
+                let public_ips = public_udp_endpoints
+                    .iter()
+                    .filter_map(|addr| match addr {
+                        std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
+                        std::net::SocketAddr::V6(_) => None,
+                    })
+                    .collect();
+                let public_ports = public_udp_endpoints.iter().map(|addr| addr.port()).collect();
+                let local_ipv4 = local_udp_endpoints.iter().find_map(|addr| match addr {
+                    std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
+                    std::net::SocketAddr::V6(_) => None,
+                });
+                let ipv6 = local_udp_endpoints.iter().find_map(|addr| match addr {
+                    std::net::SocketAddr::V4(_) => None,
+                    std::net::SocketAddr::V6(addr) => Some(*addr.ip()),
+                });
+                let udp_ports = local_udp_endpoints.iter().map(|addr| addr.port()).collect();
                 let peer_nat_info = NatInfo::new(
                     public_ips,
-                    punch_info.public_ports.iter().map(|e| *e as u16).collect(),
+                    public_ports,
+                    public_udp_endpoints,
                     punch_info.public_port_range as u16,
                     local_ipv4,
                     ipv6,
-                    punch_info.udp_ports.iter().map(|e| *e as u16).collect(),
-                    tcp_port,
-                    public_tcp_port,
+                    udp_ports,
                     punch_info.nat_type.enum_value_or_default().into(),
                     punch_info.punch_model.enum_value_or_default().into(),
                 );
@@ -424,29 +461,45 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let mut punch_reply = PunchInfo::new();
                     punch_reply.reply = true;
                     let nat_info = self.runtime.nat_test.nat_info();
-                    punch_reply.public_ip_list = nat_info
-                        .public_ips
-                        .iter()
-                        .map(|ip| u32::from_be_bytes(ip.octets()))
-                        .collect();
-                    punch_reply.public_port = nat_info.public_ports.get(0).map_or(0, |v| *v as u32);
-                    punch_reply.public_ports =
-                        nat_info.public_ports.iter().map(|e| *e as u32).collect();
                     punch_reply.public_port_range = nat_info.public_port_range as u32;
-                    punch_reply.tcp_port = nat_info.tcp_port as u32;
-                    punch_reply.public_tcp_port = nat_info.public_tcp_port as u32;
                     punch_reply.nat_type =
                         protobuf::EnumOrUnknown::new(PunchNatType::from(nat_info.nat_type));
                     punch_reply.punch_model =
                         protobuf::EnumOrUnknown::new(nat_info.punch_model.into());
-                    punch_reply.local_ip =
-                        u32::from(nat_info.local_ipv4().unwrap_or(Ipv4Addr::UNSPECIFIED));
-                    punch_reply.local_port = nat_info.udp_ports[0] as u32;
-                    punch_reply.udp_ports = nat_info.udp_ports.iter().map(|e| *e as u32).collect();
-                    if let Some(ipv6) = nat_info.ipv6() {
-                        punch_reply.ipv6 = ipv6.octets().to_vec();
-                        punch_reply.ipv6_port = nat_info.udp_ports[0] as u32;
-                    }
+                    punch_reply.public_udp_endpoints = nat_info
+                        .public_udp_endpoints
+                        .iter()
+                        .map(|addr| {
+                            let mut endpoint = crate::proto::message::PunchEndpoint::new();
+                            endpoint.port = u32::from(addr.port());
+                            match addr {
+                                std::net::SocketAddr::V4(addr) => {
+                                    endpoint.ip = u32::from(*addr.ip());
+                                }
+                                std::net::SocketAddr::V6(addr) => {
+                                    endpoint.ipv6 = addr.ip().octets().to_vec();
+                                }
+                            }
+                            endpoint
+                        })
+                        .collect();
+                    punch_reply.local_udp_endpoints = nat_info
+                        .local_udp_endpoints()
+                        .into_iter()
+                        .map(|addr| {
+                            let mut endpoint = crate::proto::message::PunchEndpoint::new();
+                            endpoint.port = u32::from(addr.port());
+                            match addr {
+                                std::net::SocketAddr::V4(addr) => {
+                                    endpoint.ip = u32::from(*addr.ip());
+                                }
+                                std::net::SocketAddr::V6(addr) => {
+                                    endpoint.ipv6 = addr.ip().octets().to_vec();
+                                }
+                            }
+                            endpoint
+                        })
+                        .collect();
                     let bytes = punch_reply
                         .write_to_bytes()
                         .map_err(|e| anyhow!("punch_reply {:?}", e))?;

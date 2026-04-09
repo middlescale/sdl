@@ -127,7 +127,6 @@ impl Sdl {
             local_ipv4,
             local_ipv6,
             udp_ports,
-            0,
             config.local_ipv4.is_none(),
             config.punch_model,
         );
