@@ -150,6 +150,8 @@ impl Sdl {
             current_device.clone(),
             peer_crypto.clone(),
             config.cipher_model != crate::cipher::CipherModel::None,
+            std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
+            std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
         )?;
         let control_session = ControlSession::new(
             Http3Channel::new(config.server_address, &config.server_address_str)?,
@@ -206,7 +208,9 @@ impl Sdl {
                         "peer_ip": peer_ip.to_string(),
                     }),
                 );
-                control_session.trigger_status_report_with_nat_ready();
+                control_session.trigger_status_report_with_nat_ready(
+                    crate::proto::message::PunchTriggerReason::PunchTriggerRouteTimeout,
+                );
             }));
         }
         let runtime = Arc::new_cyclic(|weak_runtime| {

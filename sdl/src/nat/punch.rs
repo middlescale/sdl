@@ -30,14 +30,10 @@ impl PunchModel {
         true
     }
     pub fn use_ipv6(&self) -> bool {
-        self == &PunchModel::All
-            || self == &PunchModel::IPv6
-            || self == &PunchModel::IPv6Udp
+        self == &PunchModel::All || self == &PunchModel::IPv6 || self == &PunchModel::IPv6Udp
     }
     pub fn use_ipv4(&self) -> bool {
-        self == &PunchModel::All
-            || self == &PunchModel::IPv4
-            || self == &PunchModel::IPv4Udp
+        self == &PunchModel::All || self == &PunchModel::IPv4 || self == &PunchModel::IPv4Udp
     }
 }
 
@@ -154,10 +150,12 @@ impl NatInfo {
         }
         public_udp_endpoints.retain(|addr| match addr {
             SocketAddr::V4(addr) => is_ipv4_global(addr.ip()) && addr.port() != 0,
-            SocketAddr::V6(addr) => !addr.ip().is_multicast()
-                && !addr.ip().is_unspecified()
-                && !addr.ip().is_loopback()
-                && addr.port() != 0,
+            SocketAddr::V6(addr) => {
+                !addr.ip().is_multicast()
+                    && !addr.ip().is_unspecified()
+                    && !addr.ip().is_loopback()
+                    && addr.port() != 0
+            }
         });
         for addr in &public_udp_endpoints {
             match addr {

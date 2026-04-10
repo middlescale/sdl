@@ -20,7 +20,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
 const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
-const ROUTE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 pub struct RouteManager {
@@ -29,6 +28,8 @@ pub struct RouteManager {
     peer_encrypt: bool,
     sender: Option<RouteSender>,
     direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
+    heartbeat_interval: Duration,
+    stale_direct_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -54,6 +55,8 @@ impl RouteManager {
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         peer_crypto: Arc<PeerCryptoManager>,
         peer_encrypt: bool,
+        heartbeat_interval: Duration,
+        stale_direct_timeout: Duration,
     ) -> anyhow::Result<Self> {
         let manager = Self {
             route_table,
@@ -61,6 +64,8 @@ impl RouteManager {
             peer_encrypt,
             sender: Some(RouteSender { udp_channel }),
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
+            heartbeat_interval,
+            stale_direct_timeout,
         };
         manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
         manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
@@ -74,6 +79,8 @@ impl RouteManager {
             peer_encrypt: true,
             sender: None,
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
+            heartbeat_interval: Duration::from_secs(10),
+            stale_direct_timeout: Duration::from_secs(30),
         }
     }
 
@@ -345,7 +352,7 @@ impl RouteManager {
                 }
                 while !stop_manager.is_stopped() {
                     route_manager.send_heartbeats(current_device.load());
-                    if wait_for_stop(&stop_manager, ROUTE_HEARTBEAT_INTERVAL) {
+                    if wait_for_stop(&stop_manager, route_manager.heartbeat_interval) {
                         break;
                     }
                 }
@@ -378,7 +385,8 @@ impl RouteManager {
                     return;
                 }
                 while !stop_manager.is_stopped() {
-                    let result = route_manager.cleanup_stale_direct_routes(Duration::from_secs(10));
+                    let result = route_manager
+                        .cleanup_stale_direct_routes(route_manager.stale_direct_timeout);
                     if wait_for_stop(&stop_manager, result.delay) {
                         break;
                     }

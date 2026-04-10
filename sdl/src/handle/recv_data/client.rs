@@ -429,7 +429,10 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         std::net::SocketAddr::V6(_) => None,
                     })
                     .collect();
-                let public_ports = public_udp_endpoints.iter().map(|addr| addr.port()).collect();
+                let public_ports = public_udp_endpoints
+                    .iter()
+                    .map(|addr| addr.port())
+                    .collect();
                 let local_ipv4 = local_udp_endpoints.iter().find_map(|addr| match addr {
                     std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
                     std::net::SocketAddr::V6(_) => None,

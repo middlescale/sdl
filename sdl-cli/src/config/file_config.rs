@@ -35,6 +35,8 @@ pub struct FileConfig {
     pub punch_model: String,
     pub ports: Option<Vec<u16>>,
     pub latency_first: bool,
+    pub p2p_heartbeat_interval_sec: u64,
+    pub p2p_route_idle_timeout_sec: u64,
     pub device_name: Option<String>,
     pub packet_loss: Option<f64>,
     pub packet_delay: u32,
@@ -72,6 +74,8 @@ impl Default for FileConfig {
             punch_model: "all".to_string(),
             ports: None,
             latency_first: false,
+            p2p_heartbeat_interval_sec: 10,
+            p2p_route_idle_timeout_sec: 30,
             device_name: None,
             packet_loss: None,
             packet_delay: 0,
@@ -143,6 +147,8 @@ impl FileConfig {
             punch_model,
             self.ports,
             self.latency_first,
+            self.p2p_heartbeat_interval_sec,
+            self.p2p_route_idle_timeout_sec,
             self.device_name,
             use_channel_type,
             self.packet_loss,
@@ -254,6 +260,21 @@ server_address: https://control.middlescale.net/control
         let file_conf = FileConfig::default();
         assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
         assert_eq!(file_conf.server_address, DEFAULT_SERVICE_SERVER);
+        assert_eq!(file_conf.p2p_heartbeat_interval_sec, 10);
+        assert_eq!(file_conf.p2p_route_idle_timeout_sec, 30);
+    }
+
+    #[test]
+    fn into_runtime_config_rejects_idle_timeout_not_greater_than_heartbeat() {
+        let mut file_conf = FileConfig::default();
+        file_conf.p2p_heartbeat_interval_sec = 10;
+        file_conf.p2p_route_idle_timeout_sec = 10;
+        let err = file_conf
+            .into_runtime_config()
+            .expect_err("idle timeout must be greater than heartbeat");
+        assert!(err.to_string().contains(
+            "p2p_route_idle_timeout_sec must be greater than p2p_heartbeat_interval_sec"
+        ));
     }
 
     #[test]

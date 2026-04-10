@@ -170,6 +170,18 @@ fn override_service_file_config(
     if matches.opt_present("latency-first") {
         file_conf.latency_first = true;
     }
+    if let Some(v) = matches
+        .opt_get::<u64>("p2p-heartbeat-sec")
+        .expect("--p2p-heartbeat-sec")
+    {
+        file_conf.p2p_heartbeat_interval_sec = v;
+    }
+    if let Some(v) = matches
+        .opt_get::<u64>("p2p-route-idle-sec")
+        .expect("--p2p-route-idle-sec")
+    {
+        file_conf.p2p_route_idle_timeout_sec = v;
+    }
     if let Some(packet_loss) = matches
         .opt_get::<f64>("packet-loss")
         .expect("--packet-loss")
@@ -235,6 +247,8 @@ pub fn parse_args_config_from(
     opts.optopt("", "punch", "取值ipv4/ipv6", "<punch>");
     opts.optopt("", "ports", "监听的端口", "<port,port>");
     opts.optflag("", "latency-first", "优先延迟");
+    opts.optopt("", "p2p-heartbeat-sec", "P2P心跳间隔秒数", "<sec>");
+    opts.optopt("", "p2p-route-idle-sec", "P2P路由空闲清理秒数", "<sec>");
     opts.optopt("", "use-channel", "使用通道 relay/p2p", "<use-channel>");
     opts.optopt("", "packet-loss", "丢包率", "<packet-loss>");
     opts.optopt("", "packet-delay", "延迟", "<packet-delay>");
@@ -290,6 +304,8 @@ fn get_description(key: &str, language: &str) -> String {
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-udp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-udp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
+        ("--p2p-heartbeat-sec <sec>", ("P2P保活心跳间隔秒数,默认10秒", "P2P keepalive heartbeat interval in seconds, default 10s")),
+        ("--p2p-route-idle-sec <sec>", ("P2P直连路由空闲清理秒数,默认30秒", "P2P direct-route idle cleanup timeout in seconds, default 30s")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
         ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
         ("--packet-loss <0>", ("模拟丢包,取值0~1之间的小数,程序会按设定的概率主动丢包,可用于模拟弱网", "Simulate packet loss, value between 0 and 1, program actively drops packets based on set probability, useful for simulating weak networks")),
@@ -402,6 +418,14 @@ fn print_usage(program: &str, _opts: Options) {
     println!(
         "  --latency-first     {}",
         get_description("--first-latency", &language)
+    );
+    println!(
+        "  --p2p-heartbeat-sec <sec> {}",
+        get_description("--p2p-heartbeat-sec <sec>", &language)
+    );
+    println!(
+        "  --p2p-route-idle-sec <sec> {}",
+        get_description("--p2p-route-idle-sec <sec>", &language)
     );
     println!(
         "  --use-channel <p2p> {}",

@@ -20,7 +20,7 @@ use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
 use crate::nat::NatTest;
 use crate::proto::message::{
     ClientStatusInfo, DeviceAuthChallenge, HandshakeRequest, PunchEndpoint, PunchNatType,
-    RefreshGatewayGrantRequest, RouteItem,
+    PunchTriggerReason, RefreshGatewayGrantRequest, RouteItem,
 };
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
@@ -182,7 +182,9 @@ impl ControlSession {
                 try_refresh_gateway_grant(self, &self.deps.gateway_sessions);
             }
             if last_status_report_at.elapsed() >= status_report_delay {
-                if let Err(e) = self.send_status_report_packet() {
+                if let Err(e) =
+                    self.send_status_report_packet(PunchTriggerReason::PunchTriggerStatusUpdate)
+                {
                     log::warn!("{:?}", e)
                 }
                 last_status_report_at = Instant::now();
@@ -348,8 +350,8 @@ impl ControlSession {
         )
     }
 
-    pub fn trigger_status_report(&self) {
-        if let Err(e) = self.send_status_report_packet() {
+    pub fn trigger_status_report(&self, reason: PunchTriggerReason) {
+        if let Err(e) = self.send_status_report_packet(reason) {
             log::warn!("{:?}", e)
         }
     }
@@ -375,7 +377,7 @@ impl ControlSession {
             .contains(capability)
     }
 
-    pub fn trigger_status_report_with_nat_ready(&self) {
+    pub fn trigger_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
         let control_session = self.clone();
         thread::Builder::new()
             .name("upStatusEvent".into())
@@ -386,14 +388,14 @@ impl ControlSession {
                     }
                     thread::sleep(Duration::from_secs(2));
                 }
-                if let Err(e) = control_session.send_status_report_packet() {
+                if let Err(e) = control_session.send_status_report_packet(reason) {
                     log::warn!("{:?}", e)
                 }
             })
             .expect("upStatusEvent");
     }
 
-    fn send_status_report_packet(&self) -> io::Result<()> {
+    fn send_status_report_packet(&self, reason: PunchTriggerReason) -> io::Result<()> {
         let device_info = self.current_device();
         if device_info.status.offline() {
             return Ok(());
@@ -433,6 +435,7 @@ impl ControlSession {
                 endpoint
             })
             .collect();
+        message.punch_trigger_reason = protobuf::EnumOrUnknown::new(reason);
         let buf = message.write_to_bytes().map_err(|e| {
             io::Error::new(io::ErrorKind::Other, format!("up_status_packet {:?}", e))
         })?;

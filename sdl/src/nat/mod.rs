@@ -303,10 +303,7 @@ impl NatTest {
                 SocketAddr::V6(_) => None,
             })
             .collect();
-        guard.public_ports = public_udp_endpoints
-            .iter()
-            .map(SocketAddr::port)
-            .collect();
+        guard.public_ports = public_udp_endpoints.iter().map(SocketAddr::port).collect();
         guard.public_port_range = port_range;
         if local_ipv4.is_some() {
             guard.local_ipv4 = local_ipv4;

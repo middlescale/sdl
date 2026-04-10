@@ -23,8 +23,8 @@ use crate::proto::message::{
     DebugCollectRequest, DebugCollectResponse, DebugWatchStartRequest, DebugWatchStartResponse,
     DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge, DeviceList,
     DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck, HandshakeResponse, PunchAck,
-    PunchEndpoint, PunchResult, PunchResultCode, PunchStart, RefreshGatewayGrantResponse,
-    RegistrationResponse,
+    PunchEndpoint, PunchResult, PunchResultCode, PunchSessionPhase, PunchStart,
+    RefreshGatewayGrantResponse, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -267,7 +267,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 session.source,
                 session.target,
                 session.attempt,
-                PunchResultCode::PunchResultTimeout,
+                PunchResultCode::PunchResultNoResponse,
                 "deadline exceeded",
             )?;
         }
@@ -346,7 +346,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
                     } else if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
                         guard.remove(&peer_ip);
-                        Some((PunchResultCode::PunchResultTimeout, "deadline exceeded"))
+                        Some((PunchResultCode::PunchResultNoResponse, "deadline exceeded"))
                     } else {
                         None
                     }
@@ -513,7 +513,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     self.set_device_info_list(response.device_info_list, response.epoch as _);
                     self.runtime
                         .control_session
-                        .trigger_status_report_with_nat_ready();
+                        .trigger_status_report_with_nat_ready(if old.status.offline() {
+                            crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery
+                        } else {
+                            crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate
+                        });
                     if should_refresh_gateway_grant_after_registration(
                         old.status.offline(),
                         response.gateway_access_grant.as_ref().is_some(),
@@ -549,7 +553,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.set_device_info_list(response.device_info_list, response.epoch as _);
                 self.runtime
                     .control_session
-                    .trigger_status_report_with_nat_ready();
+                    .trigger_status_report_with_nat_ready(
+                        crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate,
+                    );
             }
             service_packet::Protocol::DeviceAuthAck => {
                 let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
@@ -734,13 +740,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime.debug_watch.emit(
                     "punch",
                     "start_received",
-                    serde_json::json!({
-                        "peer_ip": peer_ip.to_string(),
-                        "session_id": punch_start.session_id,
-                        "attempt": punch_start.attempt,
-                        "endpoint_count": punch_start.peer_endpoints.len(),
-                        "public_ips": peer_nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                        "public_ports": peer_nat_info.public_ports,
+                        serde_json::json!({
+                            "peer_ip": peer_ip.to_string(),
+                            "session_id": punch_start.session_id,
+                            "attempt": punch_start.attempt,
+                            "attempt_budget": punch_start.attempt_budget,
+                            "trigger_reason": format!("{:?}", punch_start.trigger_reason.enum_value_or_default()),
+                            "selection_policy": format!("{:?}", punch_start.endpoint_selection_policy.enum_value_or_default()),
+                            "endpoint_count": punch_start.peer_endpoints.len(),
+                            "public_ips": peer_nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                            "public_ports": peer_nat_info.public_ports,
                         "local_ipv4": peer_nat_info.local_ipv4().map(|ip| ip.to_string()),
                     }),
                 );
@@ -781,7 +790,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         prev.source,
                         prev.target,
                         prev.attempt,
-                        PunchResultCode::PunchResultFailed,
+                        PunchResultCode::PunchResultSuperseded,
                         "superseded by new attempt",
                     )?;
                 }
@@ -791,11 +800,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .submit_local(peer_ip, peer_nat_info);
                 let reason = if accepted { "" } else { "punch queue busy" };
                 log::info!(
-                    "PunchStart ack peer={} session_id={} attempt={} accepted={} reason={}",
+                    "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} reason={}",
                     peer_ip,
                     punch_start.session_id,
                     punch_start.attempt,
                     accepted,
+                    if accepted {
+                        PunchSessionPhase::PunchPhaseSending
+                    } else {
+                        PunchSessionPhase::PunchPhaseFailed
+                    },
                     reason
                 );
                 let ack = build_punch_ack(
@@ -821,7 +835,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         u32::from(current_device.virtual_ip),
                         punch_start.target,
                         punch_start.attempt,
-                        PunchResultCode::PunchResultFailed,
+                        PunchResultCode::PunchResultRejected,
                         reason,
                     )?;
                 } else {
@@ -1130,6 +1144,11 @@ fn build_punch_ack(
     ack.attempt = attempt;
     ack.accepted = accepted;
     ack.reason = reason.to_string();
+    ack.phase = protobuf::EnumOrUnknown::new(if accepted {
+        PunchSessionPhase::PunchPhaseSending
+    } else {
+        PunchSessionPhase::PunchPhaseFailed
+    });
     ack
 }
 
@@ -1149,10 +1168,25 @@ fn build_punch_result(
     result.attempt = attempt;
     result.code = protobuf::EnumOrUnknown::new(code);
     result.reason = reason.to_string();
+    result.phase = protobuf::EnumOrUnknown::new(punch_phase_from_result_code(code));
     if let Some(endpoint) = selected_endpoint {
         result.selected_endpoint = protobuf::MessageField::some(endpoint);
     }
     result
+}
+
+fn punch_phase_from_result_code(code: PunchResultCode) -> PunchSessionPhase {
+    match code {
+        PunchResultCode::PunchResultSuccess => PunchSessionPhase::PunchPhaseSuccess,
+        PunchResultCode::PunchResultNoResponse | PunchResultCode::PunchResultTimeout => {
+            PunchSessionPhase::PunchPhaseTimeout
+        }
+        PunchResultCode::PunchResultUnknown
+        | PunchResultCode::PunchResultFailed
+        | PunchResultCode::PunchResultCanceled
+        | PunchResultCode::PunchResultRejected
+        | PunchResultCode::PunchResultSuperseded => PunchSessionPhase::PunchPhaseFailed,
+    }
 }
 
 fn send_punch_result_via_control(
@@ -1336,7 +1370,7 @@ mod tests {
     };
     use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;
-    use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchStart};
+    use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart};
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -1387,6 +1421,10 @@ mod tests {
         assert_eq!(ack.attempt, 4);
         assert!(!ack.accepted);
         assert_eq!(ack.reason, "busy");
+        assert_eq!(
+            ack.phase.enum_value_or_default(),
+            PunchSessionPhase::PunchPhaseFailed
+        );
     }
 
     #[test]
@@ -1396,7 +1434,7 @@ mod tests {
             3,
             4,
             5,
-            PunchResultCode::PunchResultTimeout,
+            PunchResultCode::PunchResultNoResponse,
             "timeout",
             None,
         );
@@ -1406,9 +1444,13 @@ mod tests {
         assert_eq!(result.attempt, 5);
         assert_eq!(
             result.code.enum_value_or_default(),
-            PunchResultCode::PunchResultTimeout
+            PunchResultCode::PunchResultNoResponse
         );
         assert_eq!(result.reason, "timeout");
+        assert_eq!(
+            result.phase.enum_value_or_default(),
+            PunchSessionPhase::PunchPhaseTimeout
+        );
     }
 
     #[test]

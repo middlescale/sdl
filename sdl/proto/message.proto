@@ -261,12 +261,36 @@ enum PunchNatModel {
     IPv4Udp = 3;
     IPv6Udp = 4;
 }
+enum PunchTriggerReason {
+    PunchTriggerUnknown = 0;
+    PunchTriggerStatusUpdate = 1;
+    PunchTriggerRouteTimeout = 2;
+    PunchTriggerReconnectRecovery = 3;
+    PunchTriggerManualRequest = 4;
+}
+enum PunchSessionPhase {
+    PunchPhaseUnknown = 0;
+    PunchPhaseScheduled = 1;
+    PunchPhaseSending = 2;
+    PunchPhaseWaiting = 3;
+    PunchPhaseSuccess = 4;
+    PunchPhaseTimeout = 5;
+    PunchPhaseFailed = 6;
+}
+enum PunchEndpointSelectionPolicy {
+    PunchEndpointSelectionDefault = 0;
+    PunchEndpointSelectionAll = 1;
+    PunchEndpointSelectionPreferPublic = 2;
+}
 enum PunchResultCode {
     PunchResultUnknown = 0;
     PunchResultSuccess = 1;
     PunchResultFailed = 2;
     PunchResultTimeout = 3;
     PunchResultCanceled = 4;
+    PunchResultRejected = 5;
+    PunchResultNoResponse = 6;
+    PunchResultSuperseded = 7;
 }
 message PunchEndpoint {
     fixed32 ip = 1;
@@ -285,6 +309,9 @@ message PunchRequest {
     uint32 attempt = 8;
     uint32 timeout_ms = 9;
     int64 deadline_unix_ms = 10;
+    PunchTriggerReason trigger_reason = 11;
+    uint32 attempt_budget = 12;
+    PunchEndpointSelectionPolicy endpoint_selection_policy = 13;
 }
 message PunchAck {
     uint64 session_id = 1;
@@ -292,6 +319,7 @@ message PunchAck {
     uint32 attempt = 3;
     bool accepted = 4;
     string reason = 5;
+    PunchSessionPhase phase = 6;
 }
 message PunchStart {
     uint64 session_id = 1;
@@ -301,6 +329,9 @@ message PunchStart {
     uint32 attempt = 5;
     uint32 timeout_ms = 6;
     int64 deadline_unix_ms = 7;
+    PunchTriggerReason trigger_reason = 8;
+    uint32 attempt_budget = 9;
+    PunchEndpointSelectionPolicy endpoint_selection_policy = 10;
 }
 message PunchResult {
     uint64 session_id = 1;
@@ -310,6 +341,7 @@ message PunchResult {
     PunchResultCode code = 5;
     string reason = 6;
     PunchEndpoint selected_endpoint = 7;
+    PunchSessionPhase phase = 8;
 }
 
 /// 向服务器上报客户端状态信息
@@ -322,6 +354,7 @@ message ClientStatusInfo {
     reserved 6, 7, 9;
     repeated uint32 local_udp_ports = 8;
     repeated PunchEndpoint public_udp_endpoints = 10;
+    PunchTriggerReason punch_trigger_reason = 11;
 }
 message RouteItem {
     fixed32 next_ip = 1;

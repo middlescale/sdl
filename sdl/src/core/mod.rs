@@ -41,6 +41,8 @@ pub struct Config {
     pub punch_model: PunchModel,
     pub ports: Option<Vec<u16>>,
     pub latency_first: bool,
+    pub p2p_heartbeat_interval_sec: u64,
+    pub p2p_route_idle_timeout_sec: u64,
     #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
@@ -91,6 +93,8 @@ impl Config {
             PunchModel::All,
             ports,
             false,
+            10,
+            30,
             nic,
             UseChannelType::All,
             None,
@@ -122,6 +126,8 @@ impl Config {
         punch_model: PunchModel,
         ports: Option<Vec<u16>>,
         latency_first: bool,
+        p2p_heartbeat_interval_sec: u64,
+        p2p_route_idle_timeout_sec: u64,
         device_name: Option<String>,
         use_channel_type: UseChannelType,
         packet_loss_rate: Option<f64>,
@@ -153,6 +159,17 @@ impl Config {
             return Err(anyhow!(
                 "unsupported runtime cipher model '{}', only aes_gcm or none are allowed",
                 cipher_model
+            ));
+        }
+        if p2p_heartbeat_interval_sec == 0 {
+            return Err(anyhow!("p2p_heartbeat_interval_sec must be greater than 0"));
+        }
+        if p2p_route_idle_timeout_sec == 0 {
+            return Err(anyhow!("p2p_route_idle_timeout_sec must be greater than 0"));
+        }
+        if p2p_route_idle_timeout_sec <= p2p_heartbeat_interval_sec {
+            return Err(anyhow!(
+                "p2p_route_idle_timeout_sec must be greater than p2p_heartbeat_interval_sec"
             ));
         }
         let server_address_str = server_address_str.trim().to_string();
@@ -217,6 +234,8 @@ impl Config {
             punch_model,
             ports,
             latency_first,
+            p2p_heartbeat_interval_sec,
+            p2p_route_idle_timeout_sec,
             #[cfg(feature = "integrated_tun")]
             #[cfg(not(target_os = "android"))]
             device_name,

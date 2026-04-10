@@ -37,7 +37,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
                         .control_session
                         .supports_udp_endpoint_report_v1()
                     {
-                        self.runtime.control_session.trigger_status_report();
+                        self.runtime.control_session.trigger_status_report(
+                            crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate,
+                        );
                     }
                     return;
                 }
