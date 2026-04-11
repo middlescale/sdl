@@ -86,9 +86,7 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
             .device_name
             .clone()
             .unwrap_or(DEFAULT_TUN_NAME.to_string());
-        if &device_name == DEFAULT_TUN_NAME {
-            delete_device(DEFAULT_TUN_NAME);
-        }
+        delete_device(&device_name);
     }
 
     let device = tun_builder.mtu(config.mtu as u16).build_sync()?;
