@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -451,6 +452,7 @@ impl SdlRuntime {
                 json!({
                     "name": self.config.name,
                     "device_id": self.config.device_id,
+                    "sdl_version": crate::SDL_VERSION,
                     "server_addr": self.config.server_addr,
                     "mtu": self.config.mtu,
                     "virtual_ip": current_device.virtual_ip.to_string(),
@@ -465,6 +467,8 @@ impl SdlRuntime {
                         "servers": profile.servers,
                         "match_domains": profile.match_domains,
                     })).unwrap_or(Value::Null),
+                    "system": debug_system_info_json(),
+                    "build": debug_build_info_json(),
                     "auth_request": {
                         "user_id": auth_request.user_id,
                         "group": auth_request.group,
@@ -610,4 +614,39 @@ impl SdlRuntime {
 
         serde_json::to_string_pretty(&Value::Object(root)).map_err(Into::into)
     }
+}
+
+fn debug_system_info_json() -> Value {
+    json!({
+        "hostname": gethostname::gethostname().to_string_lossy().into_owned(),
+        "os": env::consts::OS,
+        "arch": env::consts::ARCH,
+        "family": env::consts::FAMILY,
+        "target_env": option_env!("CARGO_CFG_TARGET_ENV"),
+        "target_vendor": option_env!("CARGO_CFG_TARGET_VENDOR"),
+        "process_id": std::process::id(),
+        "current_dir": env::current_dir().ok().map(|path| path.display().to_string()),
+        "current_exe": env::current_exe().ok().map(|path| path.display().to_string()),
+    })
+}
+
+fn debug_build_info_json() -> Value {
+    json!({
+        "package_name": env!("CARGO_PKG_NAME"),
+        "package_version": env!("CARGO_PKG_VERSION"),
+        "debug_assertions": cfg!(debug_assertions),
+        "features": {
+            "integrated_tun": cfg!(feature = "integrated_tun"),
+            "quic": cfg!(feature = "quic"),
+            "port_mapping": cfg!(feature = "port_mapping"),
+            "upnp": cfg!(feature = "upnp"),
+            "lz4_compress": cfg!(feature = "lz4_compress"),
+            "zstd_compress": cfg!(feature = "zstd_compress"),
+            "aes_gcm": cfg!(feature = "aes_gcm"),
+            "aes_cbc": cfg!(feature = "aes_cbc"),
+            "aes_ecb": cfg!(feature = "aes_ecb"),
+            "sm4_cbc": cfg!(feature = "sm4_cbc"),
+            "chacha20_poly1305": cfg!(feature = "chacha20_poly1305"),
+        },
+    })
 }
