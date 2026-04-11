@@ -103,6 +103,7 @@ pub fn device_auth_proof_packet(
 
 pub fn device_rename_request_packet(
     request_id: u64,
+    source_ip: Ipv4Addr,
     device_id: String,
     new_name: String,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
@@ -116,11 +117,31 @@ pub fn device_rename_request_packet(
     let buf = vec![0u8; 12 + bytes.len()];
     let mut net_packet = NetPacket::new(buf)?;
     net_packet.set_destination(CONTROL_VIP);
-    net_packet.set_source(SELF_IP);
+    net_packet.set_source(source_ip);
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Service);
     net_packet.set_transport_protocol(service_packet::Protocol::DeviceRenameRequest.into());
     net_packet.set_initial_ttl(MAX_TTL);
     net_packet.set_payload(&bytes)?;
     Ok(net_packet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_rename_request_uses_registered_virtual_ip_as_source() {
+        let source_ip = Ipv4Addr::new(10, 26, 0, 3);
+        let packet = device_rename_request_packet(
+            7,
+            source_ip,
+            "dev-1".to_string(),
+            "renamed-node".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(packet.source(), source_ip);
+        assert_eq!(packet.destination(), CONTROL_VIP);
+    }
 }

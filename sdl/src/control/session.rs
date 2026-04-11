@@ -360,8 +360,13 @@ impl ControlSession {
         request_id: u64,
         new_name: String,
     ) -> anyhow::Result<()> {
+        let current_device = self.current_device();
+        if current_device.virtual_ip.is_unspecified() {
+            anyhow::bail!("cannot rename device before registration");
+        }
         let packet = registrar::device_rename_request_packet(
             request_id,
+            current_device.virtual_ip,
             self.config.device_id.clone(),
             new_name,
         )?;
@@ -618,4 +623,3 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
         }
     }
 }
-
