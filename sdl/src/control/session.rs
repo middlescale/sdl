@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -15,8 +16,7 @@ use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::callback::{ConnectInfo, ErrorType};
 use crate::handle::registrar;
-use crate::handle::PeerDeviceInfo;
-use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
+use crate::handle::{ConnectStatus, CurrentDeviceInfo, CONTROL_VIP};
 use crate::nat::NatTest;
 use crate::proto::message::{
     ClientStatusInfo, DeviceAuthChallenge, HandshakeRequest, PunchEndpoint, PunchNatType,
@@ -36,21 +36,16 @@ const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
 const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
 const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
+const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Shared data-plane objects that are owned jointly by the control session and
+/// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
 #[derive(Clone)]
-pub struct ControlSessionDeps {
+pub struct SharedDataPlane {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub peer_crypto: Arc<PeerCryptoManager>,
-    pub peer_state: Arc<
-        Mutex<(
-            u16,
-            std::collections::HashMap<std::net::Ipv4Addr, PeerDeviceInfo>,
-        )>,
-    >,
+    pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub gateway_sessions: GatewaySessions,
-    pub data_plane_stats: DataPlaneStats,
-    pub nat_test: NatTest,
-    pub negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
     pub route_manager: RouteManager,
 }
 
@@ -58,20 +53,35 @@ pub struct ControlSessionDeps {
 pub struct ControlSession {
     channel: Http3Channel,
     config: RuntimeConfig,
-    deps: ControlSessionDeps,
+    data_plane: SharedDataPlane,
+    data_plane_stats: DataPlaneStats,
+    nat_test: NatTest,
+    negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
+    last_control_packet_at_ms: Arc<AtomicU64>,
 }
 
 impl ControlSession {
-    pub fn new(channel: Http3Channel, config: RuntimeConfig, deps: ControlSessionDeps) -> Self {
+    pub fn new(
+        channel: Http3Channel,
+        config: RuntimeConfig,
+        data_plane: SharedDataPlane,
+        data_plane_stats: DataPlaneStats,
+        nat_test: NatTest,
+        negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
+    ) -> Self {
         Self {
             channel,
             config,
-            deps,
+            data_plane,
+            data_plane_stats,
+            nat_test,
+            negotiated_capabilities,
+            last_control_packet_at_ms: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.deps.current_device.load()
+        self.data_plane.current_device.load()
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -100,7 +110,15 @@ impl ControlSession {
     where
         F: Fn(Vec<u8>, crate::data_plane::route::RouteKey) + Send + Sync + 'static,
     {
-        self.channel.start(stop_manager.clone(), on_packet)?;
+        // Wrap on_packet so every packet received on the control channel
+        // automatically updates the liveness timestamp — no address-based
+        // detection needed at the call site.
+        let last_ts = self.last_control_packet_at_ms.clone();
+        let wrapped = move |data: Vec<u8>, route_key: crate::data_plane::route::RouteKey| {
+            last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
+            on_packet(data, route_key);
+        };
+        self.channel.start(stop_manager.clone(), wrapped)?;
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
         let worker = stop_manager.add_listener("controlSession".into(), move || {
             let _ = stop_sender.send(());
@@ -120,7 +138,7 @@ impl ControlSession {
         call: &Call,
         connect_count: &mut usize,
     ) -> io::Result<()> {
-        let current_device_info = &self.deps.current_device;
+        let current_device_info = &self.data_plane.current_device;
         let mut current_device = current_device_info.load();
         if current_device.status.offline() {
             *connect_count += 1;
@@ -136,6 +154,26 @@ impl ControlSession {
             }
         }
         Ok(())
+    }
+
+    fn idle_timed_out(&self) -> bool {
+        let last = self.last_control_packet_at_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return false;
+        }
+        (crate::handle::now_time() as u64).saturating_sub(last)
+            > CONTROL_SESSION_IDLE_TIMEOUT.as_millis() as u64
+    }
+
+    fn mark_control_disconnected<Call: SdlCallback>(&self, call: &Call, reason: String) {
+        self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
+        crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
+        call.error(ErrorInfo::new_msg(
+            ErrorType::Disconnect,
+            format!("{reason}; existing gateway/p2p data plane is kept"),
+        ));
+        self.data_plane.route_manager.clear_peer(&CONTROL_VIP);
+        log::warn!("{reason}");
     }
 
     fn run<Call: SdlCallback>(&self, call: Call, stop_receiver: mpsc::Receiver<()>) {
@@ -171,15 +209,25 @@ impl ControlSession {
                 }
                 continue;
             }
+            if self.idle_timed_out() {
+                self.mark_control_disconnected(
+                    &call,
+                    format!(
+                        "control session idle for more than {:?}, reconnecting",
+                        CONTROL_SESSION_IDLE_TIMEOUT
+                    ),
+                );
+                continue;
+            }
             if last_heartbeat_at.elapsed() >= Duration::from_secs(3) {
                 last_heartbeat_at = Instant::now();
-                match self.send_server_heartbeat(self.deps.peer_state.lock().0) {
+                match self.send_server_heartbeat(self.data_plane.peer_state.lock().epoch) {
                     Ok(_) => {}
                     Err(e) => {
                         log::warn!("heartbeat err={:?}", e);
                     }
                 }
-                try_refresh_gateway_grant(self, &self.deps.gateway_sessions);
+                try_refresh_gateway_grant(self, &self.data_plane.gateway_sessions);
             }
             if last_status_report_at.elapsed() >= status_report_delay {
                 if let Err(e) =
@@ -190,14 +238,18 @@ impl ControlSession {
                 last_status_report_at = Instant::now();
                 status_report_delay = Duration::from_secs(10 * 60);
             }
-            if !self.deps.route_manager.use_channel_type().is_only_relay()
+            if !self
+                .data_plane
+                .route_manager
+                .use_channel_type()
+                .is_only_relay()
                 && last_public_addr_at.elapsed() >= public_addr_delay
             {
-                if let Err(e) = self.deps.nat_test.request_public_addr() {
+                if let Err(e) = self.nat_test.request_public_addr() {
                     log::warn!("{:?}", e);
                 }
                 last_public_addr_at = Instant::now();
-                public_addr_delay = self.deps.nat_test.public_addr_retry_delay();
+                public_addr_delay = self.nat_test.public_addr_retry_delay();
             }
         }
     }
@@ -254,7 +306,7 @@ impl ControlSession {
             ip = Some(current_device.virtual_ip);
         }
         let online_kx_pub = self
-            .deps
+            .data_plane
             .peer_crypto
             .ensure_online_session_key()
             .public_key()
@@ -361,20 +413,17 @@ impl ControlSession {
     }
 
     pub fn set_negotiated_capabilities(&self, capabilities: &[String]) {
-        let mut negotiated = self.deps.negotiated_capabilities.write();
+        let mut negotiated = self.negotiated_capabilities.write();
         negotiated.clear();
         negotiated.extend(capabilities.iter().cloned());
     }
 
     fn clear_negotiated_capabilities(&self) {
-        self.deps.negotiated_capabilities.write().clear();
+        self.negotiated_capabilities.write().clear();
     }
 
     fn has_capability(&self, capability: &str) -> bool {
-        self.deps
-            .negotiated_capabilities
-            .read()
-            .contains(capability)
+        self.negotiated_capabilities.read().contains(capability)
     }
 
     pub fn trigger_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
@@ -382,8 +431,8 @@ impl ControlSession {
         thread::Builder::new()
             .name("upStatusEvent".into())
             .spawn(move || {
-                if !control_session.deps.nat_test.has_public_udp_endpoints() {
-                    if let Err(e) = control_session.deps.nat_test.request_public_addr() {
+                if !control_session.nat_test.has_public_udp_endpoints() {
+                    if let Err(e) = control_session.nat_test.request_public_addr() {
                         log::warn!("{:?}", e);
                     }
                     thread::sleep(Duration::from_secs(2));
@@ -400,7 +449,7 @@ impl ControlSession {
         if device_info.status.offline() {
             return Ok(());
         }
-        let routes = self.deps.route_manager.snapshot_direct_routes();
+        let routes = self.data_plane.route_manager.snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
         for (ip, _) in routes {
@@ -408,15 +457,15 @@ impl ControlSession {
             item.next_ip = ip.into();
             message.p2p_list.push(item);
         }
-        message.up_stream = self.deps.data_plane_stats.up_traffic_total();
-        message.down_stream = self.deps.data_plane_stats.down_traffic_total();
+        message.up_stream = self.data_plane_stats.up_traffic_total();
+        message.down_stream = self.data_plane_stats.down_traffic_total();
         message.nat_type =
-            protobuf::EnumOrUnknown::new(if self.deps.nat_test.nat_info().nat_type.is_cone() {
+            protobuf::EnumOrUnknown::new(if self.nat_test.nat_info().nat_type.is_cone() {
                 PunchNatType::Cone
             } else {
                 PunchNatType::Symmetric
             });
-        let nat_info = self.deps.nat_test.nat_info();
+        let nat_info = self.nat_test.nat_info();
         message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
         message.public_udp_endpoints = nat_info
             .public_udp_endpoints

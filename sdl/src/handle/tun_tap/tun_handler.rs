@@ -5,7 +5,6 @@ use sdl_packet::icmp::Kind;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::ip::ipv4::protocol::Protocol;
 use sdl_packet::udp::udp::UdpPacket;
-use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::{io, thread};
@@ -16,7 +15,7 @@ use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
-use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::CurrentDeviceInfo;
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
@@ -44,7 +43,7 @@ pub fn start(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -76,12 +75,12 @@ fn broadcast(
     gateway_sessions: &GatewaySessions,
     net_packet: &NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
-    peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_state: &Mutex<crate::handle::PeerState>,
     peer_crypto: &PeerCryptoManager,
 ) -> anyhow::Result<()> {
     let list: Vec<Ipv4Addr> = peer_state
         .lock()
-        .1
+        .devices
         .values()
         .filter(|info| info.status.is_online())
         .map(|info| info.virtual_ip)
@@ -89,8 +88,8 @@ fn broadcast(
     if list.is_empty() {
         return Ok(());
     }
-    if current_device.status.offline() {
-        //离线的不再转发
+    if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
+        //未分配 VIP 时不转发
         return Ok(());
     }
     for peer_ip in list {
@@ -146,7 +145,7 @@ pub(crate) fn handle(
     current_device: CurrentDeviceInfo,
     gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
-    peer_state: &Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>,
+    peer_state: &Mutex<crate::handle::PeerState>,
     peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {

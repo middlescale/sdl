@@ -589,7 +589,13 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 if !self.runtime.complete_rename_request(
                     response.request_id,
                     if response.ok {
-                        Ok(response.applied_name.clone())
+                        if response.pending_approval {
+                            Ok(crate::core::RenameRequestOutcome::PendingApproval)
+                        } else {
+                            Ok(crate::core::RenameRequestOutcome::Applied(
+                                response.applied_name.clone(),
+                            ))
+                        }
                     } else {
                         Err(response.reason.clone())
                     },
@@ -876,7 +882,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     fn set_device_info_list(&self, device_info_list: Vec<proto::message::DeviceInfo>, epoch: u16) {
         let previous_peers = {
             let peer_state = self.runtime.peer_state.lock();
-            let current_epoch = peer_state.0;
+            let current_epoch = peer_state.epoch;
             if is_stale_epoch(current_epoch, epoch) {
                 log::info!(
                     "ignore stale device list: current_epoch={}, incoming_epoch={}",
@@ -885,7 +891,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 );
                 return;
             }
-            peer_state.1.clone()
+            peer_state.devices.clone()
         };
         let ip_list: Vec<PeerDeviceInfo> = device_info_list
             .into_iter()
@@ -974,10 +980,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         {
             let mut dev = self.runtime.peer_state.lock();
             //这里可能会收到旧的消息，但是随着时间推移总会收到新的
-            dev.0 = epoch;
-            dev.1.clear();
+            dev.epoch = epoch;
+            dev.devices.clear();
             for peer_info in ip_list.clone() {
-                dev.1.insert(peer_info.virtual_ip, peer_info);
+                dev.devices.insert(peer_info.virtual_ip, peer_info);
             }
         }
         self.runtime
@@ -1033,7 +1039,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 //掉线epoch要归零
                 {
                     let mut dev = self.runtime.peer_state.lock();
-                    dev.0 = 0;
+                    dev.epoch = 0;
                     drop(dev);
                 }
                 self.runtime.peer_crypto.clear_all();
@@ -1104,7 +1110,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.runtime
                     .route_manager()
                     .add_path(net_packet.source(), route);
-                let epoch = self.runtime.peer_state.lock().0;
+                let epoch = self.runtime.peer_state.lock().epoch;
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
                     self.runtime

@@ -4,7 +4,7 @@ use crate::command::service_state::{read_service_state, write_service_state, Loc
 use crate::config::{write_saved_config, FileConfig};
 use anyhow::Context;
 use console::style;
-use sdl::core::{Config, Sdl};
+use sdl::core::{Config, RenameRequestOutcome, Sdl};
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use std::io;
@@ -36,14 +36,20 @@ impl ServiceManager {
             return Ok(format!("device name already set to {}", trimmed));
         }
         let runtime = self.current_runtime()?;
-        let applied_name =
-            runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))?;
-        self.config.lock().unwrap().name = applied_name.clone();
-        self.saved_config.lock().unwrap().name = applied_name.clone();
-        self.persist_saved_config();
-        let _ = self.stop_service_runtime()?;
-        self.resume_service_runtime()?;
-        Ok(format!("device renamed to {}", applied_name))
+        match runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))? {
+            RenameRequestOutcome::Applied(applied_name) => {
+                self.config.lock().unwrap().name = applied_name.clone();
+                self.saved_config.lock().unwrap().name = applied_name.clone();
+                self.persist_saved_config();
+                let _ = self.stop_service_runtime()?;
+                self.resume_service_runtime()?;
+                Ok(format!("device renamed to {}", applied_name))
+            }
+            RenameRequestOutcome::PendingApproval => Ok(format!(
+                "rename request submitted for approval: {}",
+                trimmed
+            )),
+        }
     }
 
     fn new(config: Config, saved_config: FileConfig) -> Self {
@@ -107,6 +113,7 @@ impl ServiceManager {
             gateway_endpoint: String::new(),
             gateway_channel: String::new(),
             connect_status: "Stopped".to_string(),
+            data_plane_status: "stopped".to_string(),
             auth_pending: state.auth_pending,
             channel_policy,
             last_error: state.last_error,

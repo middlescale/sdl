@@ -3,7 +3,7 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -22,11 +22,6 @@ use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
 use crate::util::{DebugWatch, StopManager};
 
-#[derive(Clone)]
-struct GatewayRuntime {
-    stop_manager: StopManager,
-    on_packet: PacketCallback,
-}
 
 #[derive(Clone, Default)]
 struct GatewaySessionState {
@@ -97,17 +92,17 @@ impl GatewaySession {
         })
     }
 
-    fn start(&self, runtime: &GatewayRuntime) -> anyhow::Result<()> {
+    fn start(&self, stop_manager: &StopManager, on_packet: &PacketCallback) -> anyhow::Result<()> {
         if self.started.swap(true) {
             return Ok(());
         }
         let worker_name = format!("gateway-{}", sanitize_worker_name(self.endpoint));
-        let on_packet = runtime.on_packet.clone();
+        let on_packet = on_packet.clone();
         match &self.channel {
             GatewayTransport::Quic(channel) => {
                 let on_packet = on_packet.clone();
                 channel.start_named(
-                    runtime.stop_manager.clone(),
+                    stop_manager.clone(),
                     &worker_name,
                     move |packet, route_key| {
                         on_packet(packet, route_key);
@@ -115,7 +110,7 @@ impl GatewaySession {
                 )?
             }
             GatewayTransport::Udp(channel) => {
-                channel.start_named(runtime.stop_manager.clone(), &worker_name, on_packet)?
+                channel.start_named(stop_manager.clone(), &worker_name, on_packet)?
             }
         }
         Ok(())
@@ -207,7 +202,7 @@ impl GatewaySession {
     }
 
     fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
-        if current_device.status.offline() || current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
+        if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
             return Ok(());
         }
         let Some(packet) = self.maybe_build_connect_hello(current_device)? else {
@@ -415,7 +410,7 @@ pub struct GatewaySessionSummary {
 #[derive(Clone)]
 pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    runtime: Arc<Mutex<Option<GatewayRuntime>>>,
+    runtime: Arc<OnceLock<(StopManager, PacketCallback)>>,
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     worker_started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
@@ -428,7 +423,7 @@ impl GatewaySessions {
     ) -> Self {
         Self {
             current_device,
-            runtime: Arc::new(Mutex::new(None)),
+            runtime: Arc::new(OnceLock::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             worker_started: Arc::new(AtomicCell::new(false)),
             debug_watch,
@@ -439,16 +434,10 @@ impl GatewaySessions {
     where
         F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
     {
-        let runtime = GatewayRuntime {
-            stop_manager: stop_manager.clone(),
-            on_packet: Arc::new(on_packet),
-        };
-        {
-            let mut guard = self.runtime.lock();
-            *guard = Some(runtime.clone());
-        }
+        let _ = self.runtime.set((stop_manager.clone(), Arc::new(on_packet)));
+        let (stop_manager, on_packet) = self.runtime.get().unwrap();
         for session in self.sessions.lock().values() {
-            session.start(&runtime)?;
+            session.start(stop_manager, on_packet)?;
         }
         if self.worker_started.swap(true) {
             return Ok(());
@@ -558,7 +547,6 @@ impl GatewaySessions {
             grant.session_id,
             grant.default_gateway_channel.enum_value_or_default()
         );
-        let runtime = self.runtime.lock().clone();
         let mut guard = self.sessions.lock();
         guard.retain(|addr, _| desired.contains(addr));
         for (endpoint, kind) in parsed {
@@ -588,8 +576,8 @@ impl GatewaySessions {
                 log::warn!("update gateway session failed {}: {:?}", endpoint, e);
                 continue;
             }
-            if let Some(runtime) = runtime.as_ref() {
-                if let Err(e) = session.start(runtime) {
+            if let Some((stop_manager, on_packet)) = self.runtime.get() {
+                if let Err(e) = session.start(stop_manager, on_packet) {
                     log::warn!("start gateway session failed {}: {:?}", endpoint, e);
                 }
             }

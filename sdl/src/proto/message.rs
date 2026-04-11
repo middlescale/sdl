@@ -4508,6 +4508,8 @@ pub struct DeviceRenameResponse {
     pub reason: ::std::string::String,
     // @@protoc_insertion_point(field:DeviceRenameResponse.applied_name)
     pub applied_name: ::std::string::String,
+    // @@protoc_insertion_point(field:DeviceRenameResponse.pending_approval)
+    pub pending_approval: bool,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceRenameResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -4525,7 +4527,7 @@ impl DeviceRenameResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "request_id",
@@ -4546,6 +4548,11 @@ impl DeviceRenameResponse {
             "applied_name",
             |m: &DeviceRenameResponse| { &m.applied_name },
             |m: &mut DeviceRenameResponse| { &mut m.applied_name },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "pending_approval",
+            |m: &DeviceRenameResponse| { &m.pending_approval },
+            |m: &mut DeviceRenameResponse| { &mut m.pending_approval },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceRenameResponse>(
             "DeviceRenameResponse",
@@ -4577,6 +4584,9 @@ impl ::protobuf::Message for DeviceRenameResponse {
                 34 => {
                     self.applied_name = is.read_string()?;
                 },
+                40 => {
+                    self.pending_approval = is.read_bool()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -4601,6 +4611,9 @@ impl ::protobuf::Message for DeviceRenameResponse {
         if !self.applied_name.is_empty() {
             my_size += ::protobuf::rt::string_size(4, &self.applied_name);
         }
+        if self.pending_approval != false {
+            my_size += 1 + 1;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -4618,6 +4631,9 @@ impl ::protobuf::Message for DeviceRenameResponse {
         }
         if !self.applied_name.is_empty() {
             os.write_string(4, &self.applied_name)?;
+        }
+        if self.pending_approval != false {
+            os.write_bool(5, self.pending_approval)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -4640,6 +4656,7 @@ impl ::protobuf::Message for DeviceRenameResponse {
         self.ok = false;
         self.reason.clear();
         self.applied_name.clear();
+        self.pending_approval = false;
         self.special_fields.clear();
     }
 
@@ -4649,6 +4666,7 @@ impl ::protobuf::Message for DeviceRenameResponse {
             ok: false,
             reason: ::std::string::String::new(),
             applied_name: ::std::string::String::new(),
+            pending_approval: false,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8726,43 +8744,44 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x12'\n\x0freauth_required\x18\x07\x20\x01(\x08R\x0ereauthRequired\"l\n\
     \x13DeviceRenameRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\treq\
     uestId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x19\n\
-    \x08new_name\x18\x03\x20\x01(\tR\x07newName\"\x80\x01\n\x14DeviceRenameR\
+    \x08new_name\x18\x03\x20\x01(\tR\x07newName\"\xab\x01\n\x14DeviceRenameR\
     esponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
     \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
     \tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\
-    \"h\n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\
-    \trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\x12\
-    \x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugColle\
-    ctResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
+    \x12)\n\x10pending_approval\x18\x05\x20\x01(\x08R\x0fpendingApproval\"h\
+    \n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\tr\
+    equestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\x12\x16\n\
+    \x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugCollectResp\
+    onse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
+    \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
+    \tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\x03R\x11co\
+    llectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0csnapshotJso\
+    n\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\x18\x01\
+    \x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08s\
+    ections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSec\x12\
+    \x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17DebugWatch\
+    StartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
     \x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\
-    \x01(\tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\x03R\
-    \x11collectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0csnaps\
-    hotJson\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\x18\
-    \x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\
-    \x08sections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSec\
-    \x12\x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17DebugW\
-    atchStartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
-    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
-    \x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07wa\
-    tchId\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstartedAtUni\
-    xMs\x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtUnixMs\
-    \"i\n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
-    \x04R\trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07watchId\
-    \x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16DebugW\
-    atchStopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
-    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
-    \x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07wa\
-    tchId\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppedAtUni\
-    xMs\"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\x20\x01\
-    (\x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\
-    \x12\x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_uni\
-    x_ms\x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\
-    \x20\x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\
-    \x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\
-    \tvirtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\
-    \x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_p\
-    ub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\
-    \t\x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\
+    \x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchI\
+    d\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstartedAtUnixMs\
+    \x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtUnixMs\"i\
+    \n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\
+    \trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07watchId\x12\
+    \x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16DebugWatch\
+    StopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
+    \x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\
+    \x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchI\
+    d\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppedAtUnixMs\
+    \"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\x20\x01(\
+    \x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\x12\
+    \x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_unix_ms\
+    \x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\x20\
+    \x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\
+    \x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvi\
+    rtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\
+    \x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_k\
+    ey\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\
+    \x20\x01(\x0cR\x0bonlineKxPub\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\
     \x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\
     \x0b2\x0b.DeviceInfoR\x0edeviceInfoList\"\xe6\x02\n\tPunchInfo\x12*\n\
     \x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08n\

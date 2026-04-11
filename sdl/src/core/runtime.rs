@@ -68,8 +68,14 @@ pub struct PendingDnsQuery {
 }
 
 pub struct PendingRenameRequest {
-    pub responder: mpsc::Sender<Result<String, String>>,
+    pub responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
     pub created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RenameRequestOutcome {
+    Applied(String),
+    PendingApproval,
 }
 
 #[derive(Clone)]
@@ -85,7 +91,7 @@ pub struct SdlRuntime {
     pub peer_crypto: Arc<PeerCryptoManager>,
     pub debug_watch: DebugWatch,
     pub nat_test: NatTest,
-    pub peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
     pub external_route: ExternalRoute,
     pub out_external_route: AllowExternalRoute,
@@ -117,7 +123,7 @@ impl SdlRuntime {
     }
 
     pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerDeviceInfo> {
-        self.peer_state.lock().1.get(ip).cloned()
+        self.peer_state.lock().devices.get(ip).cloned()
     }
 
     pub fn replace_dns_profile(&self, profile: Option<DnsProfile>) -> bool {
@@ -177,7 +183,10 @@ impl SdlRuntime {
         self.pending_dns_queries.lock().remove(&request_id)
     }
 
-    pub fn remember_rename_request(&self, responder: mpsc::Sender<Result<String, String>>) -> u64 {
+    pub fn remember_rename_request(
+        &self,
+        responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
+    ) -> u64 {
         let request_id = self
             .rename_request_seq
             .fetch_add(1, Ordering::Relaxed)
@@ -199,7 +208,11 @@ impl SdlRuntime {
         self.pending_rename_requests.lock().remove(&request_id);
     }
 
-    pub fn complete_rename_request(&self, request_id: u64, result: Result<String, String>) -> bool {
+    pub fn complete_rename_request(
+        &self,
+        request_id: u64,
+        result: Result<RenameRequestOutcome, String>,
+    ) -> bool {
         let Some(request) = self.pending_rename_requests.lock().remove(&request_id) else {
             return false;
         };
@@ -504,7 +517,7 @@ impl SdlRuntime {
             let (peer_epoch, mut peer_items) = {
                 let peer_state = self.peer_state.lock();
                 let peers = peer_state
-                    .1
+                    .devices
                     .values()
                     .map(|peer| {
                         json!({
@@ -517,7 +530,7 @@ impl SdlRuntime {
                         })
                     })
                     .collect::<Vec<_>>();
-                (peer_state.0, peers)
+                (peer_state.epoch, peers)
             };
             peer_items.sort_by(|a, b| a["virtual_ip"].as_str().cmp(&b["virtual_ip"].as_str()));
             let mut peer_nat_items = self

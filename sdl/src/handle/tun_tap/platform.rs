@@ -3,13 +3,11 @@ use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
-use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::CurrentDeviceInfo;
 use crate::protocol::BUFFER_SIZE;
 use crate::util::{PeerCryptoManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tun_rs::InterruptEvent;
 use tun_rs::SyncDevice;
@@ -21,7 +19,7 @@ pub(crate) fn start_simple(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -74,7 +72,7 @@ fn start_simple0(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>>,
+    peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {

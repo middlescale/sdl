@@ -7,8 +7,11 @@ use std::time::Duration;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-use crate::control::{ControlSession, ControlSessionDeps};
-use crate::core::{runtime::AuthRequestConfig, Config, RuntimeConfig, SdlRuntime};
+use crate::control::ControlSession;
+use crate::core::{
+    runtime::{AuthRequestConfig, RenameRequestOutcome},
+    Config, RuntimeConfig, SdlRuntime,
+};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route::{Route, RouteKey};
@@ -72,8 +75,8 @@ impl Sdl {
             config.server_address,
         )));
         //设备列表
-        let peer_state: Arc<Mutex<(u16, HashMap<Ipv4Addr, PeerDeviceInfo>)>> =
-            Arc::new(Mutex::new((0, HashMap::with_capacity(16))));
+        let peer_state: Arc<Mutex<crate::handle::PeerState>> =
+            Arc::new(Mutex::new(Default::default()));
         let local_ipv4 = if let Some(local_ipv4) = config.local_ipv4 {
             Some(local_ipv4)
         } else {
@@ -156,16 +159,16 @@ impl Sdl {
         let control_session = ControlSession::new(
             Http3Channel::new(config.server_address, &config.server_address_str)?,
             runtime_config.clone(),
-            ControlSessionDeps {
+            crate::control::SharedDataPlane {
                 current_device: current_device.clone(),
                 peer_crypto: peer_crypto.clone(),
                 peer_state: peer_state.clone(),
                 gateway_sessions: gateway_sessions.clone(),
-                data_plane_stats: data_plane_stats.clone(),
-                nat_test: nat_test.clone(),
-                negotiated_capabilities: negotiated_capabilities.clone(),
                 route_manager: route_manager.clone(),
             },
+            data_plane_stats.clone(),
+            nat_test.clone(),
+            negotiated_capabilities.clone(),
         );
         {
             let control_session = control_session.clone();
@@ -363,7 +366,7 @@ impl Sdl {
     }
     pub fn device_list(&self) -> Vec<PeerDeviceInfo> {
         let device_list_lock = self.runtime.peer_state.lock();
-        let (_epoch, device_list) = device_list_lock.clone();
+        let device_list = device_list_lock.devices.clone();
         drop(device_list_lock);
         device_list.into_values().collect::<Vec<_>>()
     }
@@ -415,7 +418,7 @@ impl Sdl {
         &self,
         new_name: String,
         timeout: Duration,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<RenameRequestOutcome> {
         let (sender, receiver) = mpsc::channel();
         let request_id = self.runtime.remember_rename_request(sender);
         if let Err(err) = self
@@ -427,7 +430,7 @@ impl Sdl {
             return Err(err);
         }
         match receiver.recv_timeout(timeout) {
-            Ok(Ok(applied_name)) => Ok(applied_name),
+            Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(reason)) => anyhow::bail!("rename rejected: {}", reason),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 self.runtime.forget_rename_request(request_id);

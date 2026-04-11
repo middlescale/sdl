@@ -9,6 +9,15 @@ pub mod registrar;
 pub mod tun_tap;
 
 const SELF_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 2);
+
+/// Shared peer-device table, protected by a Mutex.
+/// `epoch` increments every time the server pushes a new device list so stale updates can be
+/// detected and dropped.
+#[derive(Debug, Default)]
+pub struct PeerState {
+    pub epoch: u16,
+    pub devices: std::collections::HashMap<Ipv4Addr, PeerDeviceInfo>,
+}
 pub(crate) const CONTROL_VIP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
 
 pub fn now_time() -> u64 {

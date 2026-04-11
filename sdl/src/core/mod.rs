@@ -8,7 +8,9 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
-pub use runtime::{AuthRequestConfig, PendingDnsQuery, RuntimeConfig, SdlRuntime};
+pub use runtime::{
+    AuthRequestConfig, PendingDnsQuery, RenameRequestOutcome, RuntimeConfig, SdlRuntime,
+};
 use std::net::{Ipv4Addr, SocketAddr};
 
 mod bootstrap;

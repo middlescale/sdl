@@ -1,3 +1,3 @@
 mod session;
 
-pub use session::{ControlSession, ControlSessionDeps};
+pub use session::{ControlSession, SharedDataPlane};

@@ -58,12 +58,7 @@ struct TunDeviceHelperInner {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<
-        Mutex<(
-            u16,
-            std::collections::HashMap<std::net::Ipv4Addr, crate::handle::PeerDeviceInfo>,
-        )>,
-    >,
+    peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 }
@@ -75,12 +70,7 @@ impl TunDeviceHelper {
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
-        peer_state: Arc<
-            Mutex<(
-                u16,
-                std::collections::HashMap<std::net::Ipv4Addr, crate::handle::PeerDeviceInfo>,
-            )>,
-        >,
+        peer_state: Arc<Mutex<crate::handle::PeerState>>,
         peer_crypto: Arc<PeerCryptoManager>,
         compressor: Compressor,
         device_adapter: DeviceAdapter,

@@ -43,12 +43,20 @@ pub fn console_info(status: Info) {
     }
     println!("Virtual netmask: {}", style(status.virtual_netmask).green());
     if status.connect_status.eq_ignore_ascii_case("Connected") {
-        println!(
-            "Connection status: {}",
-            style(status.connect_status).green()
-        );
+        println!("Control session: {}", style(status.connect_status).green());
     } else {
-        println!("Connection status: {}", style(status.connect_status).red());
+        println!("Control session: {}", style(status.connect_status).red());
+    }
+    if status
+        .data_plane_status
+        .eq_ignore_ascii_case("gateway-available")
+        || status
+            .data_plane_status
+            .eq_ignore_ascii_case("p2p-available")
+    {
+        println!("Data plane: {}", style(status.data_plane_status).green());
+    } else {
+        println!("Data plane: {}", style(status.data_plane_status).yellow());
     }
 
     println!(

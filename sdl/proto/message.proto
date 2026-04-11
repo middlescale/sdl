@@ -181,6 +181,7 @@ message DeviceRenameResponse {
     bool ok = 2;
     string reason = 3;
     string applied_name = 4;
+    bool pending_approval = 5;
 }
 message DebugCollectRequest {
     uint64 request_id = 1;

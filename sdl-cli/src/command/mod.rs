@@ -280,6 +280,17 @@ pub fn command_info(vnt: &Sdl) -> Info {
         String::new()
     };
     let connect_status = format!("{:?}", vnt.connection_status());
+    let data_plane_status = if gateway_summary.authenticated {
+        "gateway-available".to_string()
+    } else if vnt
+        .route_states()
+        .into_iter()
+        .any(|(_, routes)| routes.into_iter().any(|route| route.kind == RouteKind::P2p))
+    {
+        "p2p-available".to_string()
+    } else {
+        "limited".to_string()
+    };
     let channel_policy = match vnt.use_channel_type() {
         UseChannelType::Relay => "relay".to_string(),
         UseChannelType::P2p => "p2p".to_string(),
@@ -321,6 +332,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
         gateway_endpoint,
         gateway_channel,
         connect_status,
+        data_plane_status,
         auth_pending: service_state.auth_pending,
         channel_policy,
         last_error: service_state.last_error,

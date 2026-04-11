@@ -12,6 +12,7 @@ pub struct Info {
     pub gateway_endpoint: String,
     pub gateway_channel: String,
     pub connect_status: String,
+    pub data_plane_status: String,
     pub auth_pending: bool,
     pub channel_policy: String,
     pub last_error: Option<String>,
