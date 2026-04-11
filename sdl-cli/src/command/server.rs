@@ -66,7 +66,7 @@ where
 {
     let frame = ipc::read_frame(conn)?;
     let cmd = std::str::from_utf8(&frame).map_err(io::Error::other)?;
-    let out = command(cmd, handler)?;
+    let out = command(cmd, handler).unwrap_or_else(|e| format!("error {}", e));
     ipc::write_frame(conn, out.as_bytes())
 }
 
