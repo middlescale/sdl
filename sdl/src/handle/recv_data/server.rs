@@ -586,24 +586,34 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DeviceRenameResponse => {
                 let response = DeviceRenameResponse::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DeviceRenameResponse {:?}", e)))?;
-                if !self.runtime.complete_rename_request(
-                    response.request_id,
-                    if response.ok {
-                        if response.pending_approval {
-                            Ok(crate::core::RenameRequestOutcome::PendingApproval)
-                        } else {
-                            Ok(crate::core::RenameRequestOutcome::Applied(
-                                response.applied_name.clone(),
-                            ))
-                        }
+                let result = if response.ok {
+                    if response.pending_approval {
+                        Ok(crate::core::RenameRequestOutcome::PendingApproval)
                     } else {
-                        Err(response.reason.clone())
-                    },
-                ) {
-                    log::debug!(
-                        "drop rename response for unknown request_id={}",
-                        response.request_id
-                    );
+                        Ok(crate::core::RenameRequestOutcome::Applied(
+                            response.applied_name.clone(),
+                        ))
+                    }
+                } else {
+                    Err(response.reason.clone())
+                };
+                if !self.runtime.complete_rename_request(response.request_id, result) {
+                    if response.ok
+                        && !response.pending_approval
+                        && !response.applied_name.is_empty()
+                    {
+                        log::info!(
+                            "apply async device rename request_id={} applied_name={}",
+                            response.request_id,
+                            response.applied_name
+                        );
+                        self.callback.device_renamed(response.applied_name.clone());
+                    } else {
+                        log::debug!(
+                            "drop rename response for unknown request_id={}",
+                            response.request_id
+                        );
+                    }
                 }
             }
             service_packet::Protocol::DebugCollectRequest => {

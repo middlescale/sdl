@@ -286,6 +286,8 @@ pub trait SdlCallback: Clone + Send + Sync + 'static {
         0
     }
     fn peer_client_list(&self, _info: Vec<PeerClientInfo>) {}
+    /// 本机设备名被控制面异步更新
+    fn device_renamed(&self, _new_name: String) {}
     /// 异常信息
     fn error(&self, _info: ErrorInfo) {}
     /// 服务停止

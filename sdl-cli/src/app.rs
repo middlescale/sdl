@@ -23,6 +23,22 @@ struct ServiceManager {
 struct ServiceCommandHandler(Arc<ServiceManager>);
 
 impl ServiceManager {
+    fn apply_device_name_update(self: &Arc<Self>, applied_name: String) -> anyhow::Result<()> {
+        {
+            let mut config = self.config.lock().unwrap();
+            let mut saved_config = self.saved_config.lock().unwrap();
+            if config.name == applied_name && saved_config.name == applied_name {
+                return Ok(());
+            }
+            config.name = applied_name.clone();
+            saved_config.name = applied_name;
+        }
+        self.persist_saved_config();
+        let _ = self.stop_service_runtime()?;
+        self.resume_service_runtime()?;
+        Ok(())
+    }
+
     fn rename_device(self: &Arc<Self>, new_name: &str) -> anyhow::Result<String> {
         let trimmed = new_name.trim();
         if trimmed.is_empty() {
@@ -38,11 +54,7 @@ impl ServiceManager {
         let runtime = self.current_runtime()?;
         match runtime.request_device_rename(trimmed.to_string(), Duration::from_secs(10))? {
             RenameRequestOutcome::Applied(applied_name) => {
-                self.config.lock().unwrap().name = applied_name.clone();
-                self.saved_config.lock().unwrap().name = applied_name.clone();
-                self.persist_saved_config();
-                let _ = self.stop_service_runtime()?;
-                self.resume_service_runtime()?;
+                self.apply_device_name_update(applied_name.clone())?;
                 Ok(format!("device renamed to {}", applied_name))
             }
             RenameRequestOutcome::PendingApproval => Ok(format!(
@@ -376,6 +388,20 @@ impl ServiceCallback {
             });
         }
     }
+
+    fn request_runtime_name_refresh(&self, new_name: String) {
+        if let Some(manager) = self.manager.upgrade() {
+            std::thread::spawn(move || {
+                if let Err(e) = manager.apply_device_name_update(new_name.clone()) {
+                    log::warn!(
+                        "apply device name update failed new_name={} err={:?}",
+                        new_name,
+                        e
+                    );
+                }
+            });
+        }
+    }
 }
 
 impl SdlCallback for ServiceCallback {
@@ -407,6 +433,11 @@ impl SdlCallback for ServiceCallback {
         self.clear_error_state();
         println!("register {}", style(info).green());
         true
+    }
+
+    fn device_renamed(&self, new_name: String) {
+        println!("{}", style(format!("device renamed to {}", new_name)).green());
+        self.request_runtime_name_refresh(new_name);
     }
 
     fn error(&self, info: ErrorInfo) {
