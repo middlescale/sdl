@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Info {
     pub name: String,
+    pub device_id: String,
     pub virtual_ip: String,
     pub virtual_gateway: String,
     pub virtual_netmask: String,

@@ -325,6 +325,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
         .collect();
     Info {
         name,
+        device_id: config.device_id.clone(),
         virtual_ip,
         virtual_gateway,
         virtual_netmask,

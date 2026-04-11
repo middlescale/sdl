@@ -106,6 +106,7 @@ impl ServiceManager {
         let port_mapping_list = vec![];
         Info {
             name: config.name,
+            device_id: config.device_id.clone(),
             virtual_ip: String::new(),
             virtual_gateway: String::new(),
             virtual_netmask: String::new(),
