@@ -176,15 +176,15 @@ fn gateway_relay_interface(
     route_interface(fallback_protocol, fallback_addr, server_addr)
 }
 
-pub fn command_list(vnt: &Sdl) -> Vec<DeviceItem> {
-    let info = vnt.current_device();
-    let device_list = vnt.device_list();
+pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
+    let info = sdl.current_device();
+    let device_list = sdl.device_list();
     let mut list = Vec::new();
     for peer in device_list {
         let name = peer.name;
         let virtual_ip = peer.virtual_ip.to_string();
         let (nat_type, public_ips, local_ip, ipv6) =
-            if let Some(nat_info) = vnt.peer_nat_info(&peer.virtual_ip) {
+            if let Some(nat_info) = sdl.peer_nat_info(&peer.virtual_ip) {
                 let nat_type = format!("{:?}", nat_info.nat_type);
                 let public_ips: Vec<String> =
                     nat_info.public_ips.iter().map(|v| v.to_string()).collect();
@@ -206,9 +206,9 @@ pub fn command_list(vnt: &Sdl) -> Vec<DeviceItem> {
                     "".to_string(),
                 )
             };
-        let (nat_traversal_type, rt) = if let Some(route) = vnt.route(&peer.virtual_ip) {
-            let next_hop = vnt.route_key(&route.route_key());
-            let nat_traversal_type = if route.metric == 1 {
+        let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer.virtual_ip) {
+            let next_hop = sdl.route_key(&route.route_key());
+            let nat_traversal_type = if route.is_p2p() {
                 if route.protocol.is_udp() {
                     "udp-p2p".to_string()
                 } else {

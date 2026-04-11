@@ -6,13 +6,13 @@ use crate::transport::connect_protocol::ConnectProtocol;
 pub struct Route {
     pub protocol: ConnectProtocol,
     pub addr: SocketAddr,
-    pub metric: u8,
+    pub(crate) metric: u8,
     pub rt: i64,
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub struct RouteSortKey {
-    pub metric: u8,
+    pub(crate) metric: u8,
     pub rt: i64,
 }
 
