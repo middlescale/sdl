@@ -71,9 +71,7 @@ impl Sdl {
         let device_signing_key = Arc::new(load_or_create_device_signing_key(&config.device_id)?);
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
-        let current_device = Arc::new(AtomicCell::new(CurrentDeviceInfo::new0(
-            config.server_address,
-        )));
+        let current_device = Arc::new(AtomicCell::new(CurrentDeviceInfo::new0()));
         //设备列表
         let peer_state: Arc<Mutex<crate::handle::PeerState>> =
             Arc::new(Mutex::new(Default::default()));

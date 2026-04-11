@@ -458,7 +458,7 @@ impl SdlRuntime {
                     "virtual_netmask": current_device.virtual_netmask.to_string(),
                     "virtual_network": current_device.virtual_network.to_string(),
                     "broadcast_ip": current_device.broadcast_ip.to_string(),
-                    "control_server": current_device.control_server.to_string(),
+                    "control_server": self.control_session.server_addr().to_string(),
                     "connect_status": format!("{:?}", current_device.status),
                     "use_channel_type": format!("{:?}", self.route_manager.use_channel_type()),
                     "dns_profile": dns_profile.as_ref().map(|profile| json!({

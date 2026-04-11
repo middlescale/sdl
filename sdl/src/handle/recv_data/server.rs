@@ -73,7 +73,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !current_device.is_server_addr(route_key.addr)
+        if !self.runtime.control_session.is_control_addr(route_key.addr)
             && !self
                 .runtime
                 .gateway_sessions
@@ -83,7 +83,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             log::warn!(
                 "route_key={:?}, not from control server {} or gateway endpoint",
                 route_key,
-                current_device.control_server
+                self.runtime.control_session.server_addr()
             );
         }
         self.runtime
@@ -1043,19 +1043,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     drop(dev);
                 }
                 self.runtime.peer_crypto.clear_all();
-                let mut current_device = self.runtime.current_device.load();
-                while !current_device.is_server_addr(route_key.addr) {
-                    let mut next = current_device;
-                    next.control_server = route_key.addr;
-                    match self
-                        .runtime
-                        .current_device
-                        .compare_exchange(current_device, next)
-                    {
-                        Ok(_) => break,
-                        Err(latest) => current_device = latest,
-                    }
-                }
                 self.runtime.control_session.send_handshake()?;
                 // self.register(current_device, context, route_key)?;
             }
@@ -1095,7 +1082,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     return Ok(());
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
-                let from_control_or_gateway = current_device.is_server_addr(route_key.addr)
+                let from_control_or_gateway = self.runtime.control_session.is_control_addr(route_key.addr)
                     || self
                         .runtime
                         .gateway_sessions

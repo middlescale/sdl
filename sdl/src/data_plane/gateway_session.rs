@@ -674,9 +674,7 @@ impl GatewaySessions {
 impl Default for GatewaySessions {
     fn default() -> Self {
         Self::new(
-            Arc::new(AtomicCell::new(CurrentDeviceInfo::new0(
-                "0.0.0.0:0".parse().unwrap(),
-            ))),
+            Arc::new(AtomicCell::new(CurrentDeviceInfo::new0())),
             DebugWatch::default(),
         )
     }

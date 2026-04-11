@@ -110,6 +110,10 @@ impl Http3Channel {
         self.server_addr.store(server_addr);
     }
 
+    pub fn server_addr(&self) -> SocketAddr {
+        self.server_addr.load()
+    }
+
     pub fn update_server_name(&self, server_name: String) {
         *self.server_name.lock() = server_name;
     }

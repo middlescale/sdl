@@ -1,4 +1,5 @@
 use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -85,9 +86,6 @@ impl ControlSession {
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
-        let current_device = self.current_device();
-        self.channel
-            .update_server_addr(current_device.control_server);
         if let Ok(control_addr) = parse_control_address(&self.config.server_addr) {
             self.channel
                 .update_server_name(control_addr.server_name().to_string());
@@ -138,15 +136,11 @@ impl ControlSession {
         call: &Call,
         connect_count: &mut usize,
     ) -> io::Result<()> {
-        let current_device_info = &self.data_plane.current_device;
-        let mut current_device = current_device_info.load();
+        let current_device = self.data_plane.current_device.load();
         if current_device.status.offline() {
             *connect_count += 1;
-            current_device = resolve_control_addr(current_device_info, &self.config);
-            call.connect(ConnectInfo::new(
-                *connect_count,
-                current_device.control_server,
-            ));
+            self.resolve_and_update_server_addr();
+            call.connect(ConnectInfo::new(*connect_count, self.channel.server_addr()));
             log::info!("发送握手请求,{:?}", self.config);
             if let Err(e) = self.send_handshake() {
                 log::warn!("{:?}", e);
@@ -201,10 +195,9 @@ impl ControlSession {
                 }
                 last_connect_at = Instant::now();
                 if let Err(e) = self.maintain_connection(&call, &mut connect_count) {
-                    let cur = self.current_device();
                     call.error(ErrorInfo::new_msg(
                         ErrorType::Disconnect,
-                        format!("connect:{},error:{:?}", cur.control_server, e),
+                        format!("connect:{},error:{:?}", self.channel.server_addr(), e),
                     ));
                 }
                 continue;
@@ -492,6 +485,66 @@ impl ControlSession {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(())
     }
+
+    pub fn server_addr(&self) -> SocketAddr {
+        self.channel.server_addr()
+    }
+
+    pub fn is_control_addr(&self, addr: SocketAddr) -> bool {
+        let server = self.channel.server_addr();
+        if server == addr {
+            return true;
+        }
+        // Handle IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+        match (server.ip(), addr.ip()) {
+            (IpAddr::V4(s), IpAddr::V6(a)) => {
+                if let Some(v4) = a.to_ipv4_mapped() {
+                    return s == v4 && server.port() == addr.port();
+                }
+            }
+            (IpAddr::V6(s), IpAddr::V4(a)) => {
+                if let Some(v4) = s.to_ipv4_mapped() {
+                    return v4 == a && server.port() == addr.port();
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn resolve_and_update_server_addr(&self) {
+        let control_addr = match parse_control_address(&self.config.server_addr) {
+            Ok(control_addr) => control_addr,
+            Err(e) => {
+                log::error!("控制地址解析失败:{:?},addr={}", e, self.config.server_addr);
+                return;
+            }
+        };
+        match dns_query_all(control_addr.authority()) {
+            Ok(addrs) => {
+                log::info!("domain {} addr {:?}", control_addr.authority(), addrs);
+                match address_choose(addrs) {
+                    Ok(addr) => {
+                        let old = self.channel.server_addr();
+                        if addr != old {
+                            log::info!("服务端地址变化,旧地址:{}，新地址:{}", old, addr);
+                            self.channel.update_server_addr(addr);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "域名地址选择失败:{:?},domain={}",
+                            e,
+                            control_addr.authority()
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("域名解析失败:{:?},domain={}", e, control_addr.authority());
+            }
+        }
+    }
 }
 
 fn build_device_auth_signature(
@@ -566,50 +619,3 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
     }
 }
 
-fn resolve_control_addr(
-    current_device: &AtomicCell<CurrentDeviceInfo>,
-    config: &RuntimeConfig,
-) -> CurrentDeviceInfo {
-    let mut current_dev = current_device.load();
-    let control_addr = match parse_control_address(&config.server_addr) {
-        Ok(control_addr) => control_addr,
-        Err(e) => {
-            log::error!("控制地址解析失败:{:?},addr={}", e, config.server_addr);
-            return current_dev;
-        }
-    };
-    match dns_query_all(control_addr.authority()) {
-        Ok(addrs) => {
-            log::info!("domain {} addr {:?}", control_addr.authority(), addrs);
-            match address_choose(addrs) {
-                Ok(addr) => {
-                    if addr != current_dev.control_server {
-                        let mut tmp = current_dev;
-                        tmp.control_server = addr;
-                        let rs = current_device.compare_exchange(current_dev, tmp);
-                        log::info!(
-                            "服务端地址变化,旧地址:{}，新地址:{},替换结果:{}",
-                            current_dev.control_server,
-                            addr,
-                            rs.is_ok()
-                        );
-                        if rs.is_ok() {
-                            current_dev.control_server = addr;
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!(
-                        "域名地址选择失败:{:?},domain={}",
-                        e,
-                        control_addr.authority()
-                    );
-                }
-            }
-        }
-        Err(e) => {
-            log::error!("域名解析失败:{:?},domain={}", e, control_addr.authority());
-        }
-    }
-    current_dev
-}

@@ -1,5 +1,5 @@
 use crossbeam_utils::atomic::AtomicCell;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 
 pub mod callback;
 mod extension;
@@ -119,8 +119,6 @@ pub struct CurrentDeviceInfo {
     pub virtual_network: Ipv4Addr,
     //直接广播地址
     pub broadcast_ip: Ipv4Addr,
-    //链接的服务器地址
-    pub control_server: SocketAddr,
     //连接状态
     pub status: ConnectStatus,
 }
@@ -130,7 +128,6 @@ impl CurrentDeviceInfo {
         virtual_ip: Ipv4Addr,
         virtual_netmask: Ipv4Addr,
         virtual_gateway: Ipv4Addr,
-        control_server: SocketAddr,
     ) -> Self {
         let broadcast_ip = (!u32::from_be_bytes(virtual_netmask.octets()))
             | u32::from_be_bytes(virtual_gateway.octets());
@@ -144,18 +141,16 @@ impl CurrentDeviceInfo {
             virtual_gateway,
             virtual_network,
             broadcast_ip,
-            control_server,
             status: ConnectStatus::Connecting,
         }
     }
-    pub fn new0(control_server: SocketAddr) -> Self {
+    pub fn new0() -> Self {
         Self {
             virtual_ip: Ipv4Addr::UNSPECIFIED,
             virtual_gateway: Ipv4Addr::UNSPECIFIED,
             virtual_netmask: Ipv4Addr::UNSPECIFIED,
             virtual_network: Ipv4Addr::UNSPECIFIED,
             broadcast_ip: Ipv4Addr::UNSPECIFIED,
-            control_server,
             status: ConnectStatus::Connecting,
         }
     }
@@ -196,16 +191,6 @@ impl CurrentDeviceInfo {
     #[inline]
     pub fn not_in_network(&self, ip: Ipv4Addr) -> bool {
         u32::from(ip) & u32::from(self.virtual_netmask) != u32::from(self.virtual_network)
-    }
-    pub fn is_server_addr(&self, addr: SocketAddr) -> bool {
-        if self.control_server == addr {
-            return true;
-        }
-        let f = |ip: IpAddr| match ip {
-            IpAddr::V4(v4) => Some(v4),
-            IpAddr::V6(v6) => v6.to_ipv4(),
-        };
-        addr.port() == self.control_server.port() && f(addr.ip()) == f(self.control_server.ip())
     }
 }
 pub fn change_status(
