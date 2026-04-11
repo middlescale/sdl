@@ -4,7 +4,7 @@ use crate::transport::connect_protocol::ConnectProtocol;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Route {
-    pub protocol: ConnectProtocol,
+    pub(crate) protocol: ConnectProtocol,
     pub addr: SocketAddr,
     pub(crate) metric: u8,
     pub rt: i64,
@@ -62,6 +62,15 @@ impl Route {
 
     pub fn is_p2p(&self) -> bool {
         self.metric == 1
+    }
+
+    pub fn is_udp(&self) -> bool {
+        self.protocol.is_udp()
+    }
+
+    /// Returns a short name for the transport protocol (e.g. "Udp", "Tcp", "Quic").
+    pub fn protocol_name(&self) -> String {
+        format!("{:?}", self.protocol)
     }
 }
 

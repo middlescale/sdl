@@ -209,10 +209,10 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer.virtual_ip) {
             let next_hop = sdl.route_key(&route.route_key());
             let nat_traversal_type = if route.is_p2p() {
-                if route.protocol.is_udp() {
+                if route.is_udp() {
                     "udp-p2p".to_string()
                 } else {
-                    format!("{:?}-p2p", route.protocol)
+                    format!("{}-p2p", route.protocol_name())
                 }
             } else if let Some(next_hop) = next_hop {
                 if info.is_gateway_vip(&next_hop) {
