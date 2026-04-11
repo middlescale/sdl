@@ -350,6 +350,9 @@ impl Sdl {
     pub fn current_device(&self) -> CurrentDeviceInfo {
         self.runtime.current_device.load()
     }
+    pub fn control_server_addr(&self) -> std::net::SocketAddr {
+        self.runtime.control_session.server_addr()
+    }
     pub fn current_device_info(&self) -> Arc<AtomicCell<CurrentDeviceInfo>> {
         self.runtime.current_device.clone()
     }

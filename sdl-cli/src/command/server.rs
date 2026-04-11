@@ -66,7 +66,10 @@ where
 {
     let frame = ipc::read_frame(conn)?;
     let cmd = std::str::from_utf8(&frame).map_err(io::Error::other)?;
-    let out = command(cmd, handler).unwrap_or_else(|e| format!("error {}", e));
+    let out = command(cmd, handler).unwrap_or_else(|e| {
+        serde_yaml::to_string(&format!("error {}", e))
+            .unwrap_or_else(|ser_err| format!("error {:?}", ser_err))
+    });
     ipc::write_frame(conn, out.as_bytes())
 }
 
@@ -200,5 +203,57 @@ mod tests {
         let out = command("rename:desktop windows", &handler).unwrap();
         let parsed: String = serde_yaml::from_str(&out).unwrap();
         assert_eq!(parsed, "desktop windows");
+    }
+
+    struct FailingRenameHandler;
+
+    impl CommandHandler for FailingRenameHandler {
+        fn route(&self) -> io::Result<Vec<RouteItem>> {
+            Err(io::Error::other("unused"))
+        }
+        fn list(&self) -> io::Result<Vec<DeviceItem>> {
+            Err(io::Error::other("unused"))
+        }
+        fn info(&self) -> io::Result<Info> {
+            Err(io::Error::other("unused"))
+        }
+        fn chart_a(&self) -> io::Result<ChartA> {
+            Err(io::Error::other("unused"))
+        }
+        fn chart_b(&self, _input: Option<&str>) -> io::Result<ChartB> {
+            Err(io::Error::other("unused"))
+        }
+        fn resume_runtime(&self) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn suspend_runtime(&self) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn channel_change(&self, _use_channel_type: UseChannelType) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn rename(&self, _new_name: &str) -> io::Result<String> {
+            Err(io::Error::other("rename failed: timed out"))
+        }
+        fn auth(&self, _auth: AuthCommand) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+    }
+
+    #[test]
+    fn handle_connection_yaml_encodes_command_errors() {
+        let handler = FailingRenameHandler;
+        let mut conn = std::io::Cursor::new(Vec::new());
+        ipc::write_frame(&mut conn, b"rename:new-name").unwrap();
+        conn.set_position(0);
+
+        handle_connection(&mut conn, &handler).unwrap();
+
+        let written = conn.into_inner();
+        let mut reader = std::io::Cursor::new(written);
+        let _ = ipc::read_frame(&mut reader).unwrap();
+        let response = ipc::read_frame(&mut reader).unwrap();
+        let parsed: String = serde_yaml::from_slice(&response).unwrap();
+        assert_eq!(parsed, "error rename failed: timed out");
     }
 }

@@ -296,10 +296,11 @@ pub fn command_info(vnt: &Sdl) -> Info {
         UseChannelType::P2p => "p2p".to_string(),
         UseChannelType::All => "auto".to_string(),
     };
-    let relay_server = if current_device.control_server.port() == 0 {
+    let control_server = vnt.control_server_addr();
+    let relay_server = if control_server.port() == 0 {
         config.server_address_str.clone()
     } else {
-        current_device.control_server.to_string()
+        control_server.to_string()
     };
     let nat_type = format!("{:?}", nat_info.nat_type);
     let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();
