@@ -79,12 +79,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 .gateway_sessions
                 .is_gateway_addr(route_key.addr)
         {
-            // 拦截既不是控制端也不是已授权网关的数据
             log::warn!(
-                "route_key={:?}, not from control server {} or gateway endpoint",
+                "drop route_key={:?}, not from control server {} or gateway endpoint",
                 route_key,
                 self.runtime.control_session.server_addr()
             );
+            return Ok(());
         }
         self.runtime
             .route_manager()
