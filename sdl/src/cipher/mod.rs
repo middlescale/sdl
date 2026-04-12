@@ -23,6 +23,3 @@ mod aes_cbc;
 
 #[cfg(feature = "sm4_cbc")]
 mod sm4_cbc;
-
-mod xor;
-pub use xor::simple_hash;

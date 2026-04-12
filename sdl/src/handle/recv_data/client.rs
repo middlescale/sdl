@@ -228,7 +228,7 @@ fn should_accept_peer_packet(
     match direct_owner {
         Some(owner) => owner == source,
         None => {
-            protocol == Protocol::Control
+            (protocol == Protocol::Control && allows_unknown_route_control(transport_protocol))
                 || (protocol == Protocol::OtherTurn
                     && other_turn_packet::Protocol::from(transport_protocol)
                         == other_turn_packet::Protocol::Punch)
@@ -244,7 +244,7 @@ fn requires_unknown_route_setup_limit(
 ) -> bool {
     route_key.origin() == RouteOrigin::PeerUdp
         && direct_owner.is_none()
-        && (protocol == Protocol::Control
+        && ((protocol == Protocol::Control && allows_unknown_route_control(transport_protocol))
             || (protocol == Protocol::OtherTurn
                 && other_turn_packet::Protocol::from(transport_protocol)
                     == other_turn_packet::Protocol::Punch))
@@ -257,6 +257,16 @@ fn requires_unknown_route_ingress_limit(
     route_key.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
 }
 
+fn allows_unknown_route_control(transport_protocol: u8) -> bool {
+    matches!(
+        control_packet::Protocol::from(transport_protocol),
+        control_packet::Protocol::Ping
+            | control_packet::Protocol::Pong
+            | control_packet::Protocol::PunchRequest
+            | control_packet::Protocol::PunchResponse
+    )
+}
+
 fn peer_packet_encryption_matches(cipher_model: CipherModel, is_encrypt: bool) -> bool {
     match cipher_model {
         CipherModel::None => !is_encrypt,
@@ -267,12 +277,13 @@ fn peer_packet_encryption_matches(cipher_model: CipherModel, is_encrypt: bool) -
 #[cfg(test)]
 mod tests {
     use super::{
-        peer_packet_encryption_matches, requires_unknown_route_ingress_limit,
-        requires_unknown_route_setup_limit, should_accept_peer_packet,
+        allows_unknown_route_control, peer_packet_encryption_matches,
+        requires_unknown_route_ingress_limit, requires_unknown_route_setup_limit,
+        should_accept_peer_packet,
     };
     use crate::cipher::CipherModel;
     use crate::data_plane::route::{RouteKey, RouteOrigin};
-    use crate::protocol::{other_turn_packet, Protocol};
+    use crate::protocol::{control_packet, other_turn_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -294,7 +305,7 @@ mod tests {
             source,
             None,
             Protocol::Control,
-            0
+            control_packet::Protocol::Ping.into()
         ));
         assert!(should_accept_peer_packet(
             route_key,
@@ -309,6 +320,13 @@ mod tests {
             None,
             Protocol::IpTurn,
             0
+        ));
+        assert!(!should_accept_peer_packet(
+            route_key,
+            source,
+            None,
+            Protocol::Control,
+            control_packet::Protocol::AddrRequest.into()
         ));
     }
 
@@ -359,7 +377,7 @@ mod tests {
             route_key,
             None,
             Protocol::Control,
-            0
+            control_packet::Protocol::PunchRequest.into()
         ));
         assert!(requires_unknown_route_setup_limit(
             route_key,
@@ -377,7 +395,13 @@ mod tests {
             route_key,
             Some(Ipv4Addr::new(10, 0, 0, 9)),
             Protocol::Control,
-            0
+            control_packet::Protocol::Ping.into()
+        ));
+        assert!(!requires_unknown_route_setup_limit(
+            route_key,
+            None,
+            Protocol::Control,
+            control_packet::Protocol::AddrRequest.into()
         ));
     }
 
@@ -406,6 +430,22 @@ mod tests {
         assert!(!peer_packet_encryption_matches(CipherModel::AesGcm, false));
         assert!(peer_packet_encryption_matches(CipherModel::None, false));
         assert!(!peer_packet_encryption_matches(CipherModel::None, true));
+    }
+
+    #[test]
+    fn unknown_route_control_whitelist_excludes_addr_discovery_packets() {
+        assert!(allows_unknown_route_control(
+            control_packet::Protocol::Ping.into()
+        ));
+        assert!(allows_unknown_route_control(
+            control_packet::Protocol::PunchRequest.into()
+        ));
+        assert!(!allows_unknown_route_control(
+            control_packet::Protocol::AddrRequest.into()
+        ));
+        assert!(!allows_unknown_route_control(
+            control_packet::Protocol::AddrResponse.into()
+        ));
     }
 }
 

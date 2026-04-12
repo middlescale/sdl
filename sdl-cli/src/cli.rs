@@ -401,7 +401,7 @@ fn print_usage(program: &str, _opts: Options) {
     enums.push_str("/aes_ecb");
     #[cfg(feature = "sm4_cbc")]
     enums.push_str("/sm4_cbc");
-    enums.push_str("/xor");
+    enums.push_str("/none");
     println!(
         "  --model <model>     {}{}",
         get_description("--model <model>", &language),

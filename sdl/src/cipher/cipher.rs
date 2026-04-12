@@ -15,7 +15,6 @@ use crate::cipher::chacha20::ChaCha20Cipher;
 use crate::cipher::chacha20_poly1305::ChaCha20Poly1305Cipher;
 #[cfg(feature = "sm4_cbc")]
 use crate::cipher::sm4_cbc::Sm4CbcCipher;
-use crate::cipher::xor::XORCipher;
 use crate::protocol::NetPacket;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
@@ -32,7 +31,6 @@ pub enum CipherModel {
     AesEcb,
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc,
-    Xor,
     None,
 }
 
@@ -51,7 +49,6 @@ impl Display for CipherModel {
             CipherModel::AesEcb => "aes_ecb".to_string(),
             #[cfg(feature = "sm4_cbc")]
             CipherModel::Sm4Cbc => "sm4_cbc".to_string(),
-            CipherModel::Xor => "xor".to_string(),
             CipherModel::None => "none".to_string(),
         };
         write!(f, "{}", str)
@@ -88,7 +85,6 @@ impl FromStr for CipherModel {
             "aes_ecb" => Ok(CipherModel::AesEcb),
             #[cfg(feature = "sm4_cbc")]
             "sm4_cbc" => Ok(CipherModel::Sm4Cbc),
-            "xor" => Ok(CipherModel::Xor),
             "none" => Ok(CipherModel::None),
             _ => {
                 let mut enums = String::new();
@@ -102,7 +98,7 @@ impl FromStr for CipherModel {
                 enums.push_str("/aes_ecb");
                 #[cfg(feature = "sm4_cbc")]
                 enums.push_str("/sm4_cbc");
-                enums.push_str("/xor/none");
+                enums.push_str("/none");
                 Err(format!("not match '{}', enum:{}", s, &enums[1..]))
             }
         }
@@ -123,7 +119,6 @@ pub enum Cipher {
     AesEcb(AesEcbCipher),
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc(Sm4CbcCipher),
-    Xor(XORCipher),
     None,
 }
 
@@ -154,7 +149,6 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => aes_ecb.decrypt_ipv4(net_packet),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.decrypt_ipv4(net_packet),
-            Cipher::Xor(xor) => xor.decrypt_ipv4(net_packet),
             Cipher::None => {
                 if net_packet.is_encrypt() {
                     return Err(anyhow!("not key"));
@@ -180,7 +174,6 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => aes_ecb.encrypt_ipv4(net_packet),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.encrypt_ipv4(net_packet),
-            Cipher::Xor(xor) => xor.encrypt_ipv4(net_packet),
             Cipher::None => Ok(()),
         }
     }
@@ -198,7 +191,6 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => Some(aes_ecb.key()),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => Some(sm4_cbc.key()),
-            Cipher::Xor(xor) => Some(xor.key()),
             Cipher::None => None,
         }
     }
