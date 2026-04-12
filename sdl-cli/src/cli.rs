@@ -390,22 +390,14 @@ fn print_usage(program: &str, _opts: Options) {
         "  --ip <ip>           {}",
         get_description("--ip <ip>", &language)
     );
-    let mut enums = String::new();
     #[cfg(feature = "aes_gcm")]
-    enums.push_str("/aes_gcm");
-    #[cfg(feature = "chacha20_poly1305")]
-    enums.push_str("/chacha20_poly1305/chacha20");
-    #[cfg(feature = "aes_cbc")]
-    enums.push_str("/aes_cbc");
-    #[cfg(feature = "aes_ecb")]
-    enums.push_str("/aes_ecb");
-    #[cfg(feature = "sm4_cbc")]
-    enums.push_str("/sm4_cbc");
-    enums.push_str("/none");
+    let enums = "aes_gcm/none";
+    #[cfg(not(feature = "aes_gcm"))]
+    let enums = "none";
     println!(
-        "  --model <model>     {}{}",
+        "  --model <model>     {} {}",
         get_description("--model <model>", &language),
-        &enums[1..]
+        enums
     );
     println!(
         "  --punch <punch>     {}",

@@ -147,20 +147,14 @@ sdl suspend
 ### --model `<model>`
 
 加密模式，可选值
-aes_gcm/aes_cbc/aes_ecb/sm4_cbc/chacha20_poly1305/chacha20，默认使用aes_gcm，通常情况aes_gcm和chacha20_poly1305安全性高。
-各种加密模式的安全性和速度都不相同，请按需选取
+aes_gcm/none，默认使用aes_gcm。
+当前 SDL 运行时仅支持这两种模式，其他遗留算法不再作为可选运行时配置暴露。
 
 | 密码位数   | model             | 加密算法              |  
 |--------|-------------------|-------------------|
 | `< 8`  | aes_gcm           | AES128-GCM        |
 | `>= 8` | aes_gcm           | AES256-GCM        |
-| `< 8`  | aes_cbc           | AES128-CBC        |
-| `>= 8` | aes_cbc           | AES256-CBC        |
-| `< 8`  | aes_ecb           | AES128-ECB        |
-| `>= 8` | aes_ecb           | AES256-ECB        |
-| `> 0`  | sm4_cbc           | SM4-CBC           |
-| `> 0`  | chacha20_poly1305 | ChaCha20-Poly1305 |
-| `> 0`  | chacha20          | ChaCha20          |
+| `0`    | none              | 无数据面加密            |
 
 ### --punch `<punch>`
 

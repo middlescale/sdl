@@ -126,6 +126,12 @@ pub struct NatTest {
     pub(crate) update_local_ipv4: bool,
 }
 
+pub enum StunRecvResult {
+    NotStun,
+    Ignored,
+    Accepted { endpoint_changed: bool },
+}
+
 impl NatTest {
     pub fn new(
         stun_server: Vec<String>,
@@ -333,19 +339,23 @@ impl NatTest {
             .with_context(|| format!("stun error {:?}", stun_server))?;
         Ok((stun::send_stun_request(), addr))
     }
-    pub fn recv_data(&self, source_addr: SocketAddr, buf: &[u8]) -> anyhow::Result<bool> {
+    pub fn recv_data(&self, source_addr: SocketAddr, buf: &[u8]) -> anyhow::Result<StunRecvResult> {
         if buf[0] == 0x01 && buf[1] == 0x01 {
             if let Some(addr) = stun::recv_stun_response(buf) {
-                if let Err(e) = self.recv_data_(source_addr, addr) {
-                    log::warn!("{:?}", e);
-                }
+                return match self.recv_data_(source_addr, addr) {
+                    Ok(endpoint_changed) => Ok(StunRecvResult::Accepted { endpoint_changed }),
+                    Err(e) => {
+                        log::warn!("{:?}", e);
+                        Ok(StunRecvResult::Ignored)
+                    }
+                };
             }
-            Ok(true)
+            Ok(StunRecvResult::Ignored)
         } else {
-            Ok(false)
+            Ok(StunRecvResult::NotStun)
         }
     }
-    fn recv_data_(&self, source_addr: SocketAddr, addr: SocketAddr) -> anyhow::Result<()> {
+    fn recv_data_(&self, source_addr: SocketAddr, addr: SocketAddr) -> anyhow::Result<bool> {
         if let SocketAddr::V4(addr) = addr {
             let mut check_fail = true;
             let source_ip = match source_addr.ip() {
@@ -354,7 +364,7 @@ impl NatTest {
                     if let Some(ip) = ip.to_ipv4() {
                         ip
                     } else {
-                        return Ok(());
+                        return Ok(false);
                     }
                 }
             };
@@ -370,15 +380,17 @@ impl NatTest {
                     }
                 }
             }
-            if !check_fail {
-                if is_ipv4_global(addr.ip()) {
-                    if self.update_addr(*addr.ip(), addr.port()) {
-                        log::info!("回应地址{:?},来源stun {:?}", addr, source_addr)
-                    }
+            if !check_fail && is_ipv4_global(addr.ip()) {
+                let updated = self.update_addr(*addr.ip(), addr.port());
+                if updated {
+                    log::info!("回应地址{:?},来源stun {:?}", addr, source_addr)
                 }
+                return Ok(updated);
             }
+            Ok(false)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 }
 

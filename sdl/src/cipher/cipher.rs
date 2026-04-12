@@ -72,35 +72,40 @@ impl FromStr for CipherModel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().trim() {
+        let cipher_model = match s.to_lowercase().trim() {
             #[cfg(feature = "aes_gcm")]
-            "aes_gcm" => Ok(CipherModel::AesGcm),
+            "aes_gcm" => CipherModel::AesGcm,
             #[cfg(feature = "chacha20_poly1305")]
-            "chacha20_poly1305" => Ok(CipherModel::Chacha20Poly1305),
+            "chacha20_poly1305" => CipherModel::Chacha20Poly1305,
             #[cfg(feature = "chacha20_poly1305")]
-            "chacha20" => Ok(CipherModel::Chacha20),
+            "chacha20" => CipherModel::Chacha20,
             #[cfg(feature = "aes_cbc")]
-            "aes_cbc" => Ok(CipherModel::AesCbc),
+            "aes_cbc" => CipherModel::AesCbc,
             #[cfg(feature = "aes_ecb")]
-            "aes_ecb" => Ok(CipherModel::AesEcb),
+            "aes_ecb" => CipherModel::AesEcb,
             #[cfg(feature = "sm4_cbc")]
-            "sm4_cbc" => Ok(CipherModel::Sm4Cbc),
-            "none" => Ok(CipherModel::None),
+            "sm4_cbc" => CipherModel::Sm4Cbc,
+            "none" => CipherModel::None,
             _ => {
-                let mut enums = String::new();
                 #[cfg(feature = "aes_gcm")]
-                enums.push_str("/aes_gcm");
-                #[cfg(feature = "chacha20_poly1305")]
-                enums.push_str("/chacha20_poly1305/chacha20");
-                #[cfg(feature = "aes_cbc")]
-                enums.push_str("/aes_cbc");
-                #[cfg(feature = "aes_ecb")]
-                enums.push_str("/aes_ecb");
-                #[cfg(feature = "sm4_cbc")]
-                enums.push_str("/sm4_cbc");
-                enums.push_str("/none");
-                Err(format!("not match '{}', enum:{}", s, &enums[1..]))
+                return Err(format!("not match '{}', enum:aes_gcm/none", s));
+                #[cfg(not(feature = "aes_gcm"))]
+                return Err(format!("not match '{}', enum:none", s));
             }
+        };
+        if cipher_model.is_runtime_supported() {
+            Ok(cipher_model)
+        } else {
+            #[cfg(feature = "aes_gcm")]
+            return Err(format!(
+                "cipher '{}' is built but not supported at runtime, enum:aes_gcm/none",
+                s
+            ));
+            #[cfg(not(feature = "aes_gcm"))]
+            return Err(format!(
+                "cipher '{}' is built but not supported at runtime, enum:none",
+                s
+            ));
         }
     }
 }

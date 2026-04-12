@@ -31,17 +31,22 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         //判断stun响应包
         if route_key.protocol().is_udp() {
             if let Ok(rs) = self.runtime.nat_test.recv_data(route_key.addr(), buf) {
-                if rs {
-                    if self
-                        .runtime
-                        .control_session
-                        .supports_udp_endpoint_report_v1()
-                    {
-                        self.runtime.control_session.trigger_status_report(
-                            crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate,
-                        );
+                match rs {
+                    crate::nat::StunRecvResult::NotStun => {}
+                    crate::nat::StunRecvResult::Ignored => return,
+                    crate::nat::StunRecvResult::Accepted { endpoint_changed } => {
+                        if endpoint_changed
+                            && self
+                                .runtime
+                                .control_session
+                                .supports_udp_endpoint_report_v1()
+                        {
+                            self.runtime.control_session.trigger_status_report(
+                                crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate,
+                            );
+                        }
+                        return;
                     }
-                    return;
                 }
             }
         }
