@@ -9,7 +9,7 @@ use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::core::SdlRuntime;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RouteKey, RouteOrigin};
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
@@ -98,7 +98,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             return Ok(());
         }
         self.decrypt_by_route(&source, &mut net_packet)?;
-        self.runtime.route_manager().touch_path(&source, &route_key);
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -110,6 +109,28 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         } else {
             net_packet
         };
+        if !should_accept_peer_packet(
+            route_key,
+            source,
+            self.runtime
+                .route_manager()
+                .peer_for_direct_route(&route_key),
+            net_packet.protocol(),
+            net_packet.transport_protocol(),
+        ) {
+            log::warn!(
+                "drop peer packet source={} route_key={:?} protocol={:?}/{} direct_owner={:?}",
+                source,
+                route_key,
+                net_packet.protocol(),
+                net_packet.transport_protocol(),
+                self.runtime
+                    .route_manager()
+                    .peer_for_direct_route(&route_key)
+            );
+            return Ok(());
+        }
+        self.runtime.route_manager().touch_path(&source, &route_key);
         match net_packet.protocol() {
             Protocol::Service => {}
             Protocol::Error => {}
@@ -125,6 +146,111 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             Protocol::Unknown(_) => {}
         }
         Ok(())
+    }
+}
+
+fn should_accept_peer_packet(
+    route_key: RouteKey,
+    source: Ipv4Addr,
+    direct_owner: Option<Ipv4Addr>,
+    protocol: Protocol,
+    transport_protocol: u8,
+) -> bool {
+    if route_key.origin() != RouteOrigin::PeerUdp {
+        return true;
+    }
+    match direct_owner {
+        Some(owner) => owner == source,
+        None => {
+            protocol == Protocol::Control
+                || (protocol == Protocol::OtherTurn
+                    && other_turn_packet::Protocol::from(transport_protocol)
+                        == other_turn_packet::Protocol::Punch)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_accept_peer_packet;
+    use crate::data_plane::route::{RouteKey, RouteOrigin};
+    use crate::protocol::{other_turn_packet, Protocol};
+    use crate::transport::connect_protocol::ConnectProtocol;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    fn peer_route_key() -> RouteKey {
+        RouteKey::new_with_origin(
+            ConnectProtocol::UDP,
+            RouteOrigin::PeerUdp,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 4000)),
+        )
+    }
+
+    #[test]
+    fn unknown_peer_route_only_allows_control_or_punch_setup_packets() {
+        let source = Ipv4Addr::new(10, 0, 0, 9);
+        let route_key = peer_route_key();
+
+        assert!(should_accept_peer_packet(
+            route_key,
+            source,
+            None,
+            Protocol::Control,
+            0
+        ));
+        assert!(should_accept_peer_packet(
+            route_key,
+            source,
+            None,
+            Protocol::OtherTurn,
+            other_turn_packet::Protocol::Punch.into()
+        ));
+        assert!(!should_accept_peer_packet(
+            route_key,
+            source,
+            None,
+            Protocol::IpTurn,
+            0
+        ));
+    }
+
+    #[test]
+    fn direct_route_binding_rejects_packets_for_different_peer() {
+        let route_key = peer_route_key();
+        let source = Ipv4Addr::new(10, 0, 0, 9);
+        let other_peer = Ipv4Addr::new(10, 0, 0, 10);
+
+        assert!(should_accept_peer_packet(
+            route_key,
+            source,
+            Some(source),
+            Protocol::IpTurn,
+            0
+        ));
+        assert!(!should_accept_peer_packet(
+            route_key,
+            source,
+            Some(other_peer),
+            Protocol::Control,
+            0
+        ));
+    }
+
+    #[test]
+    fn non_peer_origins_skip_direct_route_gate() {
+        let route_key = RouteKey::new_with_origin(
+            ConnectProtocol::QUIC,
+            RouteOrigin::GatewayQuic,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 11), 443)),
+        );
+
+        assert!(should_accept_peer_packet(
+            route_key,
+            Ipv4Addr::new(10, 0, 0, 9),
+            None,
+            Protocol::IpTurn,
+            0
+        ));
     }
 }
 
