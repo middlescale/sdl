@@ -8,6 +8,7 @@ use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
+use crate::cipher::CipherModel;
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey, RouteOrigin};
 use crate::handle::extension::handle_extension_tail;
@@ -38,6 +39,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
+        if !peer_packet_encryption_matches(
+            self.runtime.config.cipher_model,
+            net_packet.is_encrypt(),
+        ) {
+            anyhow::bail!(
+                "unexpected peer packet encryption flag for cipher model {:?}",
+                self.runtime.config.cipher_model
+            );
+        }
         if !net_packet.is_encrypt() {
             return Ok(());
         }
@@ -103,6 +113,19 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
                 "drop rate-limited unknown-route peer packet source={} route_key={:?}",
                 source,
                 route_key
+            );
+            return Ok(());
+        }
+        if !peer_packet_encryption_matches(
+            self.runtime.config.cipher_model,
+            net_packet.is_encrypt(),
+        ) {
+            log::warn!(
+                "drop peer packet with unexpected encryption flag source={} route_key={:?} encrypt={} cipher_model={:?}",
+                source,
+                route_key,
+                net_packet.is_encrypt(),
+                self.runtime.config.cipher_model
             );
             return Ok(());
         }
@@ -234,12 +257,20 @@ fn requires_unknown_route_ingress_limit(
     route_key.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
 }
 
+fn peer_packet_encryption_matches(cipher_model: CipherModel, is_encrypt: bool) -> bool {
+    match cipher_model {
+        CipherModel::None => !is_encrypt,
+        _ => is_encrypt,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        requires_unknown_route_ingress_limit, requires_unknown_route_setup_limit,
-        should_accept_peer_packet,
+        peer_packet_encryption_matches, requires_unknown_route_ingress_limit,
+        requires_unknown_route_setup_limit, should_accept_peer_packet,
     };
+    use crate::cipher::CipherModel;
     use crate::data_plane::route::{RouteKey, RouteOrigin};
     use crate::protocol::{other_turn_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -367,6 +398,14 @@ mod tests {
             ),
             None
         ));
+    }
+
+    #[test]
+    fn peer_packet_encryption_must_match_runtime_cipher_mode() {
+        assert!(peer_packet_encryption_matches(CipherModel::AesGcm, true));
+        assert!(!peer_packet_encryption_matches(CipherModel::AesGcm, false));
+        assert!(peer_packet_encryption_matches(CipherModel::None, false));
+        assert!(!peer_packet_encryption_matches(CipherModel::None, true));
     }
 }
 
