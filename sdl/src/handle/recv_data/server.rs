@@ -990,6 +990,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .peer_crypto
             .rotate_peer_session_ciphers(peer_session_ciphers);
         self.runtime.peer_crypto.retain_peers(&active_vips);
+        self.runtime.peer_replay_guard.retain_peers(&active_vips);
         self.runtime
             .peer_crypto
             .clear_previous_ciphers_for(&reset_vips);

@@ -137,6 +137,7 @@ impl Sdl {
         let debug_watch = DebugWatch::default();
         let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
+        let peer_replay_guard = Arc::new(crate::util::PeerReplayGuard::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
@@ -243,6 +244,7 @@ impl Sdl {
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
+                peer_replay_guard: peer_replay_guard.clone(),
                 debug_watch: debug_watch.clone(),
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),

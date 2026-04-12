@@ -97,6 +97,19 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
+        if net_packet.is_encrypt()
+            && !self.runtime.peer_replay_guard.check_and_remember(
+                source,
+                crate::util::PeerReplayId::from_aes_gcm_packet(&net_packet)?,
+            )
+        {
+            log::warn!(
+                "drop replayed peer packet source={} route_key={:?}",
+                source,
+                route_key
+            );
+            return Ok(());
+        }
         self.decrypt_by_route(&source, &mut net_packet)?;
         //处理扩展
         let net_packet = if net_packet.is_extension() {
