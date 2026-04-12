@@ -1,6 +1,5 @@
 use sdl::core::Sdl;
 use sdl::data_plane::gateway_session::GatewaySessionSummary;
-use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
 use std::collections::HashSet;
@@ -18,7 +17,7 @@ const CONTROL_DESTINATION: &str = "CONTROL";
 const CONTROL_VIP_STR: &str = "0.0.0.1";
 
 pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
-    let route_table = vnt.route_states();
+    let route_table = vnt.route_snapshots();
     let current_device = vnt.current_device();
     let server_addr = vnt.config().server_address_str.clone();
     let gateway_summary = vnt.gateway_session_summary();
@@ -33,26 +32,28 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
         if destination == current_device.virtual_gateway {
             has_gateway_route = true;
         }
-        for route in routes {
+        for snapshot in routes {
+            let route = snapshot.route();
+            let is_gateway_relay =
+                !route.is_p2p() && snapshot.peer_ip() == current_device.virtual_gateway;
             let next_hop = vnt
-                .route_key(&route.route_key)
+                .route_key(&route.route_key())
                 .map_or(String::new(), |v| v.to_string());
-            let metric = route.metric.to_string();
-            let rt = if route.rt < 0 {
+            let metric = route.metric().to_string();
+            let rt = if route.rt() < 0 {
                 "".to_string()
             } else {
-                route.rt.to_string()
+                route.rt().to_string()
             };
-            let interface = match route.kind {
-                RouteKind::GatewayRelay => gateway_relay_interface(
+            let interface = if is_gateway_relay {
+                gateway_relay_interface(
                     &gateway_summary,
-                    route.transport,
-                    route.addr,
+                    route.protocol(),
+                    route.addr(),
                     &server_addr,
-                ),
-                RouteKind::P2p | RouteKind::Relay => {
-                    route_interface(route.transport, route.addr, &server_addr)
-                }
+                )
+            } else {
+                route_interface(route.protocol(), route.addr(), &server_addr)
             };
 
             let item = RouteItem {
@@ -223,10 +224,10 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
             } else {
                 "gateway-relay".to_string()
             };
-            let rt = if route.rt < 0 {
+            let rt = if route.rt() < 0 {
                 "".to_string()
             } else {
-                route.rt.to_string()
+                route.rt().to_string()
             };
             (nat_traversal_type, rt)
         } else {
@@ -283,9 +284,9 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let data_plane_status = if gateway_summary.authenticated {
         "gateway-available".to_string()
     } else if vnt
-        .route_states()
+        .route_snapshots()
         .into_iter()
-        .any(|(_, routes)| routes.into_iter().any(|route| route.kind == RouteKind::P2p))
+        .any(|(_, routes)| routes.into_iter().any(|snapshot| snapshot.is_p2p()))
     {
         "p2p-available".to_string()
     } else {

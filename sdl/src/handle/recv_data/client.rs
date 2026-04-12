@@ -97,6 +97,44 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
+        let direct_owner = self
+            .runtime
+            .route_manager()
+            .peer_for_direct_route(&route_key);
+        if !should_accept_peer_packet(
+            route_key,
+            source,
+            direct_owner,
+            net_packet.protocol(),
+            net_packet.transport_protocol(),
+        ) {
+            log::warn!(
+                "drop peer packet source={} route_key={:?} protocol={:?}/{} direct_owner={:?}",
+                source,
+                route_key,
+                net_packet.protocol(),
+                net_packet.transport_protocol(),
+                direct_owner
+            );
+            return Ok(());
+        }
+        if requires_unknown_route_setup_limit(
+            route_key,
+            direct_owner,
+            net_packet.protocol(),
+            net_packet.transport_protocol(),
+        ) && !self
+            .runtime
+            .unknown_peer_setup_limiter
+            .allow(route_key.addr())
+        {
+            log::warn!(
+                "drop rate-limited setup packet source={} route_key={:?}",
+                source,
+                route_key
+            );
+            return Ok(());
+        }
         if net_packet.is_encrypt()
             && !self.runtime.peer_replay_guard.check_and_remember(
                 source,
@@ -122,27 +160,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         } else {
             net_packet
         };
-        if !should_accept_peer_packet(
-            route_key,
-            source,
-            self.runtime
-                .route_manager()
-                .peer_for_direct_route(&route_key),
-            net_packet.protocol(),
-            net_packet.transport_protocol(),
-        ) {
-            log::warn!(
-                "drop peer packet source={} route_key={:?} protocol={:?}/{} direct_owner={:?}",
-                source,
-                route_key,
-                net_packet.protocol(),
-                net_packet.transport_protocol(),
-                self.runtime
-                    .route_manager()
-                    .peer_for_direct_route(&route_key)
-            );
-            return Ok(());
-        }
         self.runtime.route_manager().touch_path(&source, &route_key);
         match net_packet.protocol() {
             Protocol::Service => {}
@@ -183,9 +200,23 @@ fn should_accept_peer_packet(
     }
 }
 
+fn requires_unknown_route_setup_limit(
+    route_key: RouteKey,
+    direct_owner: Option<Ipv4Addr>,
+    protocol: Protocol,
+    transport_protocol: u8,
+) -> bool {
+    route_key.origin() == RouteOrigin::PeerUdp
+        && direct_owner.is_none()
+        && (protocol == Protocol::Control
+            || (protocol == Protocol::OtherTurn
+                && other_turn_packet::Protocol::from(transport_protocol)
+                    == other_turn_packet::Protocol::Punch))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::should_accept_peer_packet;
+    use super::{requires_unknown_route_setup_limit, should_accept_peer_packet};
     use crate::data_plane::route::{RouteKey, RouteOrigin};
     use crate::protocol::{other_turn_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -262,6 +293,36 @@ mod tests {
             Ipv4Addr::new(10, 0, 0, 9),
             None,
             Protocol::IpTurn,
+            0
+        ));
+    }
+
+    #[test]
+    fn unknown_peer_route_setup_limiter_only_targets_setup_packets() {
+        let route_key = peer_route_key();
+
+        assert!(requires_unknown_route_setup_limit(
+            route_key,
+            None,
+            Protocol::Control,
+            0
+        ));
+        assert!(requires_unknown_route_setup_limit(
+            route_key,
+            None,
+            Protocol::OtherTurn,
+            other_turn_packet::Protocol::Punch.into()
+        ));
+        assert!(!requires_unknown_route_setup_limit(
+            route_key,
+            None,
+            Protocol::IpTurn,
+            0
+        ));
+        assert!(!requires_unknown_route_setup_limit(
+            route_key,
+            Some(Ipv4Addr::new(10, 0, 0, 9)),
+            Protocol::Control,
             0
         ));
     }

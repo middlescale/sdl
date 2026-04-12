@@ -16,6 +16,7 @@ use crate::cipher::CipherModel;
 use crate::control::ControlSession;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route::Route;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
@@ -91,6 +92,7 @@ pub struct SdlRuntime {
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_replay_guard: Arc<crate::util::PeerReplayGuard>,
+    pub unknown_peer_setup_limiter: Arc<crate::util::PeerSetupLimiter>,
     pub debug_watch: DebugWatch,
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
@@ -570,19 +572,30 @@ impl SdlRuntime {
         }
 
         if wants("routes") {
+            let route_kind = |peer_ip: Ipv4Addr, route: Route| {
+                if route.is_p2p() {
+                    "P2p"
+                } else if peer_ip == current_device.virtual_gateway {
+                    "GatewayRelay"
+                } else {
+                    "Relay"
+                }
+            };
             let mut route_items = self
                 .route_manager
-                .snapshot_route_states(current_device.virtual_gateway)
+                .snapshot_route_snapshots()
                 .into_iter()
-                .flat_map(|(_, states)| states)
-                .map(|state| {
+                .flat_map(|(_, snapshots)| snapshots)
+                .map(|snapshot| {
+                    let route = snapshot.route();
+                    let peer_ip = snapshot.peer_ip();
                     json!({
-                        "peer_ip": state.peer_ip.to_string(),
-                        "kind": format!("{:?}", state.kind),
-                        "transport": format!("{:?}", state.transport),
-                        "addr": state.addr.to_string(),
-                        "metric": state.metric,
-                        "rt": state.rt,
+                        "peer_ip": peer_ip.to_string(),
+                        "kind": route_kind(peer_ip, route),
+                        "transport": format!("{:?}", route.protocol()),
+                        "addr": route.addr().to_string(),
+                        "metric": route.metric(),
+                        "rt": route.rt(),
                     })
                 })
                 .collect::<Vec<_>>();

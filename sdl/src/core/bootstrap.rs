@@ -16,7 +16,7 @@ use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
-use crate::data_plane::route_state::RouteState;
+use crate::data_plane::route_snapshot::RouteSnapshot;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
@@ -138,6 +138,7 @@ impl Sdl {
         let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_replay_guard = Arc::new(crate::util::PeerReplayGuard::new(16));
+        let unknown_peer_setup_limiter = Arc::new(crate::util::PeerSetupLimiter::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
@@ -245,6 +246,7 @@ impl Sdl {
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
                 peer_replay_guard: peer_replay_guard.clone(),
+                unknown_peer_setup_limiter: unknown_peer_setup_limiter.clone(),
                 debug_watch: debug_watch.clone(),
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),
@@ -445,11 +447,8 @@ impl Sdl {
             }
         }
     }
-    pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
-        let current_device = self.runtime.current_device.load();
-        self.runtime
-            .route_manager()
-            .snapshot_route_states(current_device.virtual_gateway)
+    pub fn route_snapshots(&self) -> Vec<(Ipv4Addr, Vec<RouteSnapshot>)> {
+        self.runtime.route_manager().snapshot_route_snapshots()
     }
     pub fn up_stream(&self) -> u64 {
         self.runtime.data_plane_stats.up_traffic_total()

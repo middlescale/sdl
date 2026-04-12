@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::cipher::Cipher;
 use crate::data_plane::route::{Route, RouteKey};
-use crate::data_plane::route_state::RouteState;
+use crate::data_plane::route_snapshot::RouteSnapshot;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::handle::CurrentDeviceInfo;
@@ -167,19 +167,16 @@ impl RouteManager {
             .collect()
     }
 
-    pub fn snapshot_route_states(
-        &self,
-        virtual_gateway: Ipv4Addr,
-    ) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
+    pub fn snapshot_route_snapshots(&self) -> Vec<(Ipv4Addr, Vec<RouteSnapshot>)> {
         self.route_table
             .route_table()
             .into_iter()
             .map(|(peer_ip, routes)| {
-                let states = routes
+                let snapshots = routes
                     .into_iter()
-                    .map(|route| RouteState::from_route(peer_ip, route, virtual_gateway))
+                    .map(|route| RouteSnapshot::new(peer_ip, route))
                     .collect();
-                (peer_ip, states)
+                (peer_ip, snapshots)
             })
             .collect()
     }

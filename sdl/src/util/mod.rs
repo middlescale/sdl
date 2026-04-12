@@ -17,10 +17,12 @@ pub(crate) mod linux_dns;
 pub(crate) mod macos_dns;
 mod peer_crypto_manager;
 mod peer_replay_guard;
+mod peer_setup_limiter;
 #[cfg(any(test, all(feature = "integrated_tun", target_os = "windows")))]
 pub(crate) mod windows_dns;
 pub use peer_crypto_manager::*;
 pub use peer_replay_guard::*;
+pub use peer_setup_limiter::*;
 
 #[cfg(feature = "upnp")]
 mod upnp;
