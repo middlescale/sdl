@@ -66,7 +66,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         if self
             .runtime
             .gateway_sessions
-            .is_gateway_addr(route_key.addr)
+            .is_gateway_addr(route_key.addr())
         {
             self.runtime.gateway_sessions.send_relay(packet)?;
         } else if route_key.protocol().is_udp() {
@@ -207,7 +207,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         "peer icmp echo reply received src={} dst={} via={} bytes={}",
                         icmp_source,
                         icmp_destination,
-                        route_key.addr,
+                        route_key.addr(),
                         net_packet.payload().len()
                     );
                     self.runtime.debug_watch.emit(
@@ -216,7 +216,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         serde_json::json!({
                             "src": icmp_source.to_string(),
                             "dst": icmp_destination.to_string(),
-                            "via": route_key.addr.to_string(),
+                            "via": route_key.addr().to_string(),
                             "bytes": net_packet.payload().len(),
                         }),
                     );
@@ -294,7 +294,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 if self
                     .runtime
                     .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
+                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
                 {
                     return Ok(());
                 }
@@ -323,7 +323,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 if self
                     .runtime
                     .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
+                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
                 {
                     return Ok(());
                 }
@@ -332,7 +332,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     .route_manager()
                     .add_path_if_absent(source, route);
             }
-            ControlPacket::AddrRequest => match route_key.addr.ip() {
+            ControlPacket::AddrRequest => match route_key.addr().ip() {
                 std::net::IpAddr::V4(ipv4) => {
                     let mut packet = NetPacket::new_encrypt([0; 12 + 6 + ENCRYPTION_RESERVED])?;
                     packet.set_default_version();
@@ -343,7 +343,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     packet.set_destination(source);
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
-                    addr_packet.set_port(route_key.addr.port());
+                    addr_packet.set_port(route_key.addr().port());
                     self.encrypt_by_route(&source, &mut packet)?;
                     self.send_reply_by_route(&packet, route_key)?;
                 }

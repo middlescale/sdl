@@ -15,7 +15,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::{RouteKey, RouteOrigin};
 use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::control_addr::parse_control_address;
@@ -166,7 +166,7 @@ async fn run_http3_worker(
                                 if let Err(e) = read_h3_packets(recv, route_key, callback).await {
                                     log::warn!(
                                         "control http3 read failed {:?}: {:?}",
-                                        route_key.addr,
+                                        route_key.addr(),
                                         e
                                     );
                                 }
@@ -211,7 +211,7 @@ async fn run_http3_worker(
                                 if let Err(e) = read_h3_packets(recv, route_key, callback).await {
                                     log::warn!(
                                         "control http3 read failed {:?}: {:?}",
-                                        route_key.addr,
+                                        route_key.addr(),
                                         e
                                     );
                                 }
@@ -286,7 +286,8 @@ async fn connect(
 
     let connecting = endpoint.connect(addr, server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
+    let route_key =
+        RouteKey::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::ControlHttp3, addr);
 
     let quinn_conn = h3_quinn::Connection::new(conn);
     let (mut driver, mut send_request) = h3::client::new(quinn_conn).await?;

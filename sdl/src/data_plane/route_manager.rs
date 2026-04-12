@@ -456,7 +456,7 @@ fn heartbeat_packet_client(
 mod tests {
     use super::{RouteManager, StaleDirectRoute};
     use crate::cipher::Cipher;
-    use crate::data_plane::route::Route;
+    use crate::data_plane::route::{Route, RouteOrigin};
     use crate::data_plane::route_table::RouteTable;
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
@@ -468,8 +468,9 @@ mod tests {
     use std::time::Duration;
 
     fn route(metric: u8, port: u16) -> Route {
-        Route::new(
+        Route::new_with_origin(
             ConnectProtocol::UDP,
+            RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
             metric,
             10,
@@ -594,7 +595,13 @@ mod tests {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         table.add_route(
             peer,
-            Route::new(route(2, 2010).protocol, route(2, 2010).addr, 2, 1),
+            Route::new_with_origin(
+                route(2, 2010).protocol(),
+                route(2, 2010).origin(),
+                route(2, 2010).addr(),
+                2,
+                1,
+            ),
         );
         table.add_route(peer, route(1, 2011));
 

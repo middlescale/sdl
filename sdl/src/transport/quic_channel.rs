@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::{RouteKey, RouteOrigin};
 use crate::protocol::NetPacket;
 use crate::protocol::BUFFER_SIZE;
 use crate::transport::connect_protocol::ConnectProtocol;
@@ -175,7 +175,7 @@ async fn run_quic_worker(
                                 {
                                     log::warn!(
                                         "control quic read failed {:?}: {:?}",
-                                        route_key.addr,
+                                        route_key.addr(),
                                         e
                                     );
                                 }
@@ -221,7 +221,7 @@ async fn run_quic_worker(
                                 {
                                     log::warn!(
                                         "control quic read failed {:?}: {:?}",
-                                        route_key.addr,
+                                        route_key.addr(),
                                         e
                                     );
                                 }
@@ -279,7 +279,8 @@ async fn connect(
 
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
+    let route_key =
+        RouteKey::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::GatewayQuic, addr);
     let (send, recv) = conn.open_bi().await?;
     Ok(QuicClientConnection {
         addr,

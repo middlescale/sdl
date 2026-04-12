@@ -436,7 +436,10 @@ impl SdlCallback for ServiceCallback {
     }
 
     fn device_renamed(&self, new_name: String) {
-        println!("{}", style(format!("device renamed to {}", new_name)).green());
+        println!(
+            "{}",
+            style(format!("device renamed to {}", new_name)).green()
+        );
         self.request_runtime_name_refresh(new_name);
     }
 

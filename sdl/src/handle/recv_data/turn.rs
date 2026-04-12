@@ -35,12 +35,12 @@ impl PacketHandler for TurnPacketHandler {
             }
             let destination = net_packet.destination();
             if let Some(route) = self.runtime.route_manager().best_route(&destination) {
-                if route.addr == route_key.addr {
+                if route.addr() == route_key.addr() {
                     //防止环路
                     log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());
                     return Ok(());
                 }
-                if route.metric <= ttl {
+                if route.metric() <= ttl {
                     return self
                         .runtime
                         .udp_channel

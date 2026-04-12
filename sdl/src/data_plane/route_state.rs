@@ -33,16 +33,22 @@ impl RouteState {
         Self {
             peer_ip,
             route_key: route.route_key(),
-            transport: route.protocol,
-            addr: route.addr,
+            transport: route.protocol(),
+            addr: route.addr(),
             kind,
-            metric: route.metric,
-            rt: route.rt,
+            metric: route.metric(),
+            rt: route.rt(),
         }
     }
 
     pub fn route(&self) -> Route {
-        Route::new(self.transport, self.addr, self.metric, self.rt)
+        Route::new_with_origin(
+            self.transport,
+            self.route_key.origin(),
+            self.addr,
+            self.metric,
+            self.rt,
+        )
     }
 
     pub fn is_p2p(&self) -> bool {

@@ -154,13 +154,14 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     use super::{select_data_path, DataPath};
-    use crate::data_plane::route::Route;
+    use crate::data_plane::route::{Route, RouteOrigin};
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
 
     fn sample_route() -> Route {
-        Route::new(
+        Route::new_with_origin(
             ConnectProtocol::UDP,
+            RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
             1,
             10,

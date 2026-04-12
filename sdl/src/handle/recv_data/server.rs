@@ -73,19 +73,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !self.runtime.control_session.is_control_addr(route_key.addr)
-            && !self
-                .runtime
-                .gateway_sessions
-                .is_gateway_addr(route_key.addr)
-        {
-            log::warn!(
-                "drop route_key={:?}, not from control server {} or gateway endpoint",
-                route_key,
-                self.runtime.control_session.server_addr()
-            );
-            return Ok(());
-        }
         self.runtime
             .route_manager()
             .touch_path(&net_packet.source(), &route_key);
@@ -148,7 +135,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     "gateway icmp echo reply received src={} dst={} via={} bytes={}",
                                     ipv4.source_ip(),
                                     ipv4.destination_ip(),
-                                    route_key.addr,
+                                    route_key.addr(),
                                     net_packet.payload().len()
                                 );
                                 self.runtime.debug_watch.emit(
@@ -157,7 +144,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     serde_json::json!({
                                         "src": ipv4.source_ip().to_string(),
                                         "dst": ipv4.destination_ip().to_string(),
-                                        "via": route_key.addr.to_string(),
+                                        "via": route_key.addr().to_string(),
                                         "bytes": net_packet.payload().len(),
                                     }),
                                 );
@@ -597,7 +584,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 } else {
                     Err(response.reason.clone())
                 };
-                if !self.runtime.complete_rename_request(response.request_id, result) {
+                if !self
+                    .runtime
+                    .complete_rename_request(response.request_id, result)
+                {
                     if response.ok
                         && !response.pending_approval
                         && !response.applied_name.is_empty()
@@ -878,7 +868,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
                 self.runtime
                     .gateway_sessions
-                    .handle_connect_ack(route_key.addr, &ack);
+                    .handle_connect_ack(route_key.addr(), &ack);
             }
             _ => {
                 log::warn!(
@@ -1092,12 +1082,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     return Ok(());
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
-                let from_control_or_gateway = self.runtime.control_session.is_control_addr(route_key.addr)
-                    || self
-                        .runtime
-                        .gateway_sessions
-                        .is_gateway_addr(route_key.addr);
-                let learned_metric = if from_control_or_gateway {
+                let learned_metric = if route_key.is_trusted_server_path() {
                     metric.max(2)
                 } else {
                     metric
@@ -1230,7 +1215,7 @@ fn selected_endpoint_for_result(
 
 fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
     let mut endpoint = PunchEndpoint::new();
-    match route.addr {
+    match route.addr() {
         SocketAddr::V4(addr) => {
             endpoint.ip = u32::from(*addr.ip());
             endpoint.port = u32::from(addr.port());
@@ -1240,7 +1225,7 @@ fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
             endpoint.port = u32::from(addr.port());
         }
     }
-    endpoint.tcp = route.protocol.is_base_tcp() && !route.protocol.is_quic();
+    endpoint.tcp = route.protocol().is_base_tcp() && !route.protocol().is_quic();
     endpoint
 }
 
@@ -1460,8 +1445,9 @@ mod tests {
     fn selected_endpoint_for_success_uses_direct_route() {
         let endpoint = selected_endpoint_for_result(
             PunchResultCode::PunchResultSuccess,
-            Some(Route::new(
+            Some(Route::new_with_origin(
                 ConnectProtocol::UDP,
+                crate::data_plane::route::RouteOrigin::PeerUdp,
                 "1.2.3.4:51820".parse::<SocketAddr>().unwrap(),
                 1,
                 1,
@@ -1475,8 +1461,9 @@ mod tests {
 
     #[test]
     fn punch_endpoint_from_tcp_route_marks_tcp() {
-        let endpoint = punch_endpoint_from_route(Route::new(
+        let endpoint = punch_endpoint_from_route(Route::new_with_origin(
             ConnectProtocol::TCP,
+            crate::data_plane::route::RouteOrigin::PeerUdp,
             "[2001:db8::1]:443".parse::<SocketAddr>().unwrap(),
             1,
             1,

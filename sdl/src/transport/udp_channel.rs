@@ -7,6 +7,7 @@ use std::thread;
 
 use crate::core::Config;
 use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::RouteOrigin;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::protocol::BUFFER_SIZE;
 use crate::transport::connect_protocol::ConnectProtocol;
@@ -86,7 +87,7 @@ impl UdpChannel {
                 format!("not udp route: {:?}", route_key.protocol()),
             ));
         }
-        self.send_to(buf, route_key.addr)
+        self.send_to(buf, route_key.addr())
     }
 
     pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
@@ -268,7 +269,11 @@ where
                         recv_handler(
                             &mut buf[..len],
                             &mut extend,
-                            RouteKey::new(ConnectProtocol::UDP, normalize_recv_addr(addr)),
+                            RouteKey::new_with_origin(
+                                ConnectProtocol::UDP,
+                                RouteOrigin::PeerUdp,
+                                normalize_recv_addr(addr),
+                            ),
                         )
                     }
                     Err(e) => {
@@ -313,7 +318,7 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 #[cfg(test)]
 mod tests {
     use super::{normalize_recv_addr, normalize_send_addr, UdpChannel, UdpSocketDriver};
-    use crate::data_plane::route::RouteKey;
+    use crate::data_plane::route::{RouteKey, RouteOrigin};
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
@@ -396,8 +401,9 @@ mod tests {
     #[test]
     fn send_by_key_rejects_non_udp_route() {
         let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, false);
-        let route_key = RouteKey::new(
+        let route_key = RouteKey::new_with_origin(
             ConnectProtocol::QUIC,
+            RouteOrigin::GatewayQuic,
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 3000, 0, 0)),
         );
 

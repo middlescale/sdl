@@ -74,27 +74,26 @@ impl RouteTable {
             .or_insert_with(|| Vec::with_capacity(4));
         let mut exist = false;
         for (x, time) in list.iter_mut() {
-            if x.metric < route.metric && !self.latency_first {
+            if x.metric() < route.metric() && !self.latency_first {
                 return;
             }
             if x.route_key() == key {
                 if only_if_absent {
                     return;
                 }
-                x.metric = route.metric;
-                x.rt = route.rt;
+                *x = route;
                 exist = true;
                 time.store(Instant::now());
                 break;
             }
         }
         if exist {
-            list.sort_by_key(|(k, _)| k.rt);
+            list.sort_by_key(|(k, _)| k.rt());
         } else {
             if !self.latency_first && route.is_p2p() {
                 list.retain(|(k, _)| k.is_p2p());
             }
-            list.sort_by_key(|(k, _)| k.rt);
+            list.sort_by_key(|(k, _)| k.rt());
             list.push((route, AtomicCell::new(Instant::now())));
         }
     }
@@ -220,8 +219,9 @@ mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     fn route_key(port: u16) -> RouteKey {
-        RouteKey::new(
+        RouteKey::new_with_origin(
             ConnectProtocol::UDP,
+            crate::data_plane::route::RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),
         )
     }
