@@ -89,6 +89,23 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
+        let direct_owner = self
+            .runtime
+            .route_manager()
+            .peer_for_direct_route(&route_key);
+        if requires_unknown_route_ingress_limit(route_key, direct_owner)
+            && !self
+                .runtime
+                .unknown_peer_ingress_limiter
+                .allow(route_key.addr())
+        {
+            log::debug!(
+                "drop rate-limited unknown-route peer packet source={} route_key={:?}",
+                source,
+                route_key
+            );
+            return Ok(());
+        }
         if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
             log::debug!(
                 "drop packet from unknown peer {} via {:?}",
@@ -97,10 +114,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        let direct_owner = self
-            .runtime
-            .route_manager()
-            .peer_for_direct_route(&route_key);
         if !should_accept_peer_packet(
             route_key,
             source,
@@ -214,9 +227,19 @@ fn requires_unknown_route_setup_limit(
                     == other_turn_packet::Protocol::Punch))
 }
 
+fn requires_unknown_route_ingress_limit(
+    route_key: RouteKey,
+    direct_owner: Option<Ipv4Addr>,
+) -> bool {
+    route_key.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{requires_unknown_route_setup_limit, should_accept_peer_packet};
+    use super::{
+        requires_unknown_route_ingress_limit, requires_unknown_route_setup_limit,
+        should_accept_peer_packet,
+    };
     use crate::data_plane::route::{RouteKey, RouteOrigin};
     use crate::protocol::{other_turn_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -324,6 +347,25 @@ mod tests {
             Some(Ipv4Addr::new(10, 0, 0, 9)),
             Protocol::Control,
             0
+        ));
+    }
+
+    #[test]
+    fn unknown_peer_route_ingress_limiter_targets_all_unknown_peer_udp_paths() {
+        let route_key = peer_route_key();
+
+        assert!(requires_unknown_route_ingress_limit(route_key, None));
+        assert!(!requires_unknown_route_ingress_limit(
+            route_key,
+            Some(Ipv4Addr::new(10, 0, 0, 9))
+        ));
+        assert!(!requires_unknown_route_ingress_limit(
+            RouteKey::new_with_origin(
+                ConnectProtocol::QUIC,
+                RouteOrigin::GatewayQuic,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 11), 443)),
+            ),
+            None
         ));
     }
 }

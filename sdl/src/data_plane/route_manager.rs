@@ -167,16 +167,14 @@ impl RouteManager {
             .collect()
     }
 
-    pub fn snapshot_route_snapshots(&self) -> Vec<(Ipv4Addr, Vec<RouteSnapshot>)> {
+    pub fn snapshot_route_snapshots(&self) -> Vec<RouteSnapshot> {
         self.route_table
             .route_table()
             .into_iter()
-            .map(|(peer_ip, routes)| {
-                let snapshots = routes
+            .flat_map(|(peer_ip, routes)| {
+                routes
                     .into_iter()
-                    .map(|route| RouteSnapshot::new(peer_ip, route))
-                    .collect();
-                (peer_ip, snapshots)
+                    .map(move |route| RouteSnapshot::new(peer_ip, route))
             })
             .collect()
     }

@@ -28,44 +28,42 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
         .collect();
     let mut route_list = Vec::with_capacity(route_table.len());
     let mut has_gateway_route = false;
-    for (destination, routes) in route_table {
+    for snapshot in route_table {
+        let destination = snapshot.peer_ip();
         if destination == current_device.virtual_gateway {
             has_gateway_route = true;
         }
-        for snapshot in routes {
-            let route = snapshot.route();
-            let is_gateway_relay =
-                !route.is_p2p() && snapshot.peer_ip() == current_device.virtual_gateway;
-            let next_hop = vnt
-                .route_key(&route.route_key())
-                .map_or(String::new(), |v| v.to_string());
-            let metric = route.metric().to_string();
-            let rt = if route.rt() < 0 {
-                "".to_string()
-            } else {
-                route.rt().to_string()
-            };
-            let interface = if is_gateway_relay {
-                gateway_relay_interface(
-                    &gateway_summary,
-                    route.protocol(),
-                    route.addr(),
-                    &server_addr,
-                )
-            } else {
-                route_interface(route.protocol(), route.addr(), &server_addr)
-            };
+        let route = snapshot.route();
+        let is_gateway_relay = !route.is_p2p() && destination == current_device.virtual_gateway;
+        let next_hop = vnt
+            .route_key(&route.route_key())
+            .map_or(String::new(), |v| v.to_string());
+        let metric = route.metric().to_string();
+        let rt = if route.rt() < 0 {
+            "".to_string()
+        } else {
+            route.rt().to_string()
+        };
+        let interface = if is_gateway_relay {
+            gateway_relay_interface(
+                &gateway_summary,
+                route.protocol(),
+                route.addr(),
+                &server_addr,
+            )
+        } else {
+            route_interface(route.protocol(), route.addr(), &server_addr)
+        };
 
-            let item = RouteItem {
-                name: route_name(destination, current_device.virtual_gateway, &peer_names),
-                destination: display_destination(destination),
-                next_hop,
-                metric,
-                rt,
-                interface,
-            };
-            route_list.push(item);
-        }
+        let item = RouteItem {
+            name: route_name(destination, current_device.virtual_gateway, &peer_names),
+            destination: display_destination(destination),
+            next_hop,
+            metric,
+            rt,
+            interface,
+        };
+        route_list.push(item);
     }
     if !has_gateway_route
         && gateway_summary.configured
@@ -286,7 +284,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
     } else if vnt
         .route_snapshots()
         .into_iter()
-        .any(|(_, routes)| routes.into_iter().any(|snapshot| snapshot.is_p2p()))
+        .any(|snapshot| snapshot.is_p2p())
     {
         "p2p-available".to_string()
     } else {

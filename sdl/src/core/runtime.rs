@@ -91,6 +91,7 @@ pub struct SdlRuntime {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
+    pub unknown_peer_ingress_limiter: Arc<crate::util::PeerIngressLimiter>,
     pub peer_replay_guard: Arc<crate::util::PeerReplayGuard>,
     pub unknown_peer_setup_limiter: Arc<crate::util::PeerSetupLimiter>,
     pub debug_watch: DebugWatch,
@@ -585,7 +586,6 @@ impl SdlRuntime {
                 .route_manager
                 .snapshot_route_snapshots()
                 .into_iter()
-                .flat_map(|(_, snapshots)| snapshots)
                 .map(|snapshot| {
                     let route = snapshot.route();
                     let peer_ip = snapshot.peer_ip();
