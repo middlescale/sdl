@@ -1,17 +1,26 @@
-# 这个文件是 build vnt-dns 用
-
 MODE ?= debug
 
-BINARY_debug=target/debug/vnt-dns
-IMAGE_NAME_debug=ghcr.io/middlescale/vnt-dns:debug
+PACKAGE = sdl-cli
+SERVICE_BIN = sdl-service
+CLI_BIN = sdl
 
-BINARY_release=target/release/vnt-dns
-IMAGE_NAME_release=ghcr.io/middlescale/vnt-dns:latest
+BINARY_debug = target/debug/$(SERVICE_BIN)
+BINARY_release = target/release/$(SERVICE_BIN)
+CLI_BINARY_debug = target/debug/$(CLI_BIN)
+CLI_BINARY_release = target/release/$(CLI_BIN)
 
-BINARY=$(BINARY_$(MODE))
-IMAGE_NAME=$(IMAGE_NAME_$(MODE))
+IMAGE_NAME_debug = ghcr.io/middlescale/$(SERVICE_BIN):debug
+IMAGE_NAME_release = ghcr.io/middlescale/$(SERVICE_BIN):latest
 
-# 可选：从 .env 加载凭据（若存在）
+BINARY = $(BINARY_$(MODE))
+CLI_BINARY = $(CLI_BINARY_$(MODE))
+IMAGE_NAME = $(IMAGE_NAME_$(MODE))
+CARGO_BUILD_ARGS =
+
+ifeq ($(MODE),release)
+CARGO_BUILD_ARGS += --release
+endif
+
 ifneq (,$(wildcard .env))
 include .env
 export GHCR_TOKEN GHCR_USER
@@ -19,7 +28,7 @@ endif
 
 GHCR_USER ?= middlescale
 
-.PHONY: all debug release build docker push login help
+.PHONY: all debug release build docker push login test clean help
 
 all: build
 
@@ -30,11 +39,7 @@ release:
 	$(MAKE) MODE=release build
 
 build:
-ifeq ($(MODE),release)
-	cargo build -p vnt-dns --release
-else
-	cargo build -p vnt-dns
-endif
+	cargo build -p $(PACKAGE) $(CARGO_BUILD_ARGS)
 
 docker: build
 	docker build --no-cache --build-arg BINARY_PATH=$(BINARY) -t $(IMAGE_NAME) .
@@ -46,14 +51,24 @@ login:
 push: build docker login
 	docker push $(IMAGE_NAME)
 
+test:
+	cargo test -p sdl --quiet
+	cargo test -p sdl-cli --quiet
+
+clean:
+	cargo clean
+
 help:
+	@echo "默认行为:"
+	@echo "  make / make build     构建 SDL debug 版（$(CLI_BINARY), $(BINARY)）"
+	@echo "  make release          构建 SDL release 版"
+	@echo "  make test             运行本地测试"
+	@echo ""
+	@echo "镜像相关:"
+	@echo "  make docker MODE=debug|release"
+	@echo "  make push   MODE=debug|release"
+	@echo "  当前镜像名: $(IMAGE_NAME)"
+	@echo ""
 	@echo "环境变量:"
 	@echo "  GHCR_USER   (默认: middlescale)"
-	@echo "  GHCR_TOKEN  (必填: GitHub PAT，scopes: write:packages, read:packages)"
-	@echo ""
-	@echo "使用:"
-	@echo "  make debug | make release"
-	@echo "  make docker MODE=debug  # 构建 debug 镜像"
-	@echo "  默认模式为 debug"
-	@echo "  可在 .env 中写入 GHCR_USER/GHCR_TOKEN 以免每次设置"
-	@echo "  如遇参数未生效，可先执行: docker builder prune -af"
+	@echo "  GHCR_TOKEN  (push/login 时必填)"

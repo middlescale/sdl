@@ -72,6 +72,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         peer_ip: &Ipv4Addr,
         session_id: DiscoverySessionId,
+        require_txid: bool,
     ) -> bool {
         let Some(session) = self.runtime.peer_discovery_session(peer_ip) else {
             return false;
@@ -81,7 +82,11 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             self.runtime.clear_peer_discovery_session(peer_ip);
             return false;
         }
-        session_id.same_transaction(&session.session_id)
+        if require_txid {
+            session_id.same_transaction(&session.session_id)
+        } else {
+            session_id.same_attempt(&session.session_id)
+        }
     }
 
     fn discovery_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<crate::cipher::Cipher> {
@@ -330,6 +335,10 @@ fn matches_expected_unknown_route_setup_endpoint(
         return false;
     };
     peer_nat_info.matches_candidate_endpoint(route_key.addr())
+}
+
+fn local_is_authoritative_discovery_initiator(local_vip: Ipv4Addr, peer_vip: Ipv4Addr) -> bool {
+    u32::from(local_vip) < u32::from(peer_vip)
 }
 
 #[cfg(test)]
@@ -791,7 +800,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 session: session_id,
                 payload,
             } => {
-                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                if !self.matches_active_peer_discovery_session(&source, session_id, false) {
                     log::warn!(
                         "drop peer discovery hello without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,
@@ -807,14 +816,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     route_key,
                     source
                 );
-                if self
-                    .runtime
-                    .route_manager
-                    .use_channel_type()
-                    .is_only_relay()
-                {
-                    return Ok(());
-                }
                 if self
                     .runtime
                     .nat_test
@@ -896,21 +897,33 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             return Ok(());
                         }
                     };
-                    let cipher = crate::cipher::Cipher::new_key(session_key)?;
-                    self.runtime
-                        .peer_crypto
-                        .replace_current_cipher(source, cipher);
-                    let route = Route::from_default_rt(route_key, metric);
-                    self.runtime
-                        .route_manager()
-                        .add_path_if_absent(source, route);
+                    if !local_is_authoritative_discovery_initiator(
+                        current_device.virtual_ip,
+                        source,
+                    ) {
+                        let cipher = crate::cipher::Cipher::new_key(session_key)?;
+                        self.runtime
+                            .peer_crypto
+                            .replace_current_cipher(source, cipher);
+                        if !self
+                            .runtime
+                            .route_manager
+                            .use_channel_type()
+                            .is_only_relay()
+                        {
+                            let route = Route::from_default_rt(route_key, metric);
+                            self.runtime
+                                .route_manager()
+                                .add_path_if_absent(source, route);
+                        }
+                    }
                 }
             }
             PeerDiscoveryPacket::HelloAck {
                 session: session_id,
                 payload,
             } => {
-                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                if !self.matches_active_peer_discovery_session(&source, session_id, true) {
                     log::warn!(
                         "drop peer discovery hello-ack without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,
@@ -926,14 +939,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     route_key,
                     source
                 );
-                if self
-                    .runtime
-                    .route_manager
-                    .use_channel_type()
-                    .is_only_relay()
-                {
-                    return Ok(());
-                }
                 if self
                     .runtime
                     .nat_test
@@ -983,22 +988,34 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 return Ok(());
                             }
                         };
-                        let cipher = crate::cipher::Cipher::new_key(session_key)?;
-                        self.runtime
-                            .peer_crypto
-                            .replace_current_cipher(source, cipher);
                         self.runtime.clear_peer_discovery_initiator(&source);
-                        let route = Route::from_default_rt(route_key, metric);
-                        self.runtime
-                            .route_manager()
-                            .add_path_if_absent(source, route);
-                        self.send_peer_discovery_info(
-                            current_device,
+                        if local_is_authoritative_discovery_initiator(
+                            current_device.virtual_ip,
                             source,
-                            route_key,
-                            session_id,
-                            false,
-                        )?;
+                        ) {
+                            let cipher = crate::cipher::Cipher::new_key(session_key)?;
+                            self.runtime
+                                .peer_crypto
+                                .replace_current_cipher(source, cipher);
+                            if !self
+                                .runtime
+                                .route_manager
+                                .use_channel_type()
+                                .is_only_relay()
+                            {
+                                let route = Route::from_default_rt(route_key, metric);
+                                self.runtime
+                                    .route_manager()
+                                    .add_path_if_absent(source, route);
+                                self.send_peer_discovery_info(
+                                    current_device,
+                                    source,
+                                    route_key,
+                                    session_id,
+                                    false,
+                                )?;
+                            }
+                        }
                     }
                     Ok(false) => {
                         log::warn!(
@@ -1021,7 +1038,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 session: session_id,
                 payload,
             } => {
-                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                if !self.matches_active_peer_discovery_session(&source, session_id, true) {
                     log::warn!(
                         "drop peer discovery info without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,

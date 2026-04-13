@@ -765,6 +765,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         "local_ipv4": peer_nat_info.local_ipv4().map(|ip| ip.to_string()),
                     }),
                 );
+                self.runtime
+                    .peer_nat_info_map
+                    .write()
+                    .insert(peer_ip, peer_nat_info.clone());
                 let deadline_unix_ms = if punch_start.deadline_unix_ms > 0 {
                     punch_start.deadline_unix_ms
                 } else {

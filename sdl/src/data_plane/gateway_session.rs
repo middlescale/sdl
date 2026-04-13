@@ -252,6 +252,15 @@ impl GatewaySession {
                 ));
             }
         }
+        log::debug!(
+            "sending relay packet endpoint={} src={} dst={} protocol={:?} transport_protocol={} len={}",
+            self.endpoint,
+            packet.source(),
+            packet.destination(),
+            packet.protocol(),
+            packet.transport_protocol(),
+            packet.data_len()
+        );
         if let Err(e) = self.send_packet(packet) {
             self.state.lock().authenticated = false;
             return Err(e);

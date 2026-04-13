@@ -42,6 +42,10 @@ impl DiscoverySessionId {
             && self.txid == other.txid
     }
 
+    pub fn same_attempt(&self, other: &Self) -> bool {
+        self.session_id == other.session_id && self.attempt == other.attempt
+    }
+
     pub fn read(payload: &[u8]) -> io::Result<Self> {
         if payload.len() < DISCOVERY_SESSION_LEN {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "len < 20"));
