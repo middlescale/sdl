@@ -58,11 +58,11 @@ impl RouteTable {
             UseChannelType::P2p if !route.is_p2p() => return,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::All => {}
         }
-        let key = route.route_key();
+        let path = route.route_path();
         if only_if_absent {
             if let Some(list) = self.route_table.read().get(&vip) {
                 for (x, _) in list {
-                    if x.route_key() == key {
+                    if x.route_path() == path {
                         return;
                     }
                 }
@@ -77,7 +77,7 @@ impl RouteTable {
             if x.metric() < route.metric() && !self.latency_first {
                 return;
             }
-            if x.route_key() == key {
+            if x.route_path() == path {
                 if only_if_absent {
                     return;
                 }
@@ -123,7 +123,7 @@ impl RouteTable {
         let table = self.route_table.read();
         for (k, v) in table.iter() {
             for (route, _) in v {
-                if &route.route_key() == route_key && route.is_p2p() {
+                if &route.route_path() == route_key && route.is_p2p() {
                     return Some(*k);
                 }
             }
@@ -180,7 +180,7 @@ impl RouteTable {
     pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RoutePath) {
         let mut write_guard = self.route_table.write();
         if let Some(routes) = write_guard.get_mut(vip) {
-            routes.retain(|(x, _)| x.route_key() != route_key);
+            routes.retain(|(x, _)| x.route_path() != route_key);
             if routes.is_empty() {
                 write_guard.remove(vip);
             }
@@ -190,7 +190,7 @@ impl RouteTable {
     pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RoutePath) {
         if let Some(routes) = self.route_table.read().get(vip) {
             for (route, time) in routes {
-                if &route.route_key() == route_key {
+                if &route.route_path() == route_key {
                     time.store(Instant::now());
                     break;
                 }

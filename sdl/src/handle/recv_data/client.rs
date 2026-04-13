@@ -954,7 +954,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         })
                 else {
                     log::warn!(
-                        "drop peer discovery hello-ack without initiator state source={} route_key={:?}",
+                        "drop peer discovery hello-ack without initiator state source={} route_path={:?}",
                         source,
                         route_path
                     );
@@ -969,7 +969,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             })
                         else {
                             log::warn!(
-                                "drop peer discovery hello-ack without exportable initiator state source={} route_key={:?}",
+                                "drop peer discovery hello-ack without exportable initiator state source={} route_path={:?}",
                                 source,
                                 route_path
                             );
@@ -979,7 +979,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             Ok(session_key) => session_key,
                             Err(err) => {
                                 log::warn!(
-                                    "drop peer discovery hello-ack without session key source={} route_key={:?} err={:?}",
+                                    "drop peer discovery hello-ack without session key source={} route_path={:?} err={:?}",
                                     source,
                                     route_path,
                                     err
@@ -1018,14 +1018,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     }
                     Ok(false) => {
                         log::warn!(
-                            "drop peer discovery hello-ack before handshake completion source={} route_key={:?}",
+                            "drop peer discovery hello-ack before handshake completion source={} route_path={:?}",
                             source,
                             route_path
                         );
                     }
                     Err(err) => {
                         log::warn!(
-                            "drop peer discovery hello-ack with invalid noise payload source={} route_key={:?} err={:?}",
+                            "drop peer discovery hello-ack with invalid noise payload source={} route_path={:?} err={:?}",
                             source,
                             route_path,
                             err
@@ -1039,7 +1039,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             } => {
                 if !self.matches_active_peer_discovery_session(&source, session_id, true) {
                     log::warn!(
-                        "drop peer discovery info without active session source={} route_key={:?} session_id={} attempt={} txid={}",
+                        "drop peer discovery info without active session source={} route_path={:?} session_id={} attempt={} txid={}",
                         source,
                         route_path,
                         session_id.session_id(),
@@ -1063,14 +1063,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         _current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RoutePath,
+        route_path: RoutePath,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
         log::warn!(
-            "unsupported other-turn packet transport_protocol={} source={} route_key={:?}",
+            "unsupported other-turn packet transport_protocol={} source={} route_path={:?}",
             net_packet.transport_protocol(),
             source,
-            route_key
+            route_path
         );
         Ok(())
     }
@@ -1101,7 +1101,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 .write()
                 .insert(source, peer_nat_info);
         }
-        if !endpoint_info.reply() {
+        if !endpoint_info.is_reply() {
             let punch_packet =
                 self.build_peer_discovery_info_packet(current_device, source, session_id, true)?;
             if self
@@ -1125,13 +1125,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         peer_ip: Ipv4Addr,
-        route_key: RoutePath,
+        path: RoutePath,
         session_id: DiscoverySessionId,
-        reply: bool,
+        is_reply: bool,
     ) -> anyhow::Result<()> {
         let packet =
-            self.build_peer_discovery_info_packet(current_device, peer_ip, session_id, reply)?;
-        self.send_reply_by_route(&packet, route_key)
+            self.build_peer_discovery_info_packet(current_device, peer_ip, session_id, is_reply)?;
+        self.send_reply_by_route(&packet, path)
     }
 
     fn build_peer_discovery_info_packet(
@@ -1139,10 +1139,10 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
         peer_ip: Ipv4Addr,
         session_id: DiscoverySessionId,
-        reply: bool,
+        is_reply: bool,
     ) -> anyhow::Result<NetPacket<Vec<u8>>> {
         let nat_info = self.runtime.nat_test.nat_info();
-        let bytes = EndpointInfoPayload::from_nat_info(reply, &nat_info)
+        let bytes = EndpointInfoPayload::from_nat_info(is_reply, &nat_info)
             .encode()
             .map_err(|e| anyhow!("EndpointInfo {:?}", e))?;
         let mut packet = NetPacket::new_encrypt(vec![

@@ -64,7 +64,7 @@ impl Route {
         }
     }
 
-    pub fn route_key(&self) -> RoutePath {
+    pub fn route_path(&self) -> RoutePath {
         RoutePath {
             protocol: self.protocol,
             origin: self.origin,
@@ -158,6 +158,9 @@ impl RoutePath {
 
     #[inline]
     pub fn is_gateway_path(&self) -> bool {
-        matches!(self.origin, RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp)
+        matches!(
+            self.origin,
+            RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp
+        )
     }
 }

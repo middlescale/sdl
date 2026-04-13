@@ -115,7 +115,7 @@ pub enum PeerDiscoveryPacket<'a> {
 
 #[derive(Clone, Debug)]
 pub struct EndpointInfoPayload {
-    reply: bool,
+    is_reply: bool,
     public_udp_endpoints: Vec<SocketAddr>,
     local_udp_endpoints: Vec<SocketAddr>,
     public_port_range: u16,
@@ -134,9 +134,9 @@ impl EndpointInfoPayload {
         ))
     }
 
-    pub fn from_nat_info(reply: bool, nat_info: &NatInfo) -> Self {
+    pub fn from_nat_info(is_reply: bool, nat_info: &NatInfo) -> Self {
         Self {
-            reply,
+            is_reply,
             public_udp_endpoints: nat_info.public_udp_endpoints().to_vec(),
             local_udp_endpoints: nat_info.local_udp_endpoints(),
             public_port_range: nat_info.public_port_range(),
@@ -145,8 +145,8 @@ impl EndpointInfoPayload {
         }
     }
 
-    pub fn reply(&self) -> bool {
-        self.reply
+    pub fn is_reply(&self) -> bool {
+        self.is_reply
     }
 
     pub fn encode(&self) -> io::Result<Vec<u8>> {
@@ -155,7 +155,7 @@ impl EndpointInfoPayload {
         );
         buf.extend_from_slice(ENDPOINT_INFO_MAGIC);
         buf.push(ENDPOINT_INFO_VERSION);
-        buf.push(u8::from(self.reply));
+        buf.push(u8::from(self.is_reply));
         buf.push(match self.nat_type {
             NatType::Symmetric => 0,
             NatType::Cone => 1,
@@ -279,7 +279,7 @@ impl EndpointInfoPayload {
             ));
         }
         Ok(Self {
-            reply,
+            is_reply: reply,
             public_udp_endpoints,
             local_udp_endpoints,
             public_port_range,

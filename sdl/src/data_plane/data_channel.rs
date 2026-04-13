@@ -73,7 +73,7 @@ impl DataChannel {
         route: Route,
     ) -> io::Result<()> {
         let runtime = self.runtime()?;
-        self.send_udp(runtime.as_ref(), buf, route.route_key())
+        self.send_udp(runtime.as_ref(), buf, route.route_path())
     }
 
     pub fn proxy_dns_query(
@@ -138,9 +138,9 @@ fn select_data_path(
 ) -> Option<DataPath> {
     match use_channel_type {
         UseChannelType::Relay => Some(DataPath::GatewayRelay),
-        UseChannelType::P2p => direct_route.map(|route| DataPath::P2pUdp(route.route_key())),
+        UseChannelType::P2p => direct_route.map(|route| DataPath::P2pUdp(route.route_path())),
         UseChannelType::All => direct_route
-            .map(|route| DataPath::P2pUdp(route.route_key()))
+            .map(|route| DataPath::P2pUdp(route.route_path()))
             .or(Some(DataPath::GatewayRelay)),
     }
 }
@@ -168,7 +168,7 @@ mod tests {
     fn select_data_path_prefers_direct_udp_when_available() {
         let route = sample_route();
         let path = select_data_path(UseChannelType::All, Some(route));
-        assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
+        assert_eq!(path, Some(DataPath::P2pUdp(route.route_path())));
     }
 
     #[test]

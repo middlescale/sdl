@@ -36,7 +36,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
         let route = snapshot.route();
         let is_gateway_relay = !route.is_p2p() && destination == current_device.virtual_gateway;
         let next_hop = vnt
-            .route_key(&route.route_key())
+            .route_key(&route.route_path())
             .map_or(String::new(), |v| v.to_string());
         let metric = route.metric().to_string();
         let rt = if route.rt() < 0 {
@@ -209,7 +209,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
                 )
             };
         let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer.virtual_ip) {
-            let next_hop = sdl.route_key(&route.route_key());
+            let next_hop = sdl.route_key(&route.route_path());
             let nat_traversal_type = if route.is_p2p() {
                 if route.is_udp() {
                     "udp-p2p".to_string()

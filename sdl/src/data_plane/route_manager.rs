@@ -242,7 +242,7 @@ impl RouteManager {
                     continue;
                 }
                 for net_packet in &net_packets {
-                    if let Err(e) = self.send_by_key(sender, net_packet, route.route_key()) {
+                    if let Err(e) = self.send_by_key(sender, net_packet, route.route_path()) {
                         log::warn!("heartbeat err={:?}", e)
                     }
                 }
@@ -254,7 +254,7 @@ impl RouteManager {
         match self.next_stale_direct_route(read_idle) {
             StaleDirectRoute::Timeout(ip, route) => {
                 log::info!("route Timeout {:?},{:?}", ip, route);
-                self.remove_path(&ip, route.route_key());
+                self.remove_path(&ip, route.route_path());
                 if self.direct_path_count(&ip) == 0 {
                     if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
                         handler(ip);
@@ -515,7 +515,7 @@ mod tests {
         match manager.next_stale_direct_route(Duration::from_millis(5)) {
             StaleDirectRoute::Timeout(ip, timed_out) => {
                 assert_eq!(ip, peer);
-                assert_eq!(timed_out.route_key(), route.route_key());
+                assert_eq!(timed_out.route_path(), route.route_path());
             }
             other => panic!("expected timeout, got {:?}", kind_name(&other)),
         }
@@ -537,7 +537,7 @@ mod tests {
         assert!(table.get_routes(&p2p_peer).is_none());
         let relay_routes = table.get_routes(&relay_peer).expect("relay routes");
         assert_eq!(relay_routes.len(), 1);
-        assert_eq!(relay_routes[0].route_key(), relay.route_key());
+        assert_eq!(relay_routes[0].route_path(), relay.route_path());
     }
 
     #[test]
@@ -574,7 +574,7 @@ mod tests {
         }
         table.add_route(peer, route(1, 2005));
         table.add_route(peer, route(1, 2006));
-        table.update_read_time(&peer, &route(1, 2006).route_key());
+        table.update_read_time(&peer, &route(1, 2006).route_path());
         thread::sleep(Duration::from_millis(15));
 
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
