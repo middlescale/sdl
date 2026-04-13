@@ -300,7 +300,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("-u <mtu>", ("自定义mtu(默认为1420)", "Customize MTU (default is 1420)")),
         ("-f <conf_file>", ("读取配置文件中的配置", "Read configuration from file")),
         ("--ip <ip>", ("指定虚拟ip,指定的ip不能和其他设备重复,必须有效并且在服务端所属网段下,默认情况由服务端分配", "Specify virtual IP, must be unique and valid within server subnet, by default allocated by server")),
-        ("--model <model>", ("加密模式(默认aes_gcm),仅支持 aes_gcm/none", "Encryption mode (default aes_gcm), only aes_gcm/none are supported")),
+        ("--model <model>", ("加密模式(默认aes_gcm),仅支持 aes_gcm", "Encryption mode (default aes_gcm), only aes_gcm is supported")),
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-udp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-udp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
@@ -390,10 +390,7 @@ fn print_usage(program: &str, _opts: Options) {
         "  --ip <ip>           {}",
         get_description("--ip <ip>", &language)
     );
-    #[cfg(feature = "aes_gcm")]
-    let enums = "aes_gcm/none";
-    #[cfg(not(feature = "aes_gcm"))]
-    let enums = "none";
+    let enums = "aes_gcm";
     println!(
         "  --model <model>     {} {}",
         get_description("--model <model>", &language),

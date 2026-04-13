@@ -255,6 +255,47 @@ impl NatInfo {
         }
         endpoints
     }
+
+    pub fn matches_candidate_endpoint(&self, endpoint: SocketAddr) -> bool {
+        if self.public_udp_endpoints.contains(&endpoint) {
+            return true;
+        }
+        match endpoint {
+            SocketAddr::V4(addr) => {
+                if self
+                    .local_ipv4
+                    .map(|ip| ip == *addr.ip() && self.udp_ports.contains(&addr.port()))
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+                if self.public_udp_endpoints.is_empty() {
+                    if self.public_ips.contains(addr.ip())
+                        && self.public_ports.contains(&addr.port())
+                    {
+                        return true;
+                    }
+                    if self.nat_type == NatType::Symmetric
+                        && self.public_ips.contains(addr.ip())
+                        && self.public_port_range > 0
+                    {
+                        if let Some(base_port) = self.public_ports.first().copied() {
+                            let min_port = base_port.saturating_sub(self.public_port_range);
+                            let max_port = base_port.saturating_add(self.public_port_range);
+                            if addr.port() >= min_port && addr.port() <= max_port {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            SocketAddr::V6(addr) => self
+                .ipv6
+                .map(|ip| ip == *addr.ip() && self.udp_ports.contains(&addr.port()))
+                .unwrap_or(false),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -289,6 +330,64 @@ impl Punch {
             nat_test,
             current_device,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NatInfo, NatType, PunchModel};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    #[test]
+    fn nat_info_matches_explicit_candidate_endpoint() {
+        let endpoint = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 10), 4000));
+        let nat_info = NatInfo::new(
+            vec![Ipv4Addr::new(198, 51, 100, 10)],
+            vec![4000],
+            vec![endpoint],
+            0,
+            Some(Ipv4Addr::new(192, 168, 1, 10)),
+            None,
+            vec![4000],
+            NatType::Cone,
+            PunchModel::IPv4Udp,
+        );
+
+        assert!(nat_info.matches_candidate_endpoint(endpoint));
+        assert!(
+            !nat_info.matches_candidate_endpoint(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(198, 51, 100, 11),
+                4000,
+            )))
+        );
+    }
+
+    #[test]
+    fn nat_info_matches_symmetric_port_range_when_explicit_endpoints_absent() {
+        let nat_info = NatInfo::new(
+            vec![Ipv4Addr::new(198, 51, 100, 10)],
+            vec![5000],
+            Vec::new(),
+            20,
+            None,
+            None,
+            vec![5000],
+            NatType::Symmetric,
+            PunchModel::IPv4Udp,
+        );
+
+        assert!(
+            nat_info.matches_candidate_endpoint(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(198, 51, 100, 10),
+                5010,
+            )))
+        );
+        assert!(
+            !nat_info.matches_candidate_endpoint(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(198, 51, 100, 10),
+                6000,
+            )))
+        );
     }
 }
 

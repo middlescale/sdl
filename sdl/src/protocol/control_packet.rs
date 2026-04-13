@@ -20,10 +20,6 @@ pub enum Protocol {
         +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     */
     Pong,
-    /// 打洞请求
-    PunchRequest,
-    /// 打洞响应
-    PunchResponse,
     ///获取对端看到的地址
     AddrRequest,
     AddrResponse,
@@ -35,8 +31,6 @@ impl From<u8> for Protocol {
         match value {
             1 => Protocol::Ping,
             2 => Protocol::Pong,
-            3 => Protocol::PunchRequest,
-            4 => Protocol::PunchResponse,
             5 => Protocol::AddrRequest,
             6 => Protocol::AddrResponse,
             val => Protocol::Unknown(val),
@@ -49,8 +43,6 @@ impl Into<u8> for Protocol {
         match self {
             Protocol::Ping => 1,
             Protocol::Pong => 2,
-            Protocol::PunchRequest => 3,
-            Protocol::PunchResponse => 4,
             Protocol::AddrRequest => 5,
             Protocol::AddrResponse => 6,
             Protocol::Unknown(val) => val,
@@ -61,8 +53,6 @@ impl Into<u8> for Protocol {
 pub enum ControlPacket<B> {
     PingPacket(PingPacket<B>),
     PongPacket(PongPacket<B>),
-    PunchRequest,
-    PunchResponse,
     AddrRequest,
     AddrResponse(AddrPacket<B>),
 }
@@ -72,8 +62,6 @@ impl<B: AsRef<[u8]>> ControlPacket<B> {
         match Protocol::from(protocol) {
             Protocol::Ping => Ok(ControlPacket::PingPacket(PingPacket::new(buffer)?)),
             Protocol::Pong => Ok(ControlPacket::PongPacket(PongPacket::new(buffer)?)),
-            Protocol::PunchRequest => Ok(ControlPacket::PunchRequest),
-            Protocol::PunchResponse => Ok(ControlPacket::PunchResponse),
             Protocol::AddrRequest => Ok(ControlPacket::AddrRequest),
             Protocol::AddrResponse => Ok(ControlPacket::AddrResponse(AddrPacket::new(buffer)?)),
             Protocol::Unknown(_) => Err(io::Error::new(io::ErrorKind::InvalidData, "Unsupported")),

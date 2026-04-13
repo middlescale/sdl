@@ -8,12 +8,9 @@ use parking_lot::RwLock;
 use crate::cipher::Cipher;
 use crate::protocol::NetPacket;
 
-use super::OnlineSessionKeyMaterial;
-
 const PEER_SESSION_CIPHER_GRACE_WINDOW: Duration = Duration::from_secs(10);
 
 pub struct PeerCryptoManager {
-    online_session_key: RwLock<Option<OnlineSessionKeyMaterial>>,
     current_ciphers: RwLock<HashMap<Ipv4Addr, Cipher>>,
     previous_ciphers: RwLock<HashMap<Ipv4Addr, Cipher>>,
     grace_until: RwLock<Option<Instant>>,
@@ -22,26 +19,10 @@ pub struct PeerCryptoManager {
 impl PeerCryptoManager {
     pub fn new(capacity: usize) -> Self {
         Self {
-            online_session_key: RwLock::new(None),
             current_ciphers: RwLock::new(HashMap::with_capacity(capacity)),
             previous_ciphers: RwLock::new(HashMap::with_capacity(capacity)),
             grace_until: RwLock::new(None),
         }
-    }
-
-    pub fn online_session_key(&self) -> Option<OnlineSessionKeyMaterial> {
-        self.online_session_key.read().clone()
-    }
-
-    pub fn ensure_online_session_key(&self) -> OnlineSessionKeyMaterial {
-        let mut guard = self.online_session_key.write();
-        guard
-            .get_or_insert_with(OnlineSessionKeyMaterial::generate)
-            .clone()
-    }
-
-    pub fn clear_online_session_key(&self) {
-        *self.online_session_key.write() = None;
     }
 
     pub fn clear_peer_session_ciphers(&self) {
@@ -51,7 +32,6 @@ impl PeerCryptoManager {
     }
 
     pub fn clear_all(&self) {
-        self.clear_online_session_key();
         self.clear_peer_session_ciphers();
     }
 
@@ -105,6 +85,15 @@ impl PeerCryptoManager {
         *self.grace_until.write() = Some(Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW);
     }
 
+    pub fn replace_current_cipher(&self, peer_ip: Ipv4Addr, cipher: Cipher) {
+        let mut current = self.current_ciphers.write();
+        let mut previous = self.previous_ciphers.write();
+        if let Some(prior) = current.insert(peer_ip, cipher) {
+            previous.insert(peer_ip, prior);
+        }
+        *self.grace_until.write() = Some(Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW);
+    }
+
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         self.current_ciphers
             .write()
@@ -118,6 +107,18 @@ impl PeerCryptoManager {
         if peers.is_empty() {
             return;
         }
+        self.previous_ciphers
+            .write()
+            .retain(|peer_ip, _| !peers.contains(peer_ip));
+    }
+
+    pub fn clear_ciphers_for(&self, peers: &HashSet<Ipv4Addr>) {
+        if peers.is_empty() {
+            return;
+        }
+        self.current_ciphers
+            .write()
+            .retain(|peer_ip, _| !peers.contains(peer_ip));
         self.previous_ciphers
             .write()
             .retain(|peer_ip, _| !peers.contains(peer_ip));
@@ -169,19 +170,6 @@ mod tests {
     }
 
     #[test]
-    fn online_session_key_is_reused_until_cleared() {
-        let manager = PeerCryptoManager::new(4);
-
-        let first = manager.ensure_online_session_key();
-        let second = manager.ensure_online_session_key();
-        assert_eq!(first, second);
-
-        manager.clear_online_session_key();
-        let third = manager.ensure_online_session_key();
-        assert_ne!(first.public_key(), third.public_key());
-    }
-
-    #[test]
     fn rotate_keeps_sending_with_current_cipher() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerCryptoManager::new(1);
@@ -217,11 +205,9 @@ mod tests {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerCryptoManager::new(1);
 
-        manager.ensure_online_session_key();
         manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
         manager.clear_all();
 
-        assert!(manager.online_session_key().is_none());
         assert!(manager.current_cipher(&peer).is_err());
         assert!(manager.previous_cipher(&peer).is_err());
         assert!(!manager.is_grace_active());
@@ -261,6 +247,52 @@ mod tests {
 
         assert!(manager.previous_cipher(&peer1).is_err());
         assert!(manager.current_cipher(&peer1).is_ok());
+        assert!(manager.previous_cipher(&peer2).is_ok());
+    }
+
+    #[test]
+    fn replace_current_cipher_keeps_previous_for_grace() {
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let manager = PeerCryptoManager::new(1);
+        let payload = b"hello-peer";
+
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
+        let old_cipher = manager.current_cipher(&peer).unwrap();
+        let mut packet = encrypted_packet(&old_cipher, payload);
+
+        manager.replace_current_cipher(peer, test_cipher(2));
+        manager.decrypt_ipv4(&peer, &mut packet).unwrap();
+
+        assert_eq!(packet.payload(), payload);
+        assert_eq!(
+            manager.current_cipher(&peer).unwrap().key().unwrap(),
+            &[2; 32]
+        );
+        assert_eq!(
+            manager.previous_cipher(&peer).unwrap().key().unwrap(),
+            &[1; 32]
+        );
+    }
+
+    #[test]
+    fn clear_ciphers_for_drops_current_and_previous() {
+        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
+        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let manager = PeerCryptoManager::new(2);
+
+        manager.rotate_peer_session_ciphers(HashMap::from([
+            (peer1, test_cipher(1)),
+            (peer2, test_cipher(2)),
+        ]));
+        manager.rotate_peer_session_ciphers(HashMap::from([
+            (peer1, test_cipher(3)),
+            (peer2, test_cipher(4)),
+        ]));
+        manager.clear_ciphers_for(&HashSet::from([peer1]));
+
+        assert!(manager.current_cipher(&peer1).is_err());
+        assert!(manager.previous_cipher(&peer1).is_err());
+        assert!(manager.current_cipher(&peer2).is_ok());
         assert!(manager.previous_cipher(&peer2).is_ok());
     }
 }

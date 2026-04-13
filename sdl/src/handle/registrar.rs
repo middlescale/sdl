@@ -14,7 +14,6 @@ pub fn registration_request_packet(
     token: String,
     device_id: String,
     device_pub_key: Vec<u8>,
-    online_kx_pub: Vec<u8>,
     name: String,
     ip: Option<Ipv4Addr>,
     is_fast: bool,
@@ -24,7 +23,6 @@ pub fn registration_request_packet(
     request.token = token;
     request.device_id = device_id;
     request.device_pub_key = device_pub_key;
-    request.online_kx_pub = online_kx_pub;
     request.name = name;
     if let Some(ip) = ip {
         request.virtual_ip = ip.into();

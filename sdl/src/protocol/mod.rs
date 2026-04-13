@@ -25,6 +25,7 @@ pub mod error_packet;
 pub mod extension;
 pub mod ip_turn_packet;
 pub mod other_turn_packet;
+pub mod peer_discovery_packet;
 pub mod service_packet;
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -67,6 +68,8 @@ pub enum Protocol {
     IpTurn,
     /// 转发其他数据
     OtherTurn,
+    /// peer 直连 discovery / 换路信令
+    PeerDiscovery,
     Unknown(u8),
 }
 
@@ -78,6 +81,7 @@ impl From<u8> for Protocol {
             3 => Protocol::Control,
             4 => Protocol::IpTurn,
             5 => Protocol::OtherTurn,
+            6 => Protocol::PeerDiscovery,
             val => Protocol::Unknown(val),
         }
     }
@@ -91,6 +95,7 @@ impl Into<u8> for Protocol {
             Protocol::Control => 3,
             Protocol::IpTurn => 4,
             Protocol::OtherTurn => 5,
+            Protocol::PeerDiscovery => 6,
             Protocol::Unknown(val) => val,
         }
     }

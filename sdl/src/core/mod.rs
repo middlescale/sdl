@@ -9,7 +9,8 @@ use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
 pub use runtime::{
-    AuthRequestConfig, PendingDnsQuery, RenameRequestOutcome, RuntimeConfig, SdlRuntime,
+    AuthRequestConfig, PeerDiscoverySession, PendingDnsQuery, RenameRequestOutcome, RuntimeConfig,
+    SdlRuntime,
 };
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -159,7 +160,7 @@ impl Config {
         }
         if !cipher_model.is_runtime_supported() {
             return Err(anyhow!(
-                "unsupported runtime cipher model '{}', only aes_gcm or none are allowed",
+                "unsupported runtime cipher model '{}', only aes_gcm is allowed",
                 cipher_model
             ));
         }

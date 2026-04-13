@@ -12,6 +12,7 @@ message HandshakeResponse {
     repeated string capabilities = 5;
 }
 message RegistrationRequest {
+    reserved 11;
     string token = 1;
     string device_id = 2;
     string name = 3;
@@ -20,7 +21,6 @@ message RegistrationRequest {
     fixed32 virtual_ip = 6;
     bool allow_ip_change = 7;
     bytes device_pub_key = 10;
-    bytes online_kx_pub = 11;
 }
 
 message DnsProfile {
@@ -229,12 +229,12 @@ message DebugWatchEvent {
     string payload_json = 5;
 }
 message DeviceInfo {
+    reserved 9;
     string name = 1;
     fixed32 virtual_ip = 2;
     uint32 device_status = 3;
     string device_id = 7;
     bytes device_pub_key = 8;
-    bytes online_kx_pub = 9;
 }
 
 message DeviceList {
@@ -242,15 +242,6 @@ message DeviceList {
     repeated DeviceInfo device_info_list = 2;
 }
 
-message PunchInfo {
-    reserved 2, 3, 7, 8, 9, 10, 11, 12, 13, 14;
-    uint32 public_port_range = 4;
-    PunchNatType nat_type = 5;
-    bool reply = 6;
-    PunchNatModel punch_model = 15;
-    repeated PunchEndpoint public_udp_endpoints = 16;
-    repeated PunchEndpoint local_udp_endpoints = 17;
-}
 enum PunchNatType {
     Symmetric = 0;
     Cone = 1;

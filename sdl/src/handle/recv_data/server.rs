@@ -9,6 +9,7 @@ use std::time::Duration;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 use protobuf::Message;
+use rand::RngCore;
 use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
@@ -28,6 +29,7 @@ use crate::proto::message::{
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
+use crate::protocol::peer_discovery_packet::DiscoverySessionId;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::{proto, DnsProfile, PeerClientInfo};
@@ -174,6 +176,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 }
             }
             Protocol::OtherTurn => {}
+            Protocol::PeerDiscovery => {}
             Protocol::Unknown(_) => {}
         }
         Ok(())
@@ -225,18 +228,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, session| {
                 if self.runtime.route_manager().direct_path_count(peer_ip) > 0 {
-                    succeeded.push(*session);
+                    succeeded.push((*peer_ip, *session));
                     return false;
                 }
                 if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
-                    expired.push(*session);
+                    expired.push((*peer_ip, *session));
                     false
                 } else {
                     true
                 }
             });
         }
-        for session in succeeded {
+        for (peer_ip, session) in succeeded {
+            self.runtime.clear_peer_discovery_session(&peer_ip);
             self.send_punch_result(
                 current_device,
                 session.session_id,
@@ -247,7 +251,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 "p2p route established",
             )?;
         }
-        for session in expired {
+        for (peer_ip, session) in expired {
+            self.runtime.clear_peer_discovery_session(&peer_ip);
             self.send_punch_result(
                 current_device,
                 session.session_id,
@@ -339,6 +344,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     }
                 };
                 if let Some((code, reason)) = outcome {
+                    runtime.clear_peer_discovery_session(&peer_ip);
                     log::info!(
                         "punch watchdog outcome peer={} session_id={} attempt={} code={:?} reason={}",
                         peer_ip,
@@ -776,6 +782,66 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     attempt: punch_start.attempt,
                     deadline_unix_ms,
                 };
+                let session_id = DiscoverySessionId::new(
+                    punch_start.session_id,
+                    punch_start.attempt,
+                    rand::thread_rng().next_u64(),
+                );
+                let (setup_session, failure_reason) = match self.runtime.peer_info(&peer_ip) {
+                    Some(peer_info) => {
+                        match crate::util::build_peer_discovery_noise_initiator(
+                            &self.runtime.device_signing_key,
+                            &peer_info.device_pub_key,
+                            session_id,
+                            current_device.virtual_ip,
+                            peer_ip,
+                        ) {
+                            Ok(mut initiator) => match initiator.write_hello(&[]) {
+                                Ok(hello_payload) => {
+                                    self.runtime
+                                        .remember_peer_discovery_initiator(peer_ip, initiator);
+                                    (
+                                        Some(crate::core::PeerDiscoverySession {
+                                            session_id,
+                                            deadline_unix_ms,
+                                            hello_payload,
+                                        }),
+                                        None,
+                                    )
+                                }
+                                Err(err) => {
+                                    log::warn!(
+                                        "encode peer discovery hello failed peer={} device_id={} err={:?}",
+                                        peer_ip,
+                                        peer_info.device_id,
+                                        err
+                                    );
+                                    (
+                                        None,
+                                        Some(format!("encode discovery hello failed: {}", err)),
+                                    )
+                                }
+                            },
+                            Err(err) => {
+                                log::warn!(
+                                    "init peer discovery noise failed peer={} device_id={} err={:?}",
+                                    peer_ip,
+                                    peer_info.device_id,
+                                    err
+                                );
+                                (
+                                    None,
+                                    Some(format!("init discovery handshake failed: {}", err)),
+                                )
+                            }
+                        }
+                    }
+                    None => (None, Some("missing peer identity".to_string())),
+                };
+                if let Some(setup_session) = setup_session.clone() {
+                    self.runtime
+                        .remember_peer_discovery_session(peer_ip, setup_session);
+                }
                 let replaced = {
                     let mut sessions = self.punch_active_sessions.lock();
                     let prev = sessions.insert(peer_ip, session);
@@ -800,11 +866,21 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         "superseded by new attempt",
                     )?;
                 }
-                let accepted = self
-                    .runtime
-                    .punch_coordinator
-                    .submit_local(peer_ip, peer_nat_info);
-                let reason = if accepted { "" } else { "punch queue busy" };
+                let accepted = setup_session
+                    .as_ref()
+                    .map(|setup_session| {
+                        self.runtime.punch_coordinator.submit_local(
+                            peer_ip,
+                            peer_nat_info,
+                            setup_session.session_id,
+                        )
+                    })
+                    .unwrap_or(false);
+                let reason = if accepted {
+                    ""
+                } else {
+                    failure_reason.as_deref().unwrap_or("punch queue busy")
+                };
                 log::info!(
                     "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} reason={}",
                     peer_ip,
@@ -835,6 +911,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 )?;
                 if !accepted {
                     self.punch_active_sessions.lock().remove(&peer_ip);
+                    self.runtime.clear_peer_discovery_session(&peer_ip);
                     self.send_punch_result(
                         current_device,
                         punch_start.session_id,
@@ -902,7 +979,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     info.device_status as u8,
                     info.device_id,
                     info.device_pub_key,
-                    info.online_kx_pub,
                 )
             })
             .collect();
@@ -950,33 +1026,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .peer_nat_info_map
             .write()
             .retain(|vip, _| active_vips.contains(vip) && !reset_vips.contains(vip));
-        let mut peer_session_ciphers = std::collections::HashMap::with_capacity(ip_list.len());
-        let local_online_session_key = self.runtime.peer_crypto.online_session_key();
-        for peer_info in &ip_list {
-            let Some(local_online_session_key) = local_online_session_key.as_ref() else {
-                log::warn!("missing local online session key, skip deriving peer session ciphers");
-                break;
-            };
-            match crate::util::derive_peer_session_key(
-                local_online_session_key,
-                &peer_info.online_kx_pub,
-                &self.runtime.config.token,
-            )
-            .and_then(crate::cipher::Cipher::new_key)
-            {
-                Ok(cipher) => {
-                    peer_session_ciphers.insert(peer_info.virtual_ip, cipher);
-                }
-                Err(err) => {
-                    log::warn!(
-                        "derive peer session cipher failed peer={} device_id={} err={:?}",
-                        peer_info.virtual_ip,
-                        peer_info.device_id,
-                        err
-                    );
-                }
-            }
-        }
         {
             let mut dev = self.runtime.peer_state.lock();
             //这里可能会收到旧的消息，但是随着时间推移总会收到新的
@@ -986,14 +1035,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 dev.devices.insert(peer_info.virtual_ip, peer_info);
             }
         }
-        self.runtime
-            .peer_crypto
-            .rotate_peer_session_ciphers(peer_session_ciphers);
         self.runtime.peer_crypto.retain_peers(&active_vips);
         self.runtime.peer_replay_guard.retain_peers(&active_vips);
-        self.runtime
-            .peer_crypto
-            .clear_previous_ciphers_for(&reset_vips);
+        self.runtime.retain_peer_discovery_sessions(&active_vips);
+        self.runtime.peer_crypto.clear_ciphers_for(&reset_vips);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()

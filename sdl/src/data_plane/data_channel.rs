@@ -4,7 +4,6 @@ use std::sync::{Arc, Weak};
 
 use serde_json::Value;
 
-use crate::cipher::CipherModel;
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::use_channel_type::UseChannelType;
@@ -49,10 +48,7 @@ impl DataChannel {
     }
 
     pub fn peer_encrypt_enabled(&self) -> bool {
-        self.runtime
-            .upgrade()
-            .map(|runtime| runtime.config.cipher_model != CipherModel::None)
-            .unwrap_or(false)
+        self.runtime.upgrade().map(|_| true).unwrap_or(false)
     }
 
     pub fn send_to_peer<B: AsRef<[u8]>>(

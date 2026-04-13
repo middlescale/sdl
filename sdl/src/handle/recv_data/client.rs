@@ -1,8 +1,6 @@
 use anyhow::anyhow;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
-
-use protobuf::Message;
 
 use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
@@ -15,11 +13,13 @@ use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::NatInfo;
-use crate::proto::message::{PunchInfo, PunchNatType};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::ControlPacket;
+use crate::protocol::peer_discovery_packet::{
+    DiscoverySessionId, EndpointInfoPayload, PeerDiscoveryPacket, DISCOVERY_SESSION_LEN,
+};
 use crate::protocol::{
-    control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
+    control_packet, ip_turn_packet, peer_discovery_packet, NetPacket, Protocol, MAX_TTL,
 };
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 /// 处理来源于客户端的包
@@ -51,6 +51,9 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         if !net_packet.is_encrypt() {
             return Ok(());
         }
+        if net_packet.protocol() == Protocol::PeerDiscovery {
+            return self.discovery_cipher(peer_ip)?.decrypt_ipv4(net_packet);
+        }
         self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet)
     }
 
@@ -59,13 +62,46 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        if self.runtime.config.cipher_model == crate::cipher::CipherModel::None {
-            return Ok(());
-        }
         self.runtime
             .peer_crypto
             .send_cipher(peer_ip)?
             .encrypt_ipv4(net_packet)
+    }
+
+    fn matches_active_peer_discovery_session(
+        &self,
+        peer_ip: &Ipv4Addr,
+        session_id: DiscoverySessionId,
+    ) -> bool {
+        let Some(session) = self.runtime.peer_discovery_session(peer_ip) else {
+            return false;
+        };
+        let now_ms = crate::handle::now_time() as i64;
+        if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
+            self.runtime.clear_peer_discovery_session(peer_ip);
+            return false;
+        }
+        session_id.same_transaction(&session.session_id)
+    }
+
+    fn discovery_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<crate::cipher::Cipher> {
+        let peer_info = self
+            .runtime
+            .peer_info(peer_ip)
+            .ok_or_else(|| anyhow!("missing peer identity for discovery {}", peer_ip))?;
+        let key = crate::util::derive_peer_discovery_bootstrap_key(
+            &self.runtime.device_signing_key,
+            &peer_info.device_pub_key,
+        )?;
+        crate::cipher::Cipher::new_key(key)
+    }
+
+    fn encrypt_peer_discovery<B: AsRef<[u8]> + AsMut<[u8]>>(
+        &self,
+        peer_ip: &Ipv4Addr,
+        net_packet: &mut NetPacket<B>,
+    ) -> anyhow::Result<()> {
+        self.discovery_cipher(peer_ip)?.encrypt_ipv4(net_packet)
     }
 
     fn send_reply_by_route<B: AsRef<[u8]>>(
@@ -154,6 +190,23 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
+        if !matches_expected_unknown_route_setup_endpoint(
+            route_key,
+            direct_owner,
+            source,
+            net_packet.protocol(),
+            net_packet.transport_protocol(),
+            self.runtime.peer_nat_info_map.read().get(&source),
+        ) {
+            log::warn!(
+                "drop peer setup from unexpected endpoint source={} route_key={:?} protocol={:?}/{}",
+                source,
+                route_key,
+                net_packet.protocol(),
+                net_packet.transport_protocol()
+            );
+            return Ok(());
+        }
         if requires_unknown_route_setup_limit(
             route_key,
             direct_owner,
@@ -196,7 +249,9 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         } else {
             net_packet
         };
-        self.runtime.route_manager().touch_path(&source, &route_key);
+        if should_touch_path_on_receive(net_packet.protocol()) {
+            self.runtime.route_manager().touch_path(&source, &route_key);
+        }
         match net_packet.protocol() {
             Protocol::Service => {}
             Protocol::Error => {}
@@ -208,6 +263,9 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             }
             Protocol::OtherTurn => {
                 self.other_turn(current_device, net_packet, route_key)?;
+            }
+            Protocol::PeerDiscovery => {
+                self.peer_discovery(current_device, net_packet, route_key)?;
             }
             Protocol::Unknown(_) => {}
         }
@@ -228,10 +286,7 @@ fn should_accept_peer_packet(
     match direct_owner {
         Some(owner) => owner == source,
         None => {
-            (protocol == Protocol::Control && allows_unknown_route_control(transport_protocol))
-                || (protocol == Protocol::OtherTurn
-                    && other_turn_packet::Protocol::from(transport_protocol)
-                        == other_turn_packet::Protocol::Punch)
+            protocol == Protocol::PeerDiscovery && allows_unknown_route_setup(transport_protocol)
         }
     }
 }
@@ -244,10 +299,8 @@ fn requires_unknown_route_setup_limit(
 ) -> bool {
     route_key.origin() == RouteOrigin::PeerUdp
         && direct_owner.is_none()
-        && ((protocol == Protocol::Control && allows_unknown_route_control(transport_protocol))
-            || (protocol == Protocol::OtherTurn
-                && other_turn_packet::Protocol::from(transport_protocol)
-                    == other_turn_packet::Protocol::Punch))
+        && protocol == Protocol::PeerDiscovery
+        && allows_unknown_route_setup(transport_protocol)
 }
 
 fn requires_unknown_route_ingress_limit(
@@ -257,33 +310,67 @@ fn requires_unknown_route_ingress_limit(
     route_key.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
 }
 
+fn matches_expected_unknown_route_setup_endpoint(
+    route_key: RouteKey,
+    direct_owner: Option<Ipv4Addr>,
+    source: Ipv4Addr,
+    protocol: Protocol,
+    transport_protocol: u8,
+    peer_nat_info: Option<&NatInfo>,
+) -> bool {
+    if !requires_unknown_route_setup_limit(route_key, direct_owner, protocol, transport_protocol) {
+        return true;
+    }
+    let Some(peer_nat_info) = peer_nat_info else {
+        log::debug!(
+            "missing peer nat info for unknown-route setup source={} route_key={:?}",
+            source,
+            route_key
+        );
+        return false;
+    };
+    peer_nat_info.matches_candidate_endpoint(route_key.addr())
+}
+
+#[cfg(test)]
 fn allows_unknown_route_control(transport_protocol: u8) -> bool {
     matches!(
         control_packet::Protocol::from(transport_protocol),
-        control_packet::Protocol::Ping
-            | control_packet::Protocol::Pong
-            | control_packet::Protocol::PunchRequest
-            | control_packet::Protocol::PunchResponse
+        control_packet::Protocol::Ping | control_packet::Protocol::Pong
+    )
+}
+
+fn allows_unknown_route_setup(transport_protocol: u8) -> bool {
+    matches!(
+        peer_discovery_packet::Protocol::from(transport_protocol),
+        peer_discovery_packet::Protocol::Hello
+            | peer_discovery_packet::Protocol::HelloAck
+            | peer_discovery_packet::Protocol::EndpointInfo
     )
 }
 
 fn peer_packet_encryption_matches(cipher_model: CipherModel, is_encrypt: bool) -> bool {
     match cipher_model {
-        CipherModel::None => !is_encrypt,
         _ => is_encrypt,
     }
+}
+
+fn should_touch_path_on_receive(protocol: Protocol) -> bool {
+    protocol != Protocol::PeerDiscovery
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        allows_unknown_route_control, peer_packet_encryption_matches,
+        allows_unknown_route_control, allows_unknown_route_setup,
+        matches_expected_unknown_route_setup_endpoint, peer_packet_encryption_matches,
         requires_unknown_route_ingress_limit, requires_unknown_route_setup_limit,
-        should_accept_peer_packet,
+        should_accept_peer_packet, should_touch_path_on_receive,
     };
     use crate::cipher::CipherModel;
     use crate::data_plane::route::{RouteKey, RouteOrigin};
-    use crate::protocol::{control_packet, other_turn_packet, Protocol};
+    use crate::nat::punch::{NatInfo, NatType, PunchModel};
+    use crate::protocol::{control_packet, peer_discovery_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -295,8 +382,22 @@ mod tests {
         )
     }
 
+    fn peer_nat_info(endpoint: SocketAddr) -> NatInfo {
+        NatInfo::new(
+            vec![Ipv4Addr::new(198, 51, 100, 10)],
+            vec![endpoint.port()],
+            vec![endpoint],
+            0,
+            Some(Ipv4Addr::new(192, 168, 1, 10)),
+            None,
+            vec![endpoint.port()],
+            NatType::Cone,
+            PunchModel::IPv4Udp,
+        )
+    }
+
     #[test]
-    fn unknown_peer_route_only_allows_control_or_punch_setup_packets() {
+    fn unknown_peer_route_only_allows_peer_discovery_packets() {
         let source = Ipv4Addr::new(10, 0, 0, 9);
         let route_key = peer_route_key();
 
@@ -304,15 +405,8 @@ mod tests {
             route_key,
             source,
             None,
-            Protocol::Control,
-            control_packet::Protocol::Ping.into()
-        ));
-        assert!(should_accept_peer_packet(
-            route_key,
-            source,
-            None,
-            Protocol::OtherTurn,
-            other_turn_packet::Protocol::Punch.into()
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::Hello.into()
         ));
         assert!(!should_accept_peer_packet(
             route_key,
@@ -320,6 +414,13 @@ mod tests {
             None,
             Protocol::IpTurn,
             0
+        ));
+        assert!(!should_accept_peer_packet(
+            route_key,
+            source,
+            None,
+            Protocol::Control,
+            control_packet::Protocol::Ping.into()
         ));
         assert!(!should_accept_peer_packet(
             route_key,
@@ -376,14 +477,14 @@ mod tests {
         assert!(requires_unknown_route_setup_limit(
             route_key,
             None,
-            Protocol::Control,
-            control_packet::Protocol::PunchRequest.into()
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::Hello.into()
         ));
         assert!(requires_unknown_route_setup_limit(
             route_key,
             None,
-            Protocol::OtherTurn,
-            other_turn_packet::Protocol::Punch.into()
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::EndpointInfo.into()
         ));
         assert!(!requires_unknown_route_setup_limit(
             route_key,
@@ -425,11 +526,55 @@ mod tests {
     }
 
     #[test]
+    fn unknown_route_setup_requires_expected_candidate_endpoint() {
+        let route_key = RouteKey::new_with_origin(
+            ConnectProtocol::UDP,
+            RouteOrigin::PeerUdp,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 4000)),
+        );
+        let source = Ipv4Addr::new(10, 0, 0, 9);
+        let allowed = peer_nat_info(route_key.addr());
+        let denied = peer_nat_info(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(1, 1, 1, 1),
+            4001,
+        )));
+
+        assert!(matches_expected_unknown_route_setup_endpoint(
+            route_key,
+            None,
+            source,
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::Hello.into(),
+            Some(&allowed),
+        ));
+        assert!(!matches_expected_unknown_route_setup_endpoint(
+            route_key,
+            None,
+            source,
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::Hello.into(),
+            Some(&denied),
+        ));
+        assert!(!matches_expected_unknown_route_setup_endpoint(
+            route_key,
+            None,
+            source,
+            Protocol::PeerDiscovery,
+            peer_discovery_packet::Protocol::Hello.into(),
+            None,
+        ));
+    }
+
+    #[test]
     fn peer_packet_encryption_must_match_runtime_cipher_mode() {
         assert!(peer_packet_encryption_matches(CipherModel::AesGcm, true));
         assert!(!peer_packet_encryption_matches(CipherModel::AesGcm, false));
-        assert!(peer_packet_encryption_matches(CipherModel::None, false));
-        assert!(!peer_packet_encryption_matches(CipherModel::None, true));
+    }
+
+    #[test]
+    fn peer_discovery_packets_do_not_refresh_generic_route_activity() {
+        assert!(!should_touch_path_on_receive(Protocol::PeerDiscovery));
+        assert!(should_touch_path_on_receive(Protocol::IpTurn));
     }
 
     #[test]
@@ -437,15 +582,26 @@ mod tests {
         assert!(allows_unknown_route_control(
             control_packet::Protocol::Ping.into()
         ));
-        assert!(allows_unknown_route_control(
-            control_packet::Protocol::PunchRequest.into()
-        ));
         assert!(!allows_unknown_route_control(
             control_packet::Protocol::AddrRequest.into()
         ));
         assert!(!allows_unknown_route_control(
             control_packet::Protocol::AddrResponse.into()
         ));
+    }
+
+    #[test]
+    fn unknown_route_setup_whitelist_only_allows_peer_discovery_packets() {
+        assert!(allows_unknown_route_setup(
+            peer_discovery_packet::Protocol::Hello.into()
+        ));
+        assert!(allows_unknown_route_setup(
+            peer_discovery_packet::Protocol::HelloAck.into()
+        ));
+        assert!(allows_unknown_route_setup(
+            peer_discovery_packet::Protocol::EndpointInfo.into()
+        ));
+        assert!(!allows_unknown_route_setup(200));
     }
 }
 
@@ -601,58 +757,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 let route = Route::from(route_key, metric, rt);
                 self.runtime.route_manager().add_path(source, route);
             }
-            ControlPacket::PunchRequest => {
-                log::info!("PunchRequest={:?},source={}", route_key, source);
-                if self
-                    .runtime
-                    .route_manager
-                    .use_channel_type()
-                    .is_only_relay()
-                {
-                    return Ok(());
-                }
-                //忽略掉来源于自己的包
-                if self
-                    .runtime
-                    .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
-                {
-                    return Ok(());
-                }
-
-                //回应
-                net_packet.set_transport_protocol(control_packet::Protocol::PunchResponse.into());
-                net_packet.set_source(current_device.virtual_ip);
-                net_packet.set_destination(source);
-                net_packet.set_initial_ttl(1);
-                self.encrypt_by_route(&source, &mut net_packet)?;
-                self.send_reply_by_route(&net_packet, route_key)?;
-                // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
-                // let route = Route::from_default_rt(route_key, 1);
-                // context.route_table.add_route_if_absent(source, route);
-            }
-            ControlPacket::PunchResponse => {
-                log::info!("PunchResponse={:?},source={}", route_key, source);
-                if self
-                    .runtime
-                    .route_manager
-                    .use_channel_type()
-                    .is_only_relay()
-                {
-                    return Ok(());
-                }
-                if self
-                    .runtime
-                    .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
-                {
-                    return Ok(());
-                }
-                let route = Route::from_default_rt(route_key, metric);
-                self.runtime
-                    .route_manager()
-                    .add_path_if_absent(source, route);
-            }
             ControlPacket::AddrRequest => match route_key.addr().ip() {
                 std::net::IpAddr::V4(ipv4) => {
                     let mut packet = NetPacket::new_encrypt([0; 12 + 6 + ENCRYPTION_RESERVED])?;
@@ -674,11 +778,294 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         }
         Ok(())
     }
-    fn other_turn(
+    fn peer_discovery(
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
+    ) -> anyhow::Result<()> {
+        let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
+        let source = net_packet.source();
+        match PeerDiscoveryPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
+            PeerDiscoveryPacket::Hello {
+                session: session_id,
+                payload,
+            } => {
+                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                    log::warn!(
+                        "drop peer discovery hello without active session source={} route_key={:?} session_id={} attempt={} txid={}",
+                        source,
+                        route_key,
+                        session_id.session_id(),
+                        session_id.attempt(),
+                        session_id.txid()
+                    );
+                    return Ok(());
+                }
+                log::info!(
+                    "PeerDiscoveryHello route_key={:?},source={}",
+                    route_key,
+                    source
+                );
+                if self
+                    .runtime
+                    .route_manager
+                    .use_channel_type()
+                    .is_only_relay()
+                {
+                    return Ok(());
+                }
+                if self
+                    .runtime
+                    .nat_test
+                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
+                {
+                    return Ok(());
+                }
+
+                let Some(peer_info) = self.runtime.peer_info(&source) else {
+                    log::warn!(
+                        "drop peer discovery hello without peer identity source={}",
+                        source
+                    );
+                    return Ok(());
+                };
+                let mut responder = match crate::util::build_peer_discovery_noise_responder(
+                    &self.runtime.device_signing_key,
+                    &peer_info.device_pub_key,
+                    session_id,
+                    source,
+                    current_device.virtual_ip,
+                ) {
+                    Ok(responder) => responder,
+                    Err(err) => {
+                        log::warn!(
+                            "drop peer discovery hello with invalid identity source={} err={:?}",
+                            source,
+                            err
+                        );
+                        return Ok(());
+                    }
+                };
+                if let Err(err) = responder.read_hello(payload) {
+                    log::warn!(
+                        "drop peer discovery hello with invalid noise payload source={} err={:?}",
+                        source,
+                        err
+                    );
+                    return Ok(());
+                }
+                let hello_ack_payload = match responder.write_hello_ack(&[]) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        log::warn!(
+                            "drop peer discovery hello when building ack source={} err={:?}",
+                            source,
+                            err
+                        );
+                        return Ok(());
+                    }
+                };
+                let mut reply = NetPacket::new_encrypt(vec![
+                    0u8;
+                    12 + DISCOVERY_SESSION_LEN
+                        + hello_ack_payload.len()
+                        + ENCRYPTION_RESERVED
+                ])?;
+                reply.set_default_version();
+                reply.set_protocol(Protocol::PeerDiscovery);
+                reply.set_transport_protocol(peer_discovery_packet::Protocol::HelloAck.into());
+                reply.set_source(current_device.virtual_ip);
+                reply.set_destination(source);
+                reply.set_initial_ttl(1);
+                session_id.write(reply.payload_mut())?;
+                reply.payload_mut()
+                    [DISCOVERY_SESSION_LEN..DISCOVERY_SESSION_LEN + hello_ack_payload.len()]
+                    .copy_from_slice(&hello_ack_payload);
+                self.encrypt_peer_discovery(&source, &mut reply)?;
+                self.send_reply_by_route(&reply, route_key)?;
+                if responder.is_handshake_finished() {
+                    let session_key = match responder.derived_session_key() {
+                        Ok(session_key) => session_key,
+                        Err(err) => {
+                            log::warn!(
+                                "drop peer discovery hello completed without exportable session key source={} err={:?}",
+                                source,
+                                err
+                            );
+                            return Ok(());
+                        }
+                    };
+                    let cipher = crate::cipher::Cipher::new_key(session_key)?;
+                    self.runtime
+                        .peer_crypto
+                        .replace_current_cipher(source, cipher);
+                    let route = Route::from_default_rt(route_key, metric);
+                    self.runtime
+                        .route_manager()
+                        .add_path_if_absent(source, route);
+                }
+            }
+            PeerDiscoveryPacket::HelloAck {
+                session: session_id,
+                payload,
+            } => {
+                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                    log::warn!(
+                        "drop peer discovery hello-ack without active session source={} route_key={:?} session_id={} attempt={} txid={}",
+                        source,
+                        route_key,
+                        session_id.session_id(),
+                        session_id.attempt(),
+                        session_id.txid()
+                    );
+                    return Ok(());
+                }
+                log::info!(
+                    "PeerDiscoveryHelloAck route_key={:?},source={}",
+                    route_key,
+                    source
+                );
+                if self
+                    .runtime
+                    .route_manager
+                    .use_channel_type()
+                    .is_only_relay()
+                {
+                    return Ok(());
+                }
+                if self
+                    .runtime
+                    .nat_test
+                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
+                {
+                    return Ok(());
+                }
+                let Some(handshake_result) =
+                    self.runtime
+                        .with_peer_discovery_initiator(&source, |initiator| {
+                            initiator
+                                .read_hello_ack(payload)
+                                .map(|_| initiator.is_handshake_finished())
+                        })
+                else {
+                    log::warn!(
+                        "drop peer discovery hello-ack without initiator state source={} route_key={:?}",
+                        source,
+                        route_key
+                    );
+                    return Ok(());
+                };
+                match handshake_result {
+                    Ok(true) => {
+                        let Some(session_key_result) = self
+                            .runtime
+                            .with_peer_discovery_initiator(&source, |initiator| {
+                                initiator.derived_session_key()
+                            })
+                        else {
+                            log::warn!(
+                                "drop peer discovery hello-ack without exportable initiator state source={} route_key={:?}",
+                                source,
+                                route_key
+                            );
+                            return Ok(());
+                        };
+                        let session_key = match session_key_result {
+                            Ok(session_key) => session_key,
+                            Err(err) => {
+                                log::warn!(
+                                    "drop peer discovery hello-ack without session key source={} route_key={:?} err={:?}",
+                                    source,
+                                    route_key,
+                                    err
+                                );
+                                return Ok(());
+                            }
+                        };
+                        let cipher = crate::cipher::Cipher::new_key(session_key)?;
+                        self.runtime
+                            .peer_crypto
+                            .replace_current_cipher(source, cipher);
+                        self.runtime.clear_peer_discovery_initiator(&source);
+                        let route = Route::from_default_rt(route_key, metric);
+                        self.runtime
+                            .route_manager()
+                            .add_path_if_absent(source, route);
+                        self.send_peer_discovery_info(
+                            current_device,
+                            source,
+                            route_key,
+                            session_id,
+                            false,
+                        )?;
+                    }
+                    Ok(false) => {
+                        log::warn!(
+                            "drop peer discovery hello-ack before handshake completion source={} route_key={:?}",
+                            source,
+                            route_key
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "drop peer discovery hello-ack with invalid noise payload source={} route_key={:?} err={:?}",
+                            source,
+                            route_key,
+                            err
+                        );
+                    }
+                }
+            }
+            PeerDiscoveryPacket::EndpointInfo {
+                session: session_id,
+                payload,
+            } => {
+                if !self.matches_active_peer_discovery_session(&source, session_id) {
+                    log::warn!(
+                        "drop peer discovery info without active session source={} route_key={:?} session_id={} attempt={} txid={}",
+                        source,
+                        route_key,
+                        session_id.session_id(),
+                        session_id.attempt(),
+                        session_id.txid()
+                    );
+                    return Ok(());
+                }
+                self.handle_peer_discovery_info(
+                    current_device,
+                    source,
+                    route_key,
+                    payload,
+                    session_id,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn other_turn(
+        &self,
+        _current_device: &CurrentDeviceInfo,
+        net_packet: NetPacket<&mut [u8]>,
+        route_key: RouteKey,
+    ) -> anyhow::Result<()> {
+        let source = net_packet.source();
+        log::warn!(
+            "unsupported other-turn packet transport_protocol={} source={} route_key={:?}",
+            net_packet.transport_protocol(),
+            source,
+            route_key
+        );
+        Ok(())
+    }
+
+    fn handle_peer_discovery_info(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        source: Ipv4Addr,
+        route_key: RouteKey,
+        payload: &[u8],
+        session_id: DiscoverySessionId,
     ) -> anyhow::Result<()> {
         if self
             .runtime
@@ -688,174 +1075,76 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         {
             return Ok(());
         }
-        let source = net_packet.source();
-        match other_turn_packet::Protocol::from(net_packet.transport_protocol()) {
-            other_turn_packet::Protocol::Punch => {
-                let punch_info = PunchInfo::parse_from_bytes(net_packet.payload())
-                    .map_err(|e| anyhow!("PunchInfo {:?}", e))?;
-                let public_udp_endpoints: Vec<std::net::SocketAddr> = punch_info
-                    .public_udp_endpoints
-                    .iter()
-                    .filter_map(|endpoint| {
-                        if endpoint.port == 0 {
-                            return None;
-                        }
-                        if endpoint.ip != 0 {
-                            return Some(std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
-                                Ipv4Addr::from(endpoint.ip),
-                                endpoint.port as u16,
-                            )));
-                        }
-                        if endpoint.ipv6.len() == 16 {
-                            let ipv6: [u8; 16] = endpoint.ipv6.clone().try_into().ok()?;
-                            return Some(std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
-                                Ipv6Addr::from(ipv6),
-                                endpoint.port as u16,
-                                0,
-                                0,
-                            )));
-                        }
-                        None
-                    })
-                    .collect();
-                let local_udp_endpoints: Vec<std::net::SocketAddr> = punch_info
-                    .local_udp_endpoints
-                    .iter()
-                    .filter_map(|endpoint| {
-                        if endpoint.port == 0 {
-                            return None;
-                        }
-                        if endpoint.ip != 0 {
-                            return Some(std::net::SocketAddr::V4(std::net::SocketAddrV4::new(
-                                Ipv4Addr::from(endpoint.ip),
-                                endpoint.port as u16,
-                            )));
-                        }
-                        if endpoint.ipv6.len() == 16 {
-                            let ipv6: [u8; 16] = endpoint.ipv6.clone().try_into().ok()?;
-                            return Some(std::net::SocketAddr::V6(std::net::SocketAddrV6::new(
-                                Ipv6Addr::from(ipv6),
-                                endpoint.port as u16,
-                                0,
-                                0,
-                            )));
-                        }
-                        None
-                    })
-                    .collect();
-                let public_ips = public_udp_endpoints
-                    .iter()
-                    .filter_map(|addr| match addr {
-                        std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
-                        std::net::SocketAddr::V6(_) => None,
-                    })
-                    .collect();
-                let public_ports = public_udp_endpoints
-                    .iter()
-                    .map(|addr| addr.port())
-                    .collect();
-                let local_ipv4 = local_udp_endpoints.iter().find_map(|addr| match addr {
-                    std::net::SocketAddr::V4(addr) => Some(*addr.ip()),
-                    std::net::SocketAddr::V6(_) => None,
-                });
-                let ipv6 = local_udp_endpoints.iter().find_map(|addr| match addr {
-                    std::net::SocketAddr::V4(_) => None,
-                    std::net::SocketAddr::V6(addr) => Some(*addr.ip()),
-                });
-                let udp_ports = local_udp_endpoints.iter().map(|addr| addr.port()).collect();
-                let peer_nat_info = NatInfo::new(
-                    public_ips,
-                    public_ports,
-                    public_udp_endpoints,
-                    punch_info.public_port_range as u16,
-                    local_ipv4,
-                    ipv6,
-                    udp_ports,
-                    punch_info.nat_type.enum_value_or_default().into(),
-                    punch_info.punch_model.enum_value_or_default().into(),
-                );
-                {
-                    let peer_nat_info = peer_nat_info.clone();
-                    self.runtime
-                        .peer_nat_info_map
-                        .write()
-                        .insert(source, peer_nat_info);
-                }
-                if !punch_info.reply {
-                    let mut punch_reply = PunchInfo::new();
-                    punch_reply.reply = true;
-                    let nat_info = self.runtime.nat_test.nat_info();
-                    punch_reply.public_port_range = nat_info.public_port_range as u32;
-                    punch_reply.nat_type =
-                        protobuf::EnumOrUnknown::new(PunchNatType::from(nat_info.nat_type));
-                    punch_reply.punch_model =
-                        protobuf::EnumOrUnknown::new(nat_info.punch_model.into());
-                    punch_reply.public_udp_endpoints = nat_info
-                        .public_udp_endpoints
-                        .iter()
-                        .map(|addr| {
-                            let mut endpoint = crate::proto::message::PunchEndpoint::new();
-                            endpoint.port = u32::from(addr.port());
-                            match addr {
-                                std::net::SocketAddr::V4(addr) => {
-                                    endpoint.ip = u32::from(*addr.ip());
-                                }
-                                std::net::SocketAddr::V6(addr) => {
-                                    endpoint.ipv6 = addr.ip().octets().to_vec();
-                                }
-                            }
-                            endpoint
-                        })
-                        .collect();
-                    punch_reply.local_udp_endpoints = nat_info
-                        .local_udp_endpoints()
-                        .into_iter()
-                        .map(|addr| {
-                            let mut endpoint = crate::proto::message::PunchEndpoint::new();
-                            endpoint.port = u32::from(addr.port());
-                            match addr {
-                                std::net::SocketAddr::V4(addr) => {
-                                    endpoint.ip = u32::from(*addr.ip());
-                                }
-                                std::net::SocketAddr::V6(addr) => {
-                                    endpoint.ipv6 = addr.ip().octets().to_vec();
-                                }
-                            }
-                            endpoint
-                        })
-                        .collect();
-                    let bytes = punch_reply
-                        .write_to_bytes()
-                        .map_err(|e| anyhow!("punch_reply {:?}", e))?;
-                    let mut punch_packet =
-                        NetPacket::new_encrypt(vec![0u8; 12 + bytes.len() + ENCRYPTION_RESERVED])?;
-                    punch_packet.set_default_version();
-                    punch_packet.set_protocol(Protocol::OtherTurn);
-                    punch_packet.set_transport_protocol(other_turn_packet::Protocol::Punch.into());
-                    punch_packet.set_initial_ttl(MAX_TTL);
-                    punch_packet.set_source(current_device.virtual_ip());
-                    punch_packet.set_destination(source);
-                    punch_packet.set_payload(&bytes)?;
-                    self.encrypt_by_route(&source, &mut punch_packet)?;
-                    if self
-                        .runtime
-                        .punch_coordinator
-                        .submit_from_peer(source, peer_nat_info)
-                    {
-                        self.runtime
-                            .udp_channel
-                            .send_by_key(punch_packet.buffer(), route_key)?;
-                    }
-                } else {
-                    self.runtime
-                        .punch_coordinator
-                        .submit_local(source, peer_nat_info);
-                }
+        let endpoint_info =
+            EndpointInfoPayload::decode(payload).map_err(|e| anyhow!("EndpointInfo {:?}", e))?;
+        let peer_nat_info = endpoint_info.clone().into_nat_info();
+        {
+            let peer_nat_info = peer_nat_info.clone();
+            self.runtime
+                .peer_nat_info_map
+                .write()
+                .insert(source, peer_nat_info);
+        }
+        if !endpoint_info.reply() {
+            let punch_packet =
+                self.build_peer_discovery_info_packet(current_device, source, session_id, true)?;
+            if self
+                .runtime
+                .punch_coordinator
+                .submit_from_peer(source, peer_nat_info, session_id)
+            {
+                self.runtime
+                    .udp_channel
+                    .send_by_key(punch_packet.buffer(), route_key)?;
             }
-            other_turn_packet::Protocol::Unknown(e) => {
-                log::warn!("不支持的转发协议 {:?},source:{:?}", e, source);
-            }
+        } else {
+            self.runtime
+                .punch_coordinator
+                .submit_local(source, peer_nat_info, session_id);
         }
         Ok(())
+    }
+
+    fn send_peer_discovery_info(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        peer_ip: Ipv4Addr,
+        route_key: RouteKey,
+        session_id: DiscoverySessionId,
+        reply: bool,
+    ) -> anyhow::Result<()> {
+        let packet =
+            self.build_peer_discovery_info_packet(current_device, peer_ip, session_id, reply)?;
+        self.send_reply_by_route(&packet, route_key)
+    }
+
+    fn build_peer_discovery_info_packet(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        peer_ip: Ipv4Addr,
+        session_id: DiscoverySessionId,
+        reply: bool,
+    ) -> anyhow::Result<NetPacket<Vec<u8>>> {
+        let nat_info = self.runtime.nat_test.nat_info();
+        let bytes = EndpointInfoPayload::from_nat_info(reply, &nat_info)
+            .encode()
+            .map_err(|e| anyhow!("EndpointInfo {:?}", e))?;
+        let mut packet = NetPacket::new_encrypt(vec![
+            0u8;
+            12 + DISCOVERY_SESSION_LEN
+                + bytes.len()
+                + ENCRYPTION_RESERVED
+        ])?;
+        packet.set_default_version();
+        packet.set_protocol(Protocol::PeerDiscovery);
+        packet.set_transport_protocol(peer_discovery_packet::Protocol::EndpointInfo.into());
+        packet.set_initial_ttl(MAX_TTL);
+        packet.set_source(current_device.virtual_ip());
+        packet.set_destination(peer_ip);
+        session_id.write(packet.payload_mut())?;
+        packet.payload_mut()[DISCOVERY_SESSION_LEN..DISCOVERY_SESSION_LEN + bytes.len()]
+            .copy_from_slice(&bytes);
+        self.encrypt_peer_discovery(&peer_ip, &mut packet)?;
+        Ok(packet)
     }
 }

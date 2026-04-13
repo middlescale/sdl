@@ -298,17 +298,10 @@ impl ControlSession {
         if ip.is_none() {
             ip = Some(current_device.virtual_ip);
         }
-        let online_kx_pub = self
-            .data_plane
-            .peer_crypto
-            .ensure_online_session_key()
-            .public_key()
-            .to_vec();
         let packet = registrar::registration_request_packet(
             self.config.token.clone(),
             self.config.device_id.clone(),
             self.config.device_pub_key.clone(),
-            online_kx_pub,
             self.config.name.clone(),
             ip,
             is_fast,

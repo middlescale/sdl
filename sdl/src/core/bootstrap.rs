@@ -142,6 +142,10 @@ impl Sdl {
         let unknown_peer_setup_limiter = Arc::new(crate::util::PeerSetupLimiter::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
+        let pending_peer_discovery_sessions: Arc<
+            Mutex<HashMap<Ipv4Addr, crate::core::runtime::PeerDiscoverySession>>,
+        > = Arc::new(Mutex::new(HashMap::with_capacity(16)));
+        let pending_peer_discovery_initiators = Arc::new(Mutex::new(HashMap::with_capacity(16)));
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
         let route_table = Arc::new(RouteTable::new(
             config.use_channel_type,
@@ -153,7 +157,7 @@ impl Sdl {
             stop_manager.clone(),
             current_device.clone(),
             peer_crypto.clone(),
-            config.cipher_model != crate::cipher::CipherModel::None,
+            true,
             std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
             std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
         )?;
@@ -253,6 +257,8 @@ impl Sdl {
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),
                 peer_nat_info_map: peer_nat_info_map.clone(),
+                pending_peer_discovery_sessions: pending_peer_discovery_sessions.clone(),
+                pending_peer_discovery_initiators: pending_peer_discovery_initiators.clone(),
                 external_route: external_route.clone(),
                 out_external_route: out_external_route.clone(),
                 control_session: control_session.clone(),
@@ -310,13 +316,7 @@ impl Sdl {
             nat_test.clone(),
             current_device.clone(),
         );
-        spawn_punch_workers(
-            current_device.clone(),
-            peer_crypto.clone(),
-            config.cipher_model != crate::cipher::CipherModel::None,
-            punch_coordinator.clone(),
-            punch.clone(),
-        );
+        spawn_punch_workers(runtime.clone(), punch_coordinator.clone(), punch.clone());
 
         // #[cfg(not(target_os = "android"))]
         // tun_helper.start(device)?;

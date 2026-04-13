@@ -1,4 +1,3 @@
-use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -6,26 +5,35 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 
-use crate::handle::CurrentDeviceInfo;
+use crate::core::SdlRuntime;
 use crate::nat::punch::{NatInfo, NatType, Punch};
 use crate::protocol::body::ENCRYPTION_RESERVED;
-use crate::protocol::{control_packet, NetPacket, Protocol};
-use crate::util::PeerCryptoManager;
+use crate::protocol::peer_discovery_packet::{DiscoverySessionId, DISCOVERY_SESSION_LEN};
+use crate::protocol::{NetPacket, Protocol};
 
 struct PunchSenders {
-    sender_self: SyncSender<(Ipv4Addr, NatInfo)>,
-    sender_peer: SyncSender<(Ipv4Addr, NatInfo)>,
-    sender_cone_self: SyncSender<(Ipv4Addr, NatInfo)>,
-    sender_cone_peer: SyncSender<(Ipv4Addr, NatInfo)>,
+    sender_self: SyncSender<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    sender_peer: SyncSender<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    sender_cone_self: SyncSender<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    sender_cone_peer: SyncSender<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
 }
 
 impl PunchSenders {
-    fn send(&self, src_peer: bool, ip: Ipv4Addr, info: NatInfo) -> bool {
+    fn send(
+        &self,
+        src_peer: bool,
+        ip: Ipv4Addr,
+        info: NatInfo,
+        session_id: DiscoverySessionId,
+    ) -> bool {
         log::info!(
-            "发送打洞协商消息,是否对端发起:{},ip:{},info:{:?}",
+            "发送打洞协商消息,是否对端发起:{},ip:{},info:{:?},session_id={},attempt={},txid={}",
             src_peer,
             ip,
-            info
+            info,
+            session_id.session_id(),
+            session_id.attempt(),
+            session_id.txid()
         );
         let sender = match info.nat_type {
             NatType::Symmetric => {
@@ -43,7 +51,7 @@ impl PunchSenders {
                 }
             }
         };
-        let queued = sender.try_send((ip, info)).is_ok();
+        let queued = sender.try_send((ip, info, session_id)).is_ok();
         log::info!(
             "打洞任务入队结果,是否对端发起:{},ip:{},queued:{}",
             src_peer,
@@ -55,10 +63,10 @@ impl PunchSenders {
 }
 
 struct PunchReceivers {
-    receiver_peer: Receiver<(Ipv4Addr, NatInfo)>,
-    receiver_self: Receiver<(Ipv4Addr, NatInfo)>,
-    receiver_cone_peer: Receiver<(Ipv4Addr, NatInfo)>,
-    receiver_cone_self: Receiver<(Ipv4Addr, NatInfo)>,
+    receiver_peer: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    receiver_self: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    receiver_cone_peer: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
+    receiver_cone_self: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
 }
 
 #[derive(Clone)]
@@ -95,12 +103,22 @@ impl PunchCoordinator {
         }
     }
 
-    pub fn submit_from_peer(&self, ip: Ipv4Addr, info: NatInfo) -> bool {
-        self.inner.senders.send(true, ip, info)
+    pub fn submit_from_peer(
+        &self,
+        ip: Ipv4Addr,
+        info: NatInfo,
+        session_id: DiscoverySessionId,
+    ) -> bool {
+        self.inner.senders.send(true, ip, info, session_id)
     }
 
-    pub fn submit_local(&self, ip: Ipv4Addr, info: NatInfo) -> bool {
-        self.inner.senders.send(false, ip, info)
+    pub fn submit_local(
+        &self,
+        ip: Ipv4Addr,
+        info: NatInfo,
+        session_id: DiscoverySessionId,
+    ) -> bool {
+        self.inner.senders.send(false, ip, info, session_id)
     }
 
     fn take_receivers(&self) -> Option<PunchReceivers> {
@@ -108,36 +126,21 @@ impl PunchCoordinator {
     }
 }
 
-pub fn spawn_punch_workers(
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    peer_crypto: Arc<PeerCryptoManager>,
-    peer_encrypt: bool,
-    coordinator: PunchCoordinator,
-    punch: Punch,
-) {
+pub fn spawn_punch_workers(runtime: Arc<SdlRuntime>, coordinator: PunchCoordinator, punch: Punch) {
     log::info!("control-driven punch enabled: starting punch workers");
     let Some(receivers) = coordinator.take_receivers() else {
         log::warn!("punch workers already started");
         return;
     };
     let punch_record = Arc::new(Mutex::new(HashMap::new()));
-    let f = |receiver: Receiver<(Ipv4Addr, NatInfo)>| {
+    let f = |receiver: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>| {
         let punch = punch.clone();
-        let current_device = current_device.clone();
-        let peer_crypto = peer_crypto.clone();
-        let peer_encrypt = peer_encrypt;
+        let runtime = runtime.clone();
         let punch_record = punch_record.clone();
         thread::Builder::new()
             .name("punch".into())
             .spawn(move || {
-                punch_start(
-                    receiver,
-                    punch,
-                    current_device,
-                    peer_crypto,
-                    peer_encrypt,
-                    punch_record,
-                );
+                punch_start(receiver, punch, runtime, punch_record);
             })
             .expect("punch");
     };
@@ -148,20 +151,33 @@ pub fn spawn_punch_workers(
 }
 
 fn punch_start(
-    receiver: Receiver<(Ipv4Addr, NatInfo)>,
+    receiver: Receiver<(Ipv4Addr, NatInfo, DiscoverySessionId)>,
     mut punch: Punch,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    peer_crypto: Arc<PeerCryptoManager>,
-    peer_encrypt: bool,
+    runtime: Arc<SdlRuntime>,
     punch_record: Arc<Mutex<HashMap<Ipv4Addr, usize>>>,
 ) {
-    while let Ok((peer_ip, nat_info)) = receiver.recv() {
-        let mut packet = NetPacket::new_encrypt([0u8; 12 + ENCRYPTION_RESERVED]).unwrap();
+    while let Ok((peer_ip, nat_info, session_id)) = receiver.recv() {
+        let Some(session) = runtime.peer_discovery_session(&peer_ip) else {
+            log::warn!(
+                "skip discovery hello without active session for {}",
+                peer_ip
+            );
+            continue;
+        };
+        let mut packet = NetPacket::new_encrypt(vec![
+            0u8;
+            12 + DISCOVERY_SESSION_LEN
+                + session.hello_payload.len()
+                + ENCRYPTION_RESERVED
+        ])
+        .unwrap();
+        let source = runtime.current_device.load().virtual_ip();
         packet.set_default_version();
         packet.set_initial_ttl(1);
-        packet.set_protocol(Protocol::Control);
-        packet.set_transport_protocol(control_packet::Protocol::PunchRequest.into());
-        packet.set_source(current_device.load().virtual_ip());
+        packet.set_protocol(Protocol::PeerDiscovery);
+        packet
+            .set_transport_protocol(crate::protocol::peer_discovery_packet::Protocol::Hello.into());
+        packet.set_source(source);
         packet.set_destination(peer_ip);
         let count = {
             let mut guard = punch_record.lock();
@@ -175,24 +191,44 @@ fn punch_start(
         };
         log::info!("第{}次发起打洞,目标:{:?},{:?} ", count, peer_ip, nat_info);
 
-        if peer_encrypt {
-            let Ok(cipher) = peer_crypto.current_cipher(&peer_ip) else {
+        let Some(peer_info) = runtime.peer_info(&peer_ip) else {
+            log::warn!("skip discovery hello without peer identity for {}", peer_ip);
+            continue;
+        };
+        let bootstrap_key = match crate::util::derive_peer_discovery_bootstrap_key(
+            &runtime.device_signing_key,
+            &peer_info.device_pub_key,
+        ) {
+            Ok(key) => key,
+            Err(err) => {
                 log::warn!(
-                    "skip punch request without peer session cipher for {}",
-                    peer_ip
+                    "skip discovery hello without bootstrap key for {}: {:?}",
+                    peer_ip,
+                    err
                 );
                 continue;
-            };
-            if let Err(e) = cipher.encrypt_ipv4(&mut packet) {
-                log::error!("{:?}", e);
-                continue;
             }
+        };
+        let Ok(cipher) = crate::cipher::Cipher::new_key(bootstrap_key) else {
+            log::warn!(
+                "skip discovery hello without bootstrap cipher for {}",
+                peer_ip
+            );
+            continue;
+        };
+        session_id.write(packet.payload_mut()).unwrap();
+        packet.payload_mut()
+            [DISCOVERY_SESSION_LEN..DISCOVERY_SESSION_LEN + session.hello_payload.len()]
+            .copy_from_slice(&session.hello_payload);
+        if let Err(e) = cipher.encrypt_ipv4(&mut packet) {
+            log::error!("{:?}", e);
+            continue;
         }
-        log::info!("开始发送 PunchRequest,目标:{},第{}次", peer_ip, count);
+        log::info!("开始发送 PeerDiscoveryHello,目标:{},第{}次", peer_ip, count);
         if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count) {
             log::warn!("{:?}", e)
         } else {
-            log::info!("PunchRequest 发送完成,目标:{},第{}次", peer_ip, count);
+            log::info!("PeerDiscoveryHello 发送完成,目标:{},第{}次", peer_ip, count);
         }
     }
 }

@@ -1,8 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use anyhow::anyhow;
-
 #[cfg(feature = "aes_cbc")]
 use crate::cipher::aes_cbc::AesCbcCipher;
 #[cfg(feature = "aes_ecb")]
@@ -31,6 +29,7 @@ pub enum CipherModel {
     AesEcb,
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc,
+    #[cfg(not(feature = "aes_gcm"))]
     None,
 }
 
@@ -49,6 +48,7 @@ impl Display for CipherModel {
             CipherModel::AesEcb => "aes_ecb".to_string(),
             #[cfg(feature = "sm4_cbc")]
             CipherModel::Sm4Cbc => "sm4_cbc".to_string(),
+            #[cfg(not(feature = "aes_gcm"))]
             CipherModel::None => "none".to_string(),
         };
         write!(f, "{}", str)
@@ -59,7 +59,7 @@ impl CipherModel {
     pub fn is_runtime_supported(self) -> bool {
         #[cfg(feature = "aes_gcm")]
         {
-            matches!(self, CipherModel::AesGcm | CipherModel::None)
+            matches!(self, CipherModel::AesGcm)
         }
         #[cfg(not(feature = "aes_gcm"))]
         {
@@ -85,10 +85,11 @@ impl FromStr for CipherModel {
             "aes_ecb" => CipherModel::AesEcb,
             #[cfg(feature = "sm4_cbc")]
             "sm4_cbc" => CipherModel::Sm4Cbc,
+            #[cfg(not(feature = "aes_gcm"))]
             "none" => CipherModel::None,
             _ => {
                 #[cfg(feature = "aes_gcm")]
-                return Err(format!("not match '{}', enum:aes_gcm/none", s));
+                return Err(format!("not match '{}', enum:aes_gcm", s));
                 #[cfg(not(feature = "aes_gcm"))]
                 return Err(format!("not match '{}', enum:none", s));
             }
@@ -98,7 +99,7 @@ impl FromStr for CipherModel {
         } else {
             #[cfg(feature = "aes_gcm")]
             return Err(format!(
-                "cipher '{}' is built but not supported at runtime, enum:aes_gcm/none",
+                "cipher '{}' is built but not supported at runtime, enum:aes_gcm",
                 s
             ));
             #[cfg(not(feature = "aes_gcm"))]
@@ -124,6 +125,7 @@ pub enum Cipher {
     AesEcb(AesEcbCipher),
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc(Sm4CbcCipher),
+    #[cfg(not(feature = "aes_gcm"))]
     None,
 }
 
@@ -154,6 +156,7 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => aes_ecb.decrypt_ipv4(net_packet),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.decrypt_ipv4(net_packet),
+            #[cfg(not(feature = "aes_gcm"))]
             Cipher::None => {
                 if net_packet.is_encrypt() {
                     return Err(anyhow!("not key"));
@@ -179,6 +182,7 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => aes_ecb.encrypt_ipv4(net_packet),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.encrypt_ipv4(net_packet),
+            #[cfg(not(feature = "aes_gcm"))]
             Cipher::None => Ok(()),
         }
     }
@@ -196,6 +200,7 @@ impl Cipher {
             Cipher::AesEcb(aes_ecb) => Some(aes_ecb.key()),
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => Some(sm4_cbc.key()),
+            #[cfg(not(feature = "aes_gcm"))]
             Cipher::None => None,
         }
     }

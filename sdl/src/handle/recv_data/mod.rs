@@ -129,6 +129,7 @@ fn is_claiming_control_or_service_packet<B: AsRef<[u8]>>(
             current_device.is_control_vip(&net_packet.source())
                 || current_device.is_gateway_vip(&net_packet.source())
         }
+        crate::protocol::Protocol::PeerDiscovery => false,
         _ => false,
     }
 }

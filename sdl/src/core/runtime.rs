@@ -24,12 +24,13 @@ use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::NatInfo;
 use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
+use crate::protocol::peer_discovery_packet::DiscoverySessionId;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::create_device;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
-use crate::util::{DebugWatch, PeerCryptoManager};
+use crate::util::{DebugWatch, PeerCryptoManager, PeerDiscoveryNoiseInitiator};
 #[cfg(feature = "integrated_tun")]
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
@@ -80,6 +81,13 @@ pub enum RenameRequestOutcome {
     PendingApproval,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeerDiscoverySession {
+    pub session_id: DiscoverySessionId,
+    pub deadline_unix_ms: i64,
+    pub hello_payload: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct SdlRuntime {
     pub config: RuntimeConfig,
@@ -98,6 +106,9 @@ pub struct SdlRuntime {
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
+    pub pending_peer_discovery_sessions: Arc<Mutex<HashMap<Ipv4Addr, PeerDiscoverySession>>>,
+    pub pending_peer_discovery_initiators:
+        Arc<Mutex<HashMap<Ipv4Addr, PeerDiscoveryNoiseInitiator>>>,
     pub external_route: ExternalRoute,
     pub out_external_route: AllowExternalRoute,
     pub control_session: ControlSession,
@@ -138,6 +149,68 @@ impl SdlRuntime {
         }
         *guard = profile;
         true
+    }
+
+    pub fn remember_peer_discovery_session(
+        &self,
+        peer_ip: Ipv4Addr,
+        session: PeerDiscoverySession,
+    ) {
+        self.pending_peer_discovery_sessions
+            .lock()
+            .insert(peer_ip, session);
+    }
+
+    pub fn peer_discovery_session(&self, peer_ip: &Ipv4Addr) -> Option<PeerDiscoverySession> {
+        self.pending_peer_discovery_sessions
+            .lock()
+            .get(peer_ip)
+            .cloned()
+    }
+
+    pub fn clear_peer_discovery_session(&self, peer_ip: &Ipv4Addr) {
+        self.pending_peer_discovery_sessions.lock().remove(peer_ip);
+        self.pending_peer_discovery_initiators
+            .lock()
+            .remove(peer_ip);
+    }
+
+    pub fn remember_peer_discovery_initiator(
+        &self,
+        peer_ip: Ipv4Addr,
+        initiator: PeerDiscoveryNoiseInitiator,
+    ) {
+        self.pending_peer_discovery_initiators
+            .lock()
+            .insert(peer_ip, initiator);
+    }
+
+    pub fn with_peer_discovery_initiator<T>(
+        &self,
+        peer_ip: &Ipv4Addr,
+        f: impl FnOnce(&mut PeerDiscoveryNoiseInitiator) -> T,
+    ) -> Option<T> {
+        let mut guard = self.pending_peer_discovery_initiators.lock();
+        let initiator = guard.get_mut(peer_ip)?;
+        Some(f(initiator))
+    }
+
+    pub fn clear_peer_discovery_initiator(&self, peer_ip: &Ipv4Addr) {
+        self.pending_peer_discovery_initiators
+            .lock()
+            .remove(peer_ip);
+    }
+
+    pub fn retain_peer_discovery_sessions(
+        &self,
+        valid_peers: &std::collections::HashSet<Ipv4Addr>,
+    ) {
+        self.pending_peer_discovery_sessions
+            .lock()
+            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+        self.pending_peer_discovery_initiators
+            .lock()
+            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
     }
 
     pub fn is_dns_service_ip(&self, ip: Ipv4Addr) -> bool {
@@ -534,7 +607,6 @@ impl SdlRuntime {
                             "status": format!("{:?}", peer.status),
                             "device_id": peer.device_id,
                             "device_pub_key_len": peer.device_pub_key.len(),
-                            "online_kx_pub_len": peer.online_kx_pub.len(),
                         })
                     })
                     .collect::<Vec<_>>();

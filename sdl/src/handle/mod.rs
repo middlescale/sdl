@@ -36,7 +36,6 @@ pub struct PeerDeviceInfo {
     pub status: PeerDeviceStatus,
     pub device_id: String,
     pub device_pub_key: Vec<u8>,
-    pub online_kx_pub: Vec<u8>,
 }
 
 impl PeerDeviceInfo {
@@ -46,7 +45,6 @@ impl PeerDeviceInfo {
         status: u8,
         device_id: String,
         device_pub_key: Vec<u8>,
-        online_kx_pub: Vec<u8>,
     ) -> Self {
         Self {
             virtual_ip,
@@ -54,7 +52,6 @@ impl PeerDeviceInfo {
             status: PeerDeviceStatus::from(status),
             device_id,
             device_pub_key,
-            online_kx_pub,
         }
     }
 }
