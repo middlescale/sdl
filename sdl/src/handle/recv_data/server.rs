@@ -15,7 +15,7 @@ use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::core::SdlRuntime;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RoutePath};
 use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
@@ -72,7 +72,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         &self,
         net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         self.runtime
@@ -401,7 +401,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         match service_packet::Protocol::from(net_packet.transport_protocol()) {
             service_packet::Protocol::RegistrationResponse => {
@@ -745,8 +745,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     punch_start.session_id,
                     punch_start.attempt,
                     punch_start.peer_endpoints.len(),
-                    peer_nat_info.public_ips,
-                    peer_nat_info.public_ports,
+                    peer_nat_info.public_ips(),
+                    peer_nat_info.public_ports(),
                     peer_nat_info.local_ipv4()
                 );
                 self.runtime.debug_watch.emit(
@@ -760,8 +760,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             "trigger_reason": format!("{:?}", punch_start.trigger_reason.enum_value_or_default()),
                             "selection_policy": format!("{:?}", punch_start.endpoint_selection_policy.enum_value_or_default()),
                             "endpoint_count": punch_start.peer_endpoints.len(),
-                            "public_ips": peer_nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                            "public_ports": peer_nat_info.public_ports,
+                            "public_ips": peer_nat_info.public_ips().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                            "public_ports": peer_nat_info.public_ports(),
                         "local_ipv4": peer_nat_info.local_ipv4().map(|ip| ip.to_string()),
                     }),
                 );
@@ -1055,7 +1055,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     fn register(
         &self,
         current_device: &CurrentDeviceInfo,
-        _route_key: RouteKey,
+        _route_key: RoutePath,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
             log::info!("已连接的不需要注册，{:?}", self.runtime.config);
@@ -1071,7 +1071,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         _current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> io::Result<()> {
         match InErrorPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             InErrorPacket::TokenError => {
@@ -1123,7 +1123,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PongPacket(pong_packet) => {
@@ -1429,10 +1429,10 @@ mod tests {
 
         let (peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
         assert_eq!(peer_ip, Ipv4Addr::new(10, 26, 0, 3));
-        assert_eq!(nat_info.public_ips.len(), 2);
-        assert_eq!(nat_info.public_ports, vec![10001, 10002]);
+        assert_eq!(nat_info.public_ips().len(), 2);
+        assert_eq!(nat_info.public_ports(), &[10001, 10002]);
         assert_eq!(nat_info.ipv6(), Some(ipv6));
-        assert_eq!(nat_info.punch_model, PunchModel::All);
+        assert_eq!(nat_info.punch_model(), PunchModel::All);
     }
 
     #[test]
@@ -1445,10 +1445,10 @@ mod tests {
         start.peer_endpoints.push(ep);
 
         let (_peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
-        assert!(nat_info.public_ips.is_empty());
+        assert!(nat_info.public_ips().is_empty());
         assert_eq!(nat_info.local_ipv4(), Some(Ipv4Addr::new(172, 18, 0, 7)));
-        assert_eq!(nat_info.public_ports, vec![10001]);
-        assert_eq!(nat_info.udp_ports, vec![10001]);
+        assert_eq!(nat_info.public_ports(), &[10001]);
+        assert_eq!(nat_info.udp_ports(), &[10001]);
     }
 
     #[test]

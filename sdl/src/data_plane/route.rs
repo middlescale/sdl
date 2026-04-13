@@ -44,7 +44,7 @@ impl Route {
         }
     }
 
-    pub fn from(route_key: RouteKey, metric: u8, rt: i64) -> Self {
+    pub fn from(route_key: RoutePath, metric: u8, rt: i64) -> Self {
         Self {
             protocol: route_key.protocol,
             origin: route_key.origin,
@@ -54,7 +54,7 @@ impl Route {
         }
     }
 
-    pub fn from_default_rt(route_key: RouteKey, metric: u8) -> Self {
+    pub fn from_default_rt(route_key: RoutePath, metric: u8) -> Self {
         Self {
             protocol: route_key.protocol,
             origin: route_key.origin,
@@ -64,8 +64,8 @@ impl Route {
         }
     }
 
-    pub fn route_key(&self) -> RouteKey {
-        RouteKey {
+    pub fn route_key(&self) -> RoutePath {
+        RoutePath {
             protocol: self.protocol,
             origin: self.origin,
             addr: self.addr,
@@ -114,13 +114,13 @@ impl Route {
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub struct RouteKey {
+pub struct RoutePath {
     protocol: ConnectProtocol,
     origin: RouteOrigin,
     addr: SocketAddr,
 }
 
-impl RouteKey {
+impl RoutePath {
     pub(crate) const fn new_with_origin(
         protocol: ConnectProtocol,
         origin: RouteOrigin,

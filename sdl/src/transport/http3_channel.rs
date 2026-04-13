@@ -15,7 +15,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::{RouteKey, RouteOrigin};
+use crate::data_plane::route::{RouteOrigin, RoutePath};
 use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::control_addr::parse_control_address;
@@ -63,7 +63,7 @@ impl Http3Channel {
 
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, RoutePath) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
             return Ok(());
@@ -245,7 +245,7 @@ async fn run_http3_worker(
 
 struct Http3ClientConnection {
     addr: SocketAddr,
-    route_key: RouteKey,
+    route_key: RoutePath,
     endpoint: quinn::Endpoint,
     request_sender: SendRequest<h3_quinn::OpenStreams, Bytes>,
     send: RequestStream<H3SendStream<Bytes>, Bytes>,
@@ -287,7 +287,7 @@ async fn connect(
     let connecting = endpoint.connect(addr, server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
     let route_key =
-        RouteKey::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::ControlHttp3, addr);
+        RoutePath::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::ControlHttp3, addr);
 
     let quinn_conn = h3_quinn::Connection::new(conn);
     let (mut driver, mut send_request) = h3::client::new(quinn_conn).await?;
@@ -322,7 +322,7 @@ async fn connect(
 
 async fn read_h3_packets(
     mut recv: RequestStream<H3RecvStream, Bytes>,
-    route_key: RouteKey,
+    route_key: RoutePath,
     on_packet: PacketCallback,
 ) -> anyhow::Result<()> {
     let mut pending = Vec::new();

@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::cipher::Cipher;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RoutePath};
 use crate::data_plane::route_snapshot::RouteSnapshot;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::use_channel_type::UseChannelType;
@@ -116,7 +116,7 @@ impl RouteManager {
         self.route_table.get_one_p2p_route(vip)
     }
 
-    pub fn peer_for_direct_route(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
+    pub fn peer_for_direct_route(&self, route_key: &RoutePath) -> Option<Ipv4Addr> {
         self.route_table.get_one_p2p_ip(route_key)
     }
 
@@ -179,11 +179,11 @@ impl RouteManager {
             .collect()
     }
 
-    pub fn remove_path(&self, vip: &Ipv4Addr, route_key: RouteKey) {
+    pub fn remove_path(&self, vip: &Ipv4Addr, route_key: RoutePath) {
         self.route_table.remove_route(vip, route_key)
     }
 
-    pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
+    pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RoutePath) {
         self.route_table.update_read_time(vip, route_key)
     }
 
@@ -395,7 +395,7 @@ impl RouteManager {
         &self,
         sender: &RouteSender,
         buf: &NetPacket<B>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> io::Result<()> {
         sender.udp_channel.send_by_key(buf.buffer(), route_key)
     }

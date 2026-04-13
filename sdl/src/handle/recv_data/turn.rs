@@ -1,5 +1,5 @@
 use crate::core::SdlRuntime;
-use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::RoutePath;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::{NetPacket, Protocol};
@@ -23,7 +23,7 @@ impl PacketHandler for TurnPacketHandler {
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
         _current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         // 增加了一跳

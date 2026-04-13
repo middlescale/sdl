@@ -106,15 +106,15 @@ impl ControlSession {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, crate::data_plane::route::RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, crate::data_plane::route::RoutePath) + Send + Sync + 'static,
     {
         // Wrap on_packet so every packet received on the control channel
         // automatically updates the liveness timestamp — no address-based
         // detection needed at the call site.
         let last_ts = self.last_control_packet_at_ms.clone();
-        let wrapped = move |data: Vec<u8>, route_key: crate::data_plane::route::RouteKey| {
+        let wrapped = move |data: Vec<u8>, route_path: crate::data_plane::route::RoutePath| {
             last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
-            on_packet(data, route_key);
+            on_packet(data, route_path);
         };
         self.channel.start(stop_manager.clone(), wrapped)?;
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
@@ -451,15 +451,15 @@ impl ControlSession {
         message.up_stream = self.data_plane_stats.up_traffic_total();
         message.down_stream = self.data_plane_stats.down_traffic_total();
         message.nat_type =
-            protobuf::EnumOrUnknown::new(if self.nat_test.nat_info().nat_type.is_cone() {
+            protobuf::EnumOrUnknown::new(if self.nat_test.nat_info().nat_type().is_cone() {
                 PunchNatType::Cone
             } else {
                 PunchNatType::Symmetric
             });
         let nat_info = self.nat_test.nat_info();
-        message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
+        message.local_udp_ports = nat_info.udp_ports().iter().map(|p| *p as u32).collect();
         message.public_udp_endpoints = nat_info
-            .public_udp_endpoints
+            .public_udp_endpoints()
             .iter()
             .map(|addr| {
                 let mut endpoint = PunchEndpoint::new();

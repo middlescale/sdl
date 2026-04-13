@@ -6,7 +6,7 @@ use std::time::Instant;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::RwLock;
 
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RoutePath};
 use crate::data_plane::use_channel_type::UseChannelType;
 
 type RouteLiveness = AtomicCell<Instant>;
@@ -119,7 +119,7 @@ impl RouteTable {
             .and_then(|v| v.iter().find_map(|(i, _)| i.is_p2p().then_some(*i)))
     }
 
-    pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
+    pub fn get_one_p2p_ip(&self, route_key: &RoutePath) -> Option<Ipv4Addr> {
         let table = self.route_table.read();
         for (k, v) in table.iter() {
             for (route, _) in v {
@@ -177,7 +177,7 @@ impl RouteTable {
             .collect()
     }
 
-    pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) {
+    pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RoutePath) {
         let mut write_guard = self.route_table.write();
         if let Some(routes) = write_guard.get_mut(vip) {
             routes.retain(|(x, _)| x.route_key() != route_key);
@@ -187,7 +187,7 @@ impl RouteTable {
         }
     }
 
-    pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
+    pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RoutePath) {
         if let Some(routes) = self.route_table.read().get(vip) {
             for (route, time) in routes {
                 if &route.route_key() == route_key {
@@ -212,14 +212,14 @@ impl RouteTable {
 #[cfg(test)]
 mod tests {
     use super::RouteTable;
-    use crate::data_plane::route::{Route, RouteKey};
+    use crate::data_plane::route::{Route, RoutePath};
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashSet;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    fn route_key(port: u16) -> RouteKey {
-        RouteKey::new_with_origin(
+    fn route_key(port: u16) -> RoutePath {
+        RoutePath::new_with_origin(
             ConnectProtocol::UDP,
             crate::data_plane::route::RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),

@@ -86,15 +86,15 @@ impl Into<PunchModel> for PunchNatModel {
 
 #[derive(Clone, Debug)]
 pub struct NatInfo {
-    pub public_ips: Vec<Ipv4Addr>,
-    pub public_ports: Vec<u16>,
-    pub public_udp_endpoints: Vec<SocketAddr>,
-    pub public_port_range: u16,
-    pub nat_type: NatType,
-    pub(crate) local_ipv4: Option<Ipv4Addr>,
-    pub(crate) ipv6: Option<Ipv6Addr>,
-    pub udp_ports: Vec<u16>,
-    pub punch_model: PunchModel,
+    public_ips: Vec<Ipv4Addr>,
+    public_ports: Vec<u16>,
+    public_udp_endpoints: Vec<SocketAddr>,
+    public_port_range: u16,
+    nat_type: NatType,
+    local_ipv4: Option<Ipv4Addr>,
+    ipv6: Option<Ipv6Addr>,
+    udp_ports: Vec<u16>,
+    punch_model: PunchModel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -221,8 +221,51 @@ impl NatInfo {
     pub fn local_ipv4(&self) -> Option<Ipv4Addr> {
         self.local_ipv4
     }
+    pub fn public_ips(&self) -> &[Ipv4Addr] {
+        &self.public_ips
+    }
+    pub fn public_ports(&self) -> &[u16] {
+        &self.public_ports
+    }
+    pub fn public_udp_endpoints(&self) -> &[SocketAddr] {
+        &self.public_udp_endpoints
+    }
+    pub fn public_port_range(&self) -> u16 {
+        self.public_port_range
+    }
+    pub fn nat_type(&self) -> NatType {
+        self.nat_type
+    }
     pub fn ipv6(&self) -> Option<Ipv6Addr> {
         self.ipv6
+    }
+    pub fn udp_ports(&self) -> &[u16] {
+        &self.udp_ports
+    }
+    pub fn punch_model(&self) -> PunchModel {
+        self.punch_model
+    }
+    pub(crate) fn replace_probe_result(
+        &mut self,
+        nat_type: NatType,
+        public_udp_endpoints: Vec<SocketAddr>,
+        public_port_range: u16,
+        local_ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
+    ) {
+        self.nat_type = nat_type;
+        self.public_ips = public_udp_endpoints
+            .iter()
+            .filter_map(|addr| match addr {
+                SocketAddr::V4(addr) => Some(*addr.ip()),
+                SocketAddr::V6(_) => None,
+            })
+            .collect();
+        self.public_ports = public_udp_endpoints.iter().map(SocketAddr::port).collect();
+        self.public_udp_endpoints = public_udp_endpoints;
+        self.public_port_range = public_port_range;
+        self.local_ipv4 = local_ipv4;
+        self.ipv6 = ipv6;
     }
     pub fn local_udp_ipv4addr(&self) -> Option<SocketAddr> {
         let port = *self.udp_ports.first()?;

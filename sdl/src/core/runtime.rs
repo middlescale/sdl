@@ -580,16 +580,16 @@ impl SdlRuntime {
             root.insert(
                 "nat".into(),
                 json!({
-                    "nat_type": format!("{:?}", nat_info.nat_type),
-                    "punch_model": format!("{:?}", nat_info.punch_model),
-                    "public_ips": nat_info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "public_ports": nat_info.public_ports,
-                    "public_port_range": nat_info.public_port_range,
-                    "public_udp_endpoints": nat_info.public_udp_endpoints.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "udp_ports": nat_info.udp_ports,
+                    "nat_type": format!("{:?}", nat_info.nat_type()),
+                    "punch_model": format!("{:?}", nat_info.punch_model()),
+                    "public_ips": nat_info.public_ips().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "public_ports": nat_info.public_ports(),
+                    "public_port_range": nat_info.public_port_range(),
+                    "public_udp_endpoints": nat_info.public_udp_endpoints().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "udp_ports": nat_info.udp_ports(),
                     "local_udp_endpoints": nat_info.local_udp_endpoints().iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "local_ipv4": nat_info.local_ipv4.map(|ip| ip.to_string()),
-                    "ipv6": nat_info.ipv6.map(|ip| ip.to_string()),
+                    "local_ipv4": nat_info.local_ipv4().map(|ip| ip.to_string()),
+                    "ipv6": nat_info.ipv6().map(|ip| ip.to_string()),
                 }),
             );
         }
@@ -620,9 +620,9 @@ impl SdlRuntime {
                 .map(|(peer_ip, info)| {
                     json!({
                         "peer_ip": peer_ip.to_string(),
-                        "nat_type": format!("{:?}", info.nat_type),
-                        "public_ips": info.public_ips.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                        "public_ports": info.public_ports,
+                        "nat_type": format!("{:?}", info.nat_type()),
+                        "public_ips": info.public_ips().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "public_ports": info.public_ports(),
                     })
                 })
                 .collect::<Vec<_>>();

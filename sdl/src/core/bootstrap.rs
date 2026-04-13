@@ -14,7 +14,7 @@ use crate::core::{
 };
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RoutePath};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_snapshot::RouteSnapshot;
 use crate::data_plane::route_table::RouteTable;
@@ -383,7 +383,7 @@ impl Sdl {
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
         self.runtime.current_device.load().is_gateway_vip(ip)
     }
-    pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
+    pub fn route_key(&self, route_key: &RoutePath) -> Option<Ipv4Addr> {
         self.runtime
             .route_manager()
             .peer_for_direct_route(route_key)

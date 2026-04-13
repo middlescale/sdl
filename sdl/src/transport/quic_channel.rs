@@ -13,13 +13,13 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::{RouteKey, RouteOrigin};
+use crate::data_plane::route::{RouteOrigin, RoutePath};
 use crate::protocol::NetPacket;
 use crate::protocol::BUFFER_SIZE;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
-pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, RouteKey) + Send + Sync + 'static>;
+pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, RoutePath) + Send + Sync + 'static>;
 
 enum QuicCommand {
     Send(Vec<u8>),
@@ -61,7 +61,7 @@ impl QuicChannel {
 
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, RoutePath) + Send + Sync + 'static,
     {
         self.start_named(stop_manager, "controlQuic", on_packet)
     }
@@ -73,7 +73,7 @@ impl QuicChannel {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, RoutePath) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
             return Ok(());
@@ -253,7 +253,7 @@ async fn run_quic_worker(
 
 pub(crate) struct QuicClientConnection {
     pub addr: SocketAddr,
-    pub route_key: RouteKey,
+    pub route_key: RoutePath,
     pub endpoint: Endpoint,
     pub send: SendStream,
     pub recv: RecvStream,
@@ -280,7 +280,7 @@ async fn connect(
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
     let route_key =
-        RouteKey::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::GatewayQuic, addr);
+        RoutePath::new_with_origin(ConnectProtocol::QUIC, RouteOrigin::GatewayQuic, addr);
     let (send, recv) = conn.open_bi().await?;
     Ok(QuicClientConnection {
         addr,
@@ -332,7 +332,7 @@ pub fn extract_server_name(addr: &str) -> String {
 
 pub(crate) async fn read_framed_packets(
     recv: &mut RecvStream,
-    route_key: RouteKey,
+    route_key: RoutePath,
     on_packet: PacketCallback,
 ) -> anyhow::Result<()> {
     read_framed_packets_with(recv, move |packet| on_packet(packet, route_key)).await

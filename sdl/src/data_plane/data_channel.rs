@@ -5,7 +5,7 @@ use std::sync::{Arc, Weak};
 use serde_json::Value;
 
 use crate::core::SdlRuntime;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::{Route, RoutePath};
 use crate::data_plane::use_channel_type::UseChannelType;
 
 #[derive(Clone)]
@@ -15,7 +15,7 @@ pub struct DataChannel {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DataPath {
-    P2pUdp(RouteKey),
+    P2pUdp(RoutePath),
     GatewayRelay,
 }
 
@@ -120,7 +120,7 @@ impl DataChannel {
         &self,
         runtime: &SdlRuntime,
         buf: &crate::protocol::NetPacket<B>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> io::Result<()> {
         runtime.udp_channel.send_by_key(buf.buffer(), route_key)
     }

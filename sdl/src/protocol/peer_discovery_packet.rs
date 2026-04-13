@@ -137,11 +137,11 @@ impl EndpointInfoPayload {
     pub fn from_nat_info(reply: bool, nat_info: &NatInfo) -> Self {
         Self {
             reply,
-            public_udp_endpoints: nat_info.public_udp_endpoints.clone(),
+            public_udp_endpoints: nat_info.public_udp_endpoints().to_vec(),
             local_udp_endpoints: nat_info.local_udp_endpoints(),
-            public_port_range: nat_info.public_port_range,
-            nat_type: nat_info.nat_type,
-            punch_model: nat_info.punch_model,
+            public_port_range: nat_info.public_port_range(),
+            nat_type: nat_info.nat_type(),
+            punch_model: nat_info.punch_model(),
         }
     }
 
@@ -467,10 +467,13 @@ mod tests {
             .unwrap()
             .into_nat_info();
 
-        assert_eq!(decoded.public_port_range, nat_info.public_port_range);
-        assert_eq!(decoded.nat_type, nat_info.nat_type);
-        assert_eq!(decoded.punch_model, nat_info.punch_model);
-        assert_eq!(decoded.public_udp_endpoints, nat_info.public_udp_endpoints);
+        assert_eq!(decoded.public_port_range(), nat_info.public_port_range());
+        assert_eq!(decoded.nat_type(), nat_info.nat_type());
+        assert_eq!(decoded.punch_model(), nat_info.punch_model());
+        assert_eq!(
+            decoded.public_udp_endpoints(),
+            nat_info.public_udp_endpoints()
+        );
     }
 
     #[test]

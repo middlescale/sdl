@@ -213,12 +213,12 @@ impl NatTest {
     }
     pub fn has_public_udp_endpoints(&self) -> bool {
         let guard = self.info.lock();
-        !guard.public_udp_endpoints.is_empty()
+        !guard.public_udp_endpoints().is_empty()
     }
     pub fn public_addr_retry_delay(&self) -> Duration {
         let guard = self.info.lock();
-        if !guard.public_udp_endpoints.is_empty() {
-            if guard.nat_type == NatType::Symmetric {
+        if !guard.public_udp_endpoints().is_empty() {
+            if guard.nat_type() == NatType::Symmetric {
                 Duration::from_secs(600)
             } else {
                 Duration::from_secs(19)
@@ -236,7 +236,7 @@ impl NatTest {
         for x in &self.udp_ports {
             if x == &port {
                 let guard = self.info.lock();
-                if let Some(ip) = guard.local_ipv4 {
+                if let Some(ip) = guard.local_ipv4() {
                     if ipv4 == ip {
                         return true;
                     }
@@ -255,14 +255,14 @@ impl NatTest {
             let guard = self.info.lock();
             match addr.ip() {
                 IpAddr::V4(ipv4) => {
-                    if let Some(ip) = guard.local_ipv4 {
+                    if let Some(ip) = guard.local_ipv4() {
                         if ipv4 == ip {
                             return true;
                         }
                     }
                 }
                 IpAddr::V6(ipv6) => {
-                    if let Some(ip) = guard.ipv6 {
+                    if let Some(ip) = guard.ipv6() {
                         if ipv6 == ip {
                             return true;
                         }
@@ -300,27 +300,24 @@ impl NatTest {
             Err(anyhow!("public_udp_endpoints.is_empty"))?
         }
         let mut guard = self.info.lock();
-        guard.nat_type = nat_type;
-        guard.public_udp_endpoints = public_udp_endpoints.clone();
-        guard.public_ips = public_udp_endpoints
-            .iter()
-            .filter_map(|addr| match addr {
-                SocketAddr::V4(addr) => Some(*addr.ip()),
-                SocketAddr::V6(_) => None,
-            })
-            .collect();
-        guard.public_ports = public_udp_endpoints.iter().map(SocketAddr::port).collect();
-        guard.public_port_range = port_range;
-        if local_ipv4.is_some() {
-            guard.local_ipv4 = local_ipv4;
-        }
-        guard.ipv6 = ipv6;
+        let next_local_ipv4 = if local_ipv4.is_some() {
+            local_ipv4
+        } else {
+            guard.local_ipv4()
+        };
+        guard.replace_probe_result(
+            nat_type,
+            public_udp_endpoints,
+            port_range,
+            next_local_ipv4,
+            ipv6,
+        );
 
         Ok(guard.clone())
     }
     #[cfg(feature = "upnp")]
     pub fn reset_upnp(&self) {
-        let local_ipv4 = self.info.lock().local_ipv4.clone();
+        let local_ipv4 = self.info.lock().local_ipv4();
         if let Some(local_ipv4) = local_ipv4 {
             self.upnp.reset(local_ipv4)
         }

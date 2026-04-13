@@ -7,7 +7,7 @@ use curve25519_dalek::montgomery::MontgomeryPoint;
 use parking_lot::Mutex;
 use rand::RngCore;
 
-use crate::data_plane::route::{RouteKey, RouteOrigin};
+use crate::data_plane::route::{RouteOrigin, RoutePath};
 use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::gateway_udp_envelope::{
@@ -115,7 +115,7 @@ impl GatewayUdpChannel {
                 drop(crypto_guard);
                 on_packet(
                     packet.payload,
-                    RouteKey::new_with_origin(ConnectProtocol::UDP, RouteOrigin::GatewayUdp, from),
+                    RoutePath::new_with_origin(ConnectProtocol::UDP, RouteOrigin::GatewayUdp, from),
                 );
             },
             |_| {},

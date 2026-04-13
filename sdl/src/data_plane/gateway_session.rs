@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use protobuf::Message;
 use rand::RngCore;
 
-use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::RoutePath;
 use crate::handle::{now_time, CurrentDeviceInfo};
 use crate::proto::message::{
     GatewayAccessGrant, GatewayChannelKind, GatewayConnectAck, GatewayConnectHello,
@@ -440,7 +440,7 @@ impl GatewaySessions {
 
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, RoutePath) + Send + Sync + 'static,
     {
         let _ = self
             .runtime

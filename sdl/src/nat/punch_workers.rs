@@ -35,7 +35,7 @@ impl PunchSenders {
             session_id.attempt(),
             session_id.txid()
         );
-        let sender = match info.nat_type {
+        let sender = match info.nat_type() {
             NatType::Symmetric => {
                 if src_peer {
                     &self.sender_peer

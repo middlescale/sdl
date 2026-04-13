@@ -8,7 +8,7 @@ use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::cipher::CipherModel;
 use crate::core::SdlRuntime;
-use crate::data_plane::route::{Route, RouteKey, RouteOrigin};
+use crate::data_plane::route::{Route, RouteOrigin, RoutePath};
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
@@ -112,7 +112,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     fn send_reply_by_route<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         if self
             .runtime
@@ -136,24 +136,24 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
         mut extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_path: RoutePath,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        let source = net_packet.source();
+        let v_source = net_packet.source();
         let direct_owner = self
             .runtime
             .route_manager()
-            .peer_for_direct_route(&route_key);
-        if requires_unknown_route_ingress_limit(route_key, direct_owner)
+            .peer_for_direct_route(&route_path);
+        if requires_unknown_route_ingress_limit(route_path, direct_owner)
             && !self
                 .runtime
                 .unknown_peer_ingress_limiter
-                .allow(route_key.addr())
+                .allow(route_path.addr())
         {
             log::debug!(
-                "drop rate-limited unknown-route peer packet source={} route_key={:?}",
-                source,
-                route_key
+                "drop rate-limited unknown-route peer packet source={} route_path={:?}",
+                v_source,
+                route_path
             );
             return Ok(());
         }
@@ -162,33 +162,34 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             net_packet.is_encrypt(),
         ) {
             log::warn!(
-                "drop peer packet with unexpected encryption flag source={} route_key={:?} encrypt={} cipher_model={:?}",
-                source,
-                route_key,
+                "drop peer packet with unexpected encryption flag source={} route_path={:?} encrypt={} cipher_model={:?}",
+                v_source,
+                route_path,
                 net_packet.is_encrypt(),
                 self.runtime.config.cipher_model
             );
             return Ok(());
         }
-        if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
+        if v_source != current_device.virtual_gateway && self.runtime.peer_info(&v_source).is_none()
+        {
             log::debug!(
                 "drop packet from unknown peer {} via {:?}",
-                source,
-                route_key
+                v_source,
+                route_path
             );
             return Ok(());
         }
         if !should_accept_peer_packet(
-            route_key,
-            source,
+            route_path,
+            v_source,
             direct_owner,
             net_packet.protocol(),
             net_packet.transport_protocol(),
         ) {
             log::warn!(
-                "drop peer packet source={} route_key={:?} protocol={:?}/{} direct_owner={:?}",
-                source,
-                route_key,
+                "drop peer packet source={} route_path={:?} protocol={:?}/{} direct_owner={:?}",
+                v_source,
+                route_path,
                 net_packet.protocol(),
                 net_packet.transport_protocol(),
                 direct_owner
@@ -196,53 +197,53 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             return Ok(());
         }
         if !matches_expected_unknown_route_setup_endpoint(
-            route_key,
+            route_path,
             direct_owner,
-            source,
+            v_source,
             net_packet.protocol(),
             net_packet.transport_protocol(),
-            self.runtime.peer_nat_info_map.read().get(&source),
+            self.runtime.peer_nat_info_map.read().get(&v_source),
         ) {
             log::warn!(
-                "drop peer setup from unexpected endpoint source={} route_key={:?} protocol={:?}/{}",
-                source,
-                route_key,
+                "drop peer setup from unexpected endpoint source={} route_path={:?} protocol={:?}/{}",
+                v_source,
+                route_path,
                 net_packet.protocol(),
                 net_packet.transport_protocol()
             );
             return Ok(());
         }
         if requires_unknown_route_setup_limit(
-            route_key,
+            route_path,
             direct_owner,
             net_packet.protocol(),
             net_packet.transport_protocol(),
         ) && !self
             .runtime
             .unknown_peer_setup_limiter
-            .allow(route_key.addr())
+            .allow(route_path.addr())
         {
             log::warn!(
-                "drop rate-limited setup packet source={} route_key={:?}",
-                source,
-                route_key
+                "drop rate-limited setup packet source={} route_path={:?}",
+                v_source,
+                route_path
             );
             return Ok(());
         }
         if net_packet.is_encrypt()
             && !self.runtime.peer_replay_guard.check_and_remember(
-                source,
+                v_source,
                 crate::util::PeerReplayId::from_aes_gcm_packet(&net_packet)?,
             )
         {
             log::warn!(
-                "drop replayed peer packet source={} route_key={:?}",
-                source,
-                route_key
+                "drop replayed peer packet source={} route_path={:?}",
+                v_source,
+                route_path
             );
             return Ok(());
         }
-        self.decrypt_by_route(&source, &mut net_packet)?;
+        self.decrypt_by_route(&v_source, &mut net_packet)?;
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -255,22 +256,24 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             net_packet
         };
         if should_touch_path_on_receive(net_packet.protocol()) {
-            self.runtime.route_manager().touch_path(&source, &route_key);
+            self.runtime
+                .route_manager()
+                .touch_path(&v_source, &route_path);
         }
         match net_packet.protocol() {
             Protocol::Service => {}
             Protocol::Error => {}
             Protocol::Control => {
-                self.control(current_device, net_packet, route_key)?;
+                self.control(current_device, net_packet, route_path)?;
             }
             Protocol::IpTurn => {
-                self.ip_turn(net_packet, current_device, route_key)?;
+                self.ip_turn(net_packet, current_device, route_path)?;
             }
             Protocol::OtherTurn => {
-                self.other_turn(current_device, net_packet, route_key)?;
+                self.other_turn(current_device, net_packet, route_path)?;
             }
             Protocol::PeerDiscovery => {
-                self.peer_discovery(current_device, net_packet, route_key)?;
+                self.peer_discovery(current_device, net_packet, route_path)?;
             }
             Protocol::Unknown(_) => {}
         }
@@ -279,13 +282,13 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
 }
 
 fn should_accept_peer_packet(
-    route_key: RouteKey,
+    route_path: RoutePath,
     source: Ipv4Addr,
     direct_owner: Option<Ipv4Addr>,
     protocol: Protocol,
     transport_protocol: u8,
 ) -> bool {
-    if route_key.origin() != RouteOrigin::PeerUdp {
+    if route_path.origin() != RouteOrigin::PeerUdp {
         return true;
     }
     match direct_owner {
@@ -297,44 +300,44 @@ fn should_accept_peer_packet(
 }
 
 fn requires_unknown_route_setup_limit(
-    route_key: RouteKey,
+    route_path: RoutePath,
     direct_owner: Option<Ipv4Addr>,
     protocol: Protocol,
     transport_protocol: u8,
 ) -> bool {
-    route_key.origin() == RouteOrigin::PeerUdp
+    route_path.origin() == RouteOrigin::PeerUdp
         && direct_owner.is_none()
         && protocol == Protocol::PeerDiscovery
         && allows_unknown_route_setup(transport_protocol)
 }
 
 fn requires_unknown_route_ingress_limit(
-    route_key: RouteKey,
+    route_path: RoutePath,
     direct_owner: Option<Ipv4Addr>,
 ) -> bool {
-    route_key.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
+    route_path.origin() == RouteOrigin::PeerUdp && direct_owner.is_none()
 }
 
 fn matches_expected_unknown_route_setup_endpoint(
-    route_key: RouteKey,
+    route_path: RoutePath,
     direct_owner: Option<Ipv4Addr>,
     source: Ipv4Addr,
     protocol: Protocol,
     transport_protocol: u8,
     peer_nat_info: Option<&NatInfo>,
 ) -> bool {
-    if !requires_unknown_route_setup_limit(route_key, direct_owner, protocol, transport_protocol) {
+    if !requires_unknown_route_setup_limit(route_path, direct_owner, protocol, transport_protocol) {
         return true;
     }
     let Some(peer_nat_info) = peer_nat_info else {
         log::debug!(
-            "missing peer nat info for unknown-route setup source={} route_key={:?}",
+            "missing peer nat info for unknown-route setup source={} route_path={:?}",
             source,
-            route_key
+            route_path
         );
         return false;
     };
-    peer_nat_info.matches_candidate_endpoint(route_key.addr())
+    peer_nat_info.matches_candidate_endpoint(route_path.addr())
 }
 
 fn local_is_authoritative_discovery_initiator(local_vip: Ipv4Addr, peer_vip: Ipv4Addr) -> bool {
@@ -377,14 +380,14 @@ mod tests {
         should_accept_peer_packet, should_touch_path_on_receive,
     };
     use crate::cipher::CipherModel;
-    use crate::data_plane::route::{RouteKey, RouteOrigin};
+    use crate::data_plane::route::{RouteOrigin, RoutePath};
     use crate::nat::punch::{NatInfo, NatType, PunchModel};
     use crate::protocol::{control_packet, peer_discovery_packet, Protocol};
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    fn peer_route_key() -> RouteKey {
-        RouteKey::new_with_origin(
+    fn peer_route_key() -> RoutePath {
+        RoutePath::new_with_origin(
             ConnectProtocol::UDP,
             RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 4000)),
@@ -464,7 +467,7 @@ mod tests {
 
     #[test]
     fn non_peer_origins_skip_direct_route_gate() {
-        let route_key = RouteKey::new_with_origin(
+        let route_key = RoutePath::new_with_origin(
             ConnectProtocol::QUIC,
             RouteOrigin::GatewayQuic,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 11), 443)),
@@ -525,7 +528,7 @@ mod tests {
             Some(Ipv4Addr::new(10, 0, 0, 9))
         ));
         assert!(!requires_unknown_route_ingress_limit(
-            RouteKey::new_with_origin(
+            RoutePath::new_with_origin(
                 ConnectProtocol::QUIC,
                 RouteOrigin::GatewayQuic,
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 11), 443)),
@@ -536,7 +539,7 @@ mod tests {
 
     #[test]
     fn unknown_route_setup_requires_expected_candidate_endpoint() {
-        let route_key = RouteKey::new_with_origin(
+        let route_key = RoutePath::new_with_origin(
             ConnectProtocol::UDP,
             RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(8, 8, 8, 8), 4000)),
@@ -619,7 +622,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
         current_device: &CurrentDeviceInfo,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         let destination = net_packet.destination();
         let source = net_packet.source();
@@ -740,7 +743,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         mut net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
         let source = net_packet.source();
@@ -791,7 +794,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
         let source = net_packet.source();
@@ -1064,7 +1067,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         _current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
         log::warn!(
@@ -1080,7 +1083,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         source: Ipv4Addr,
-        route_key: RouteKey,
+        route_key: RoutePath,
         payload: &[u8],
         session_id: DiscoverySessionId,
     ) -> anyhow::Result<()> {
@@ -1126,7 +1129,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         peer_ip: Ipv4Addr,
-        route_key: RouteKey,
+        route_key: RoutePath,
         session_id: DiscoverySessionId,
         reply: bool,
     ) -> anyhow::Result<()> {

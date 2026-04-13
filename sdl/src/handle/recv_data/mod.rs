@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::core::SdlRuntime;
-use crate::data_plane::route::RouteKey;
+use crate::data_plane::route::RoutePath;
 use crate::handle::callback::SdlCallback;
 use crate::handle::recv_data::client::ClientPacketHandler;
 use crate::handle::recv_data::server::ServerPacketHandler;
@@ -24,7 +24,7 @@ pub struct RecvDataHandler<Call, Device> {
 }
 
 impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
-    pub fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
+    pub fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RoutePath) {
         if buf.len() < HEAD_LEN {
             return;
         }
@@ -76,7 +76,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         &self,
         buf: &mut [u8],
         extend: &mut [u8],
-        route_key: RouteKey,
+        route_key: RoutePath,
     ) -> anyhow::Result<()> {
         let net_packet = NetPacket::new(buf)?;
 
@@ -137,14 +137,14 @@ fn is_claiming_control_or_service_packet<B: AsRef<[u8]>>(
 #[cfg(test)]
 mod tests {
     use super::is_claiming_control_or_service_packet;
-    use crate::data_plane::route::{RouteKey, RouteOrigin};
+    use crate::data_plane::route::{RouteOrigin, RoutePath};
     use crate::handle::{CurrentDeviceInfo, CONTROL_VIP};
     use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    fn route_key(origin: RouteOrigin) -> RouteKey {
-        RouteKey::new_with_origin(
+    fn route_key(origin: RouteOrigin) -> RoutePath {
+        RoutePath::new_with_origin(
             ConnectProtocol::QUIC,
             origin,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 443)),
@@ -180,7 +180,7 @@ mod tests {
             &current_device
         ));
         assert!(route_key(RouteOrigin::ControlHttp3).is_trusted_server_path());
-        assert!(!RouteKey::new_with_origin(
+        assert!(!RoutePath::new_with_origin(
             ConnectProtocol::UDP,
             RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 20000))
@@ -217,7 +217,7 @@ pub trait PacketHandler {
         &self,
         net_packet: NetPacket<&mut [u8]>,
         extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        route_key: RoutePath,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()>;
 }

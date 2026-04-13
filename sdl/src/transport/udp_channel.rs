@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::core::Config;
-use crate::data_plane::route::RouteKey;
 use crate::data_plane::route::RouteOrigin;
+use crate::data_plane::route::RoutePath;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::protocol::BUFFER_SIZE;
 use crate::transport::connect_protocol::ConnectProtocol;
@@ -80,7 +80,7 @@ impl UdpChannel {
         Ok(())
     }
 
-    pub fn send_by_key(&self, buf: &[u8], route_key: RouteKey) -> io::Result<()> {
+    pub fn send_by_key(&self, buf: &[u8], route_key: RoutePath) -> io::Result<()> {
         if !route_key.protocol().is_udp() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -92,7 +92,7 @@ impl UdpChannel {
 
     pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
     where
-        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        H: Fn(&mut [u8], &mut [u8], RoutePath) + Clone + Send + Sync + 'static,
     {
         let channel = self.clone();
         self.driver
@@ -162,7 +162,7 @@ impl UdpSocketDriver {
         down_traffic_hook: D,
     ) -> anyhow::Result<()>
     where
-        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        H: Fn(&mut [u8], &mut [u8], RoutePath) + Clone + Send + Sync + 'static,
         D: Fn(usize) + Clone + Send + Sync + 'static,
     {
         listen(
@@ -207,7 +207,7 @@ fn listen<H, D>(
     down_traffic_hook: D,
 ) -> anyhow::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    H: Fn(&mut [u8], &mut [u8], RoutePath) + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
@@ -236,7 +236,7 @@ fn listen_loop<H, D>(
     down_traffic_hook: D,
 ) -> io::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    H: Fn(&mut [u8], &mut [u8], RoutePath) + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
@@ -269,7 +269,7 @@ where
                         recv_handler(
                             &mut buf[..len],
                             &mut extend,
-                            RouteKey::new_with_origin(
+                            RoutePath::new_with_origin(
                                 ConnectProtocol::UDP,
                                 RouteOrigin::PeerUdp,
                                 normalize_recv_addr(addr),
@@ -318,7 +318,7 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 #[cfg(test)]
 mod tests {
     use super::{normalize_recv_addr, normalize_send_addr, UdpChannel, UdpSocketDriver};
-    use crate::data_plane::route::{RouteKey, RouteOrigin};
+    use crate::data_plane::route::{RouteOrigin, RoutePath};
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
@@ -401,7 +401,7 @@ mod tests {
     #[test]
     fn send_by_key_rejects_non_udp_route() {
         let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, false);
-        let route_key = RouteKey::new_with_origin(
+        let route_key = RoutePath::new_with_origin(
             ConnectProtocol::QUIC,
             RouteOrigin::GatewayQuic,
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 3000, 0, 0)),
