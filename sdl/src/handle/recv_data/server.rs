@@ -183,17 +183,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
     }
 }
 
-impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
-    fn peer_identity_key(peer: &PeerDeviceInfo) -> Vec<u8> {
-        if !peer.device_id.is_empty() {
-            return format!("id:{}", peer.device_id).into_bytes();
-        }
-        let mut key = Vec::with_capacity(peer.device_pub_key.len() + 3);
-        key.extend_from_slice(b"pk:");
-        key.extend_from_slice(&peer.device_pub_key);
-        key
+fn peer_identity_key(peer: &PeerDeviceInfo) -> Vec<u8> {
+    if !peer.device_id.is_empty() {
+        return format!("id:{}", peer.device_id).into_bytes();
     }
+    let mut key = Vec::with_capacity(peer.device_pub_key.len() + 3);
+    key.extend_from_slice(b"pk:");
+    key.extend_from_slice(&peer.device_pub_key);
+    key
+}
 
+impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     fn apply_gateway_grant(
         &self,
         grant: Option<&proto::message::GatewayAccessGrant>,
@@ -989,11 +989,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let active_vips: HashSet<Ipv4Addr> = ip_list.iter().map(|peer| peer.virtual_ip).collect();
         let previous_by_identity: HashMap<Vec<u8>, Ipv4Addr> = previous_peers
             .values()
-            .map(|peer| (Self::peer_identity_key(peer), peer.virtual_ip))
+            .map(|peer| (peer_identity_key(peer), peer.virtual_ip))
             .collect();
         let current_by_vip: HashMap<Ipv4Addr, Vec<u8>> = ip_list
             .iter()
-            .map(|peer| (peer.virtual_ip, Self::peer_identity_key(peer)))
+            .map(|peer| (peer.virtual_ip, peer_identity_key(peer)))
             .collect();
         let mut reset_vips: HashSet<Ipv4Addr> = previous_peers
             .keys()
@@ -1001,15 +1001,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .copied()
             .collect();
         for (vip, previous_peer) in &previous_peers {
-            if let Some(next_identity) = current_by_vip.get(vip) {
-                let previous_identity = Self::peer_identity_key(previous_peer);
-                if &previous_identity != next_identity {
+            if let Some(next_peer) = ip_list.iter().find(|peer| peer.virtual_ip == *vip) {
+                if should_reset_peer_runtime(previous_peer, next_peer, &current_by_vip) {
                     reset_vips.insert(*vip);
                 }
             }
         }
         for peer in &ip_list {
-            let identity = Self::peer_identity_key(peer);
+            let identity = peer_identity_key(peer);
             if let Some(previous_vip) = previous_by_identity.get(&identity) {
                 if *previous_vip != peer.virtual_ip {
                     log::info!(
@@ -1398,17 +1397,34 @@ fn should_refresh_gateway_grant_after_registration(
     was_offline && !registration_has_gateway_grant
 }
 
+fn should_reset_peer_runtime(
+    previous_peer: &PeerDeviceInfo,
+    next_peer: &PeerDeviceInfo,
+    current_by_vip: &HashMap<Ipv4Addr, Vec<u8>>,
+) -> bool {
+    if let Some(next_identity) = current_by_vip.get(&previous_peer.virtual_ip) {
+        let previous_identity = peer_identity_key(previous_peer);
+        if &previous_identity != next_identity {
+            return true;
+        }
+    }
+    previous_peer.status != next_peer.status
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         format_punch_endpoint, observed_udp_port_from_registration, punch_endpoint_from_route,
         selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
+        should_reset_peer_runtime,
     };
+    use crate::handle::{PeerDeviceInfo, PeerDeviceStatus};
     use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart};
     use crate::transport::connect_protocol::ConnectProtocol;
+    use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
@@ -1552,5 +1568,35 @@ mod tests {
         assert!(!should_refresh_gateway_grant_after_registration(
             false, false
         ));
+    }
+
+    fn test_peer_info(ip: Ipv4Addr, status: PeerDeviceStatus) -> PeerDeviceInfo {
+        PeerDeviceInfo {
+            virtual_ip: ip,
+            name: "peer".to_string(),
+            status,
+            device_id: "dev-1".to_string(),
+            device_pub_key: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn reset_peer_runtime_when_status_changes() {
+        let vip = Ipv4Addr::new(10, 26, 0, 2);
+        let previous = test_peer_info(vip, PeerDeviceStatus::Online);
+        let next = test_peer_info(vip, PeerDeviceStatus::Offline);
+        let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
+
+        assert!(should_reset_peer_runtime(&previous, &next, &current_by_vip));
+    }
+
+    #[test]
+    fn keep_peer_runtime_when_identity_and_status_are_stable() {
+        let vip = Ipv4Addr::new(10, 26, 0, 2);
+        let previous = test_peer_info(vip, PeerDeviceStatus::Online);
+        let next = test_peer_info(vip, PeerDeviceStatus::Online);
+        let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
+
+        assert!(!should_reset_peer_runtime(&previous, &next, &current_by_vip));
     }
 }
