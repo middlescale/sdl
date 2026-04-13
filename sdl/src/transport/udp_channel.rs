@@ -74,20 +74,20 @@ impl UdpChannel {
         self.stats.down_traffic_history()
     }
 
-    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+    pub fn send_to_addr(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
         self.driver.send_to(buf, addr)?;
         self.record_up_traffic(buf.len());
         Ok(())
     }
 
-    pub fn send_by_key(&self, buf: &[u8], route_key: RoutePath) -> io::Result<()> {
-        if !route_key.protocol().is_udp() {
+    pub fn send_to_path(&self, buf: &[u8], route_path: RoutePath) -> io::Result<()> {
+        if !route_path.protocol().is_udp() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("not udp route: {:?}", route_key.protocol()),
+                format!("not udp route: {:?}", route_path.protocol()),
             ));
         }
-        self.send_to(buf, route_key.addr())
+        self.send_to_addr(buf, route_path.addr())
     }
 
     pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
@@ -381,7 +381,7 @@ mod tests {
 
         let payload = b"hello-udp";
         sender
-            .send_to(payload, receiver.local_addr().unwrap())
+            .send_to_addr(payload, receiver.local_addr().unwrap())
             .unwrap();
 
         let mut buf = [0_u8; 64];
@@ -407,7 +407,7 @@ mod tests {
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 3000, 0, 0)),
         );
 
-        let err = channel.send_by_key(b"nope", route_key).unwrap_err();
+        let err = channel.send_to_path(b"nope", route_key).unwrap_err();
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }

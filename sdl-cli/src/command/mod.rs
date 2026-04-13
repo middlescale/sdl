@@ -184,9 +184,12 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         let virtual_ip = peer.virtual_ip.to_string();
         let (nat_type, public_ips, local_ip, ipv6) =
             if let Some(nat_info) = sdl.peer_nat_info(&peer.virtual_ip) {
-                let nat_type = format!("{:?}", nat_info.nat_type);
-                let public_ips: Vec<String> =
-                    nat_info.public_ips.iter().map(|v| v.to_string()).collect();
+                let nat_type = format!("{:?}", nat_info.nat_type());
+                let public_ips: Vec<String> = nat_info
+                    .public_ips()
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect();
                 let public_ips = public_ips.join(",");
                 let local_ip = nat_info
                     .local_ipv4()
@@ -301,8 +304,12 @@ pub fn command_info(vnt: &Sdl) -> Info {
     } else {
         control_server.to_string()
     };
-    let nat_type = format!("{:?}", nat_info.nat_type);
-    let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();
+    let nat_type = format!("{:?}", nat_info.nat_type());
+    let public_ips: Vec<String> = nat_info
+        .public_ips()
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     let public_ips = public_ips.join(",");
     let local_addr = nat_info
         .local_ipv4()
@@ -319,12 +326,14 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let in_ips = vnt.config().in_ips.clone();
     let out_ips = vnt.config().out_ips.clone();
     let udp_listen_addr = nat_info
-        .udp_ports
+        .udp_ports()
         .iter()
         .map(|port| format!("0.0.0.0:{}", port))
         .collect();
     Info {
         name,
+        runtime_name: None,
+        restart_required: false,
         device_id: config.device_id.clone(),
         virtual_ip,
         virtual_gateway,

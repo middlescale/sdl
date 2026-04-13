@@ -44,7 +44,7 @@ impl PacketHandler for TurnPacketHandler {
                     return self
                         .runtime
                         .udp_channel
-                        .send_by_key(net_packet.buffer(), route.route_key())
+                        .send_to_path(net_packet.buffer(), route.route_key())
                         .context("转发失败");
                 }
             }

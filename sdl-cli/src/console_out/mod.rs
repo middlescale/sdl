@@ -8,6 +8,16 @@ pub mod table;
 
 pub fn console_info(status: Info) {
     println!("Name: {}", style(status.name).green());
+    if let Some(runtime_name) = &status.runtime_name {
+        if status.restart_required {
+            println!(
+                "Runtime name: {}",
+                style(format!("{} (restart required)", runtime_name)).yellow()
+            );
+        } else {
+            println!("Runtime name: {}", style(runtime_name).green());
+        }
+    }
     println!("Virtual ip: {}", style(status.virtual_ip).green());
     println!("Virtual gateway: {}", style(status.virtual_gateway).green());
     if status

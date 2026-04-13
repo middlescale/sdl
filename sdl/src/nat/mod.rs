@@ -229,7 +229,7 @@ impl NatTest {
     }
     pub fn request_public_addr(&self) -> anyhow::Result<()> {
         let (data, addr) = self.send_data()?;
-        self.udp_channel.send_to(&data, addr)?;
+        self.udp_channel.send_to_addr(&data, addr)?;
         Ok(())
     }
     pub fn is_local_udp(&self, ipv4: Ipv4Addr, port: u16) -> bool {

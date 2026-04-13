@@ -155,4 +155,9 @@ impl RoutePath {
             RouteOrigin::ControlHttp3 | RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp
         )
     }
+
+    #[inline]
+    pub fn is_gateway_path(&self) -> bool {
+        matches!(self.origin, RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp)
+    }
 }

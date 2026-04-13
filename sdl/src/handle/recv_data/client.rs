@@ -112,20 +112,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     fn send_reply_by_route<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
-        route_key: RoutePath,
+        route_path: RoutePath,
     ) -> anyhow::Result<()> {
-        if self
-            .runtime
-            .gateway_sessions
-            .is_gateway_addr(route_key.addr())
-        {
+        if route_path.is_gateway_path() {
             self.runtime.gateway_sessions.send_relay(packet)?;
-        } else if route_key.protocol().is_udp() {
+        } else if route_path.protocol().is_udp() {
             self.runtime
                 .udp_channel
-                .send_by_key(packet.buffer(), route_key)?;
+                .send_to_path(packet.buffer(), route_path)?;
         } else {
-            return Err(anyhow!("unsupported reply route {:?}", route_key));
+            return Err(anyhow!("unsupported reply route {:?}", route_path));
         }
         Ok(())
     }
@@ -794,7 +790,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RoutePath,
+        route_path: RoutePath,
     ) -> anyhow::Result<()> {
         let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
         let source = net_packet.source();
@@ -807,7 +803,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     log::warn!(
                         "drop peer discovery hello without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,
-                        route_key,
+                        route_path,
                         session_id.session_id(),
                         session_id.attempt(),
                         session_id.txid()
@@ -816,13 +812,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 log::info!(
                     "PeerDiscoveryHello route_key={:?},source={}",
-                    route_key,
+                    route_path,
                     source
                 );
                 if self
                     .runtime
                     .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
+                    .is_local_address(route_path.protocol().is_base_tcp(), route_path.addr())
                 {
                     return Ok(());
                 }
@@ -887,7 +883,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     [DISCOVERY_SESSION_LEN..DISCOVERY_SESSION_LEN + hello_ack_payload.len()]
                     .copy_from_slice(&hello_ack_payload);
                 self.encrypt_peer_discovery(&source, &mut reply)?;
-                self.send_reply_by_route(&reply, route_key)?;
+                self.send_reply_by_route(&reply, route_path)?;
                 if responder.is_handshake_finished() {
                     let session_key = match responder.derived_session_key() {
                         Ok(session_key) => session_key,
@@ -914,7 +910,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             .use_channel_type()
                             .is_only_relay()
                         {
-                            let route = Route::from_default_rt(route_key, metric);
+                            let route = Route::from_default_rt(route_path, metric);
                             self.runtime
                                 .route_manager()
                                 .add_path_if_absent(source, route);
@@ -930,7 +926,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     log::warn!(
                         "drop peer discovery hello-ack without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,
-                        route_key,
+                        route_path,
                         session_id.session_id(),
                         session_id.attempt(),
                         session_id.txid()
@@ -939,13 +935,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 log::info!(
                     "PeerDiscoveryHelloAck route_key={:?},source={}",
-                    route_key,
+                    route_path,
                     source
                 );
                 if self
                     .runtime
                     .nat_test
-                    .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr())
+                    .is_local_address(route_path.protocol().is_base_tcp(), route_path.addr())
                 {
                     return Ok(());
                 }
@@ -960,7 +956,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     log::warn!(
                         "drop peer discovery hello-ack without initiator state source={} route_key={:?}",
                         source,
-                        route_key
+                        route_path
                     );
                     return Ok(());
                 };
@@ -975,7 +971,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             log::warn!(
                                 "drop peer discovery hello-ack without exportable initiator state source={} route_key={:?}",
                                 source,
-                                route_key
+                                route_path
                             );
                             return Ok(());
                         };
@@ -985,7 +981,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 log::warn!(
                                     "drop peer discovery hello-ack without session key source={} route_key={:?} err={:?}",
                                     source,
-                                    route_key,
+                                    route_path,
                                     err
                                 );
                                 return Ok(());
@@ -1006,14 +1002,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 .use_channel_type()
                                 .is_only_relay()
                             {
-                                let route = Route::from_default_rt(route_key, metric);
+                                let route = Route::from_default_rt(route_path, metric);
                                 self.runtime
                                     .route_manager()
                                     .add_path_if_absent(source, route);
                                 self.send_peer_discovery_info(
                                     current_device,
                                     source,
-                                    route_key,
+                                    route_path,
                                     session_id,
                                     false,
                                 )?;
@@ -1024,14 +1020,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         log::warn!(
                             "drop peer discovery hello-ack before handshake completion source={} route_key={:?}",
                             source,
-                            route_key
+                            route_path
                         );
                     }
                     Err(err) => {
                         log::warn!(
                             "drop peer discovery hello-ack with invalid noise payload source={} route_key={:?} err={:?}",
                             source,
-                            route_key,
+                            route_path,
                             err
                         );
                     }
@@ -1045,7 +1041,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     log::warn!(
                         "drop peer discovery info without active session source={} route_key={:?} session_id={} attempt={} txid={}",
                         source,
-                        route_key,
+                        route_path,
                         session_id.session_id(),
                         session_id.attempt(),
                         session_id.txid()
@@ -1055,7 +1051,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 self.handle_peer_discovery_info(
                     current_device,
                     source,
-                    route_key,
+                    route_path,
                     payload,
                     session_id,
                 )?;
@@ -1115,7 +1111,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             {
                 self.runtime
                     .udp_channel
-                    .send_by_key(punch_packet.buffer(), route_key)?;
+                    .send_to_path(punch_packet.buffer(), route_key)?;
             }
         } else {
             self.runtime

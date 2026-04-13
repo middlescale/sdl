@@ -1092,7 +1092,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     dev.epoch = 0;
                     drop(dev);
                 }
-                self.runtime.peer_crypto.clear_all();
                 self.runtime.control_session.send_handshake()?;
                 // self.register(current_device, context, route_key)?;
             }

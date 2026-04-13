@@ -122,7 +122,7 @@ impl DataChannel {
         buf: &crate::protocol::NetPacket<B>,
         route_key: RoutePath,
     ) -> io::Result<()> {
-        runtime.udp_channel.send_by_key(buf.buffer(), route_key)
+        runtime.udp_channel.send_to_path(buf.buffer(), route_key)
     }
 
     fn runtime(&self) -> io::Result<Arc<SdlRuntime>> {

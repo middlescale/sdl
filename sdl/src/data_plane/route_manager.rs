@@ -397,7 +397,7 @@ impl RouteManager {
         buf: &NetPacket<B>,
         route_key: RoutePath,
     ) -> io::Result<()> {
-        sender.udp_channel.send_by_key(buf.buffer(), route_key)
+        sender.udp_channel.send_to_path(buf.buffer(), route_key)
     }
 }
 
