@@ -6,7 +6,6 @@ use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
-use crate::cipher::CipherModel;
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteOrigin, RoutePath};
 use crate::handle::extension::handle_extension_tail;
@@ -37,24 +36,18 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     fn decrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
         &self,
         peer_ip: &Ipv4Addr,
+        route_path: RoutePath,
         net_packet: &mut NetPacket<B>,
-    ) -> anyhow::Result<()> {
-        if !peer_packet_encryption_matches(
-            self.runtime.config.cipher_model,
-            net_packet.is_encrypt(),
-        ) {
-            anyhow::bail!(
-                "unexpected peer packet encryption flag for cipher model {:?}",
-                self.runtime.config.cipher_model
-            );
-        }
+    ) -> anyhow::Result<bool> {
         if !net_packet.is_encrypt() {
-            return Ok(());
+            anyhow::bail!("unexpected unencrypted peer packet");
         }
         if net_packet.protocol() == Protocol::PeerDiscovery {
-            return self.discovery_cipher(peer_ip)?.decrypt_ipv4(net_packet);
+            self.discovery_cipher(peer_ip)?.decrypt_ipv4(net_packet)?;
+            return Ok(true);
         }
-        self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet)
+        self.runtime
+            .decrypt_peer_data_packet(*peer_ip, route_path, net_packet)
     }
 
     fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -62,10 +55,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        self.runtime
-            .peer_crypto
-            .send_cipher(peer_ip)?
-            .encrypt_ipv4(net_packet)
+        self.runtime.peer_crypto.encrypt_ipv4(peer_ip, net_packet)
     }
 
     fn matches_active_peer_discovery_session(
@@ -153,16 +143,11 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        if !peer_packet_encryption_matches(
-            self.runtime.config.cipher_model,
-            net_packet.is_encrypt(),
-        ) {
+        if !net_packet.is_encrypt() {
             log::warn!(
-                "drop peer packet with unexpected encryption flag source={} route_path={:?} encrypt={} cipher_model={:?}",
+                "drop unencrypted peer packet source={} route_path={:?}",
                 v_source,
                 route_path,
-                net_packet.is_encrypt(),
-                self.runtime.config.cipher_model
             );
             return Ok(());
         }
@@ -226,12 +211,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        if net_packet.is_encrypt()
-            && !self.runtime.peer_replay_guard.check_and_remember(
-                v_source,
-                crate::util::PeerReplayId::from_aes_gcm_packet(&net_packet)?,
-            )
-        {
+        if !self.decrypt_by_route(&v_source, route_path, &mut net_packet)? {
             log::warn!(
                 "drop replayed peer packet source={} route_path={:?}",
                 v_source,
@@ -239,7 +219,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        self.decrypt_by_route(&v_source, &mut net_packet)?;
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -357,12 +336,6 @@ fn allows_unknown_route_setup(transport_protocol: u8) -> bool {
     )
 }
 
-fn peer_packet_encryption_matches(cipher_model: CipherModel, is_encrypt: bool) -> bool {
-    match cipher_model {
-        _ => is_encrypt,
-    }
-}
-
 fn should_touch_path_on_receive(protocol: Protocol) -> bool {
     protocol != Protocol::PeerDiscovery
 }
@@ -371,11 +344,10 @@ fn should_touch_path_on_receive(protocol: Protocol) -> bool {
 mod tests {
     use super::{
         allows_unknown_route_control, allows_unknown_route_setup,
-        matches_expected_unknown_route_setup_endpoint, peer_packet_encryption_matches,
-        requires_unknown_route_ingress_limit, requires_unknown_route_setup_limit,
-        should_accept_peer_packet, should_touch_path_on_receive,
+        matches_expected_unknown_route_setup_endpoint, requires_unknown_route_ingress_limit,
+        requires_unknown_route_setup_limit, should_accept_peer_packet,
+        should_touch_path_on_receive,
     };
-    use crate::cipher::CipherModel;
     use crate::data_plane::route::{RouteOrigin, RoutePath};
     use crate::nat::punch::{NatInfo, NatType, PunchModel};
     use crate::protocol::{control_packet, peer_discovery_packet, Protocol};
@@ -574,12 +546,6 @@ mod tests {
     }
 
     #[test]
-    fn peer_packet_encryption_must_match_runtime_cipher_mode() {
-        assert!(peer_packet_encryption_matches(CipherModel::AesGcm, true));
-        assert!(!peer_packet_encryption_matches(CipherModel::AesGcm, false));
-    }
-
-    #[test]
     fn peer_discovery_packets_do_not_refresh_generic_route_activity() {
         assert!(!should_touch_path_on_receive(Protocol::PeerDiscovery));
         assert!(should_touch_path_on_receive(Protocol::IpTurn));
@@ -739,22 +705,20 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         mut net_packet: NetPacket<&mut [u8]>,
-        route_key: RoutePath,
+        route_path: RoutePath,
     ) -> anyhow::Result<()> {
         let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
-        let source = net_packet.source();
+        let from = net_packet.source();
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PingPacket(_) => {
-                let route = Route::from_default_rt(route_key, metric);
-                self.runtime
-                    .route_manager()
-                    .add_path_if_absent(source, route);
+                let route = Route::from_default_rt(route_path, metric);
+                self.runtime.route_manager().add_path_if_absent(from, route);
                 net_packet.set_transport_protocol(control_packet::Protocol::Pong.into());
                 net_packet.set_source(current_device.virtual_ip);
-                net_packet.set_destination(source);
+                net_packet.set_destination(from);
                 net_packet.set_initial_ttl(MAX_TTL);
-                self.encrypt_by_route(&source, &mut net_packet)?;
-                self.send_reply_by_route(&net_packet, route_key)?;
+                self.encrypt_by_route(&from, &mut net_packet)?;
+                self.send_reply_by_route(&net_packet, route_path)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
@@ -762,10 +726,11 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
-                let route = Route::from(route_key, metric, rt);
-                self.runtime.route_manager().add_path(source, route);
+                let route = Route::from(route_path, metric, rt);
+                self.runtime.route_manager().add_path(from, route);
+                self.runtime.peer_sessions.mark_probe_succeeded(from);
             }
-            ControlPacket::AddrRequest => match route_key.addr().ip() {
+            ControlPacket::AddrRequest => match route_path.addr().ip() {
                 std::net::IpAddr::V4(ipv4) => {
                     let mut packet = NetPacket::new_encrypt([0; 12 + 6 + ENCRYPTION_RESERVED])?;
                     packet.set_default_version();
@@ -773,12 +738,12 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     packet.set_transport_protocol(control_packet::Protocol::AddrResponse.into());
                     packet.set_initial_ttl(MAX_TTL);
                     packet.set_source(current_device.virtual_ip);
-                    packet.set_destination(source);
+                    packet.set_destination(from);
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
-                    addr_packet.set_port(route_key.addr().port());
-                    self.encrypt_by_route(&source, &mut packet)?;
-                    self.send_reply_by_route(&packet, route_key)?;
+                    addr_packet.set_port(route_path.addr().port());
+                    self.encrypt_by_route(&from, &mut packet)?;
+                    self.send_reply_by_route(&packet, route_path)?;
                 }
                 std::net::IpAddr::V6(_) => {}
             },
@@ -839,7 +804,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 ) {
                     Ok(responder) => responder,
                     Err(err) => {
-                        log::warn!(
+                        log::info!(
                             "drop peer discovery hello with invalid identity source={} err={:?}",
                             source,
                             err
@@ -866,6 +831,25 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         return Ok(());
                     }
                 };
+                let authoritative_initiator =
+                    local_is_authoritative_discovery_initiator(current_device.virtual_ip, source);
+                if !authoritative_initiator {
+                    self.runtime
+                        .peer_sessions
+                        .begin_recovery(source, session_id);
+                    self.runtime
+                        .adopt_peer_discovery_session(source, session_id);
+                }
+                let negotiated_generation = self
+                    .runtime
+                    .peer_sessions
+                    .negotiated_generation(&source)
+                    .unwrap_or_else(|| self.runtime.peer_crypto.next_available_generation(&source));
+                self.runtime.peer_sessions.set_negotiated_generation(
+                    source,
+                    session_id,
+                    negotiated_generation,
+                );
                 let mut reply = NetPacket::new_encrypt(vec![
                     0u8;
                     12 + DISCOVERY_SESSION_LEN
@@ -878,12 +862,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 reply.set_source(current_device.virtual_ip);
                 reply.set_destination(source);
                 reply.set_initial_ttl(1);
+                reply.set_peer_generation(negotiated_generation);
                 session_id.write(reply.payload_mut())?;
                 reply.payload_mut()
                     [DISCOVERY_SESSION_LEN..DISCOVERY_SESSION_LEN + hello_ack_payload.len()]
                     .copy_from_slice(&hello_ack_payload);
                 self.encrypt_peer_discovery(&source, &mut reply)?;
                 self.send_reply_by_route(&reply, route_path)?;
+                self.runtime
+                    .peer_sessions
+                    .mark_discovery_ready(source, session_id);
                 if responder.is_handshake_finished() {
                     let session_key = match responder.derived_session_key() {
                         Ok(session_key) => session_key,
@@ -896,25 +884,32 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             return Ok(());
                         }
                     };
-                    if !local_is_authoritative_discovery_initiator(
-                        current_device.virtual_ip,
-                        source,
-                    ) {
+                    if !authoritative_initiator {
+                        log::warn!(
+                            "install peer session cipher role=responder peer={} session_id={} attempt={} txid={} generation={}",
+                            source,
+                            session_id.session_id(),
+                            session_id.attempt(),
+                            session_id.txid(),
+                            negotiated_generation
+                        );
                         let cipher = crate::cipher::Cipher::new_key(session_key)?;
                         self.runtime
                             .peer_crypto
-                            .replace_current_cipher(source, cipher);
-                        if !self
-                            .runtime
-                            .route_manager
-                            .use_channel_type()
-                            .is_only_relay()
-                        {
-                            let route = Route::from_default_rt(route_path, metric);
-                            self.runtime
-                                .route_manager()
-                                .add_path_if_absent(source, route);
-                        }
+                            .replace_current_cipher_with_generation(
+                                source,
+                                cipher,
+                                negotiated_generation,
+                            );
+                        self.runtime.peer_sessions.set_negotiated_generation(
+                            source,
+                            session_id,
+                            negotiated_generation,
+                        );
+                        self.runtime
+                            .peer_sessions
+                            .mark_cipher_ready(source, session_id);
+                        let _ = self.runtime.send_peer_session_probe(source);
                     }
                 }
             }
@@ -968,7 +963,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 initiator.derived_session_key()
                             })
                         else {
-                            log::warn!(
+                            log::info!(
                                 "drop peer discovery hello-ack without exportable initiator state source={} route_path={:?}",
                                 source,
                                 route_path
@@ -992,20 +987,38 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             current_device.virtual_ip,
                             source,
                         ) {
+                            let negotiated_generation = net_packet.peer_generation() & 0x03;
+                            log::warn!(
+                                "install peer session cipher role=initiator peer={} session_id={} attempt={} txid={} generation={}",
+                                source,
+                                session_id.session_id(),
+                                session_id.attempt(),
+                                session_id.txid(),
+                                negotiated_generation
+                            );
                             let cipher = crate::cipher::Cipher::new_key(session_key)?;
                             self.runtime
                                 .peer_crypto
-                                .replace_current_cipher(source, cipher);
+                                .replace_current_cipher_with_generation(
+                                    source,
+                                    cipher,
+                                    negotiated_generation,
+                                );
+                            self.runtime.peer_sessions.set_negotiated_generation(
+                                source,
+                                session_id,
+                                negotiated_generation,
+                            );
+                            self.runtime
+                                .peer_sessions
+                                .mark_cipher_ready(source, session_id);
+                            let _ = self.runtime.send_peer_session_probe(source);
                             if !self
                                 .runtime
                                 .route_manager
                                 .use_channel_type()
                                 .is_only_relay()
                             {
-                                let route = Route::from_default_rt(route_path, metric);
-                                self.runtime
-                                    .route_manager()
-                                    .add_path_if_absent(source, route);
                                 self.send_peer_discovery_info(
                                     current_device,
                                     source,
@@ -1052,6 +1065,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     current_device,
                     source,
                     route_path,
+                    metric,
                     payload,
                     session_id,
                 )?;
@@ -1080,6 +1094,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
         source: Ipv4Addr,
         route_key: RoutePath,
+        metric: u8,
         payload: &[u8],
         session_id: DiscoverySessionId,
     ) -> anyhow::Result<()> {
@@ -1101,6 +1116,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 .write()
                 .insert(source, peer_nat_info);
         }
+        let route = Route::from_default_rt(route_key, metric);
+        self.runtime
+            .route_manager()
+            .add_path_if_absent(source, route);
+        self.runtime
+            .peer_sessions
+            .mark_direct_path_ready(source, session_id);
+        let _ = self.runtime.send_peer_session_probe(source);
         if !endpoint_info.is_reply() {
             let punch_packet =
                 self.build_peer_discovery_info_packet(current_device, source, session_id, true)?;

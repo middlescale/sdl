@@ -275,7 +275,7 @@ impl GatewaySession {
         }
     }
 
-    fn handle_connect_ack(&self, ack: &GatewayConnectAck) {
+    fn handle_connect_ack(&self, ack: &GatewayConnectAck) -> bool {
         let mut guard = self.state.lock();
         if guard.session_id != ack.session_id {
             log::debug!(
@@ -284,7 +284,7 @@ impl GatewaySession {
                 guard.session_id,
                 ack.session_id
             );
-            return;
+            return false;
         }
         guard.authenticated = ack.ok;
         if ack.ok {
@@ -345,6 +345,7 @@ impl GatewaySession {
                 }),
             );
         }
+        ack.ok
     }
 
     fn maybe_build_connect_hello(
@@ -666,9 +667,9 @@ impl GatewaySessions {
         }))
     }
 
-    pub fn handle_connect_ack(&self, from: SocketAddr, ack: &GatewayConnectAck) {
+    pub fn handle_connect_ack(&self, from: SocketAddr, ack: &GatewayConnectAck) -> bool {
         if let Some(session) = self.sessions.lock().get(&from).cloned() {
-            session.handle_connect_ack(ack);
+            session.handle_connect_ack(ack)
         } else {
             log::debug!(
                 "received gateway connect ack from unknown endpoint={} session_id={} ok={} reason={}",
@@ -677,6 +678,7 @@ impl GatewaySessions {
                 ack.ok,
                 ack.reason
             );
+            false
         }
     }
 }
@@ -715,7 +717,9 @@ fn sanitize_worker_name(addr: SocketAddr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_transport_endpoint;
+    use super::{parse_transport_endpoint, GatewaySession};
+    use crate::proto::message::GatewayConnectAck;
+    use crate::util::DebugWatch;
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
@@ -737,5 +741,37 @@ mod tests {
         let endpoint = parse_transport_endpoint("quic://localhost:29900").unwrap();
         assert_eq!(endpoint.port(), 29900);
         assert!(endpoint.ip().is_loopback());
+    }
+
+    #[test]
+    fn handle_connect_ack_reports_successful_acks() {
+        let session =
+            GatewaySession::new_quic("127.0.0.1:29900".parse().unwrap(), DebugWatch::default());
+        session.state.lock().session_id = 7;
+        let ack = GatewayConnectAck {
+            ok: true,
+            session_id: 7,
+            keepalive_secs: 5,
+            ..Default::default()
+        };
+
+        assert!(session.handle_connect_ack(&ack));
+        assert!(session.handle_connect_ack(&ack));
+    }
+
+    #[test]
+    fn handle_connect_ack_ignores_session_mismatch() {
+        let session =
+            GatewaySession::new_quic("127.0.0.1:29900".parse().unwrap(), DebugWatch::default());
+        session.state.lock().session_id = 7;
+        let ack = GatewayConnectAck {
+            ok: true,
+            session_id: 8,
+            keepalive_secs: 5,
+            ..Default::default()
+        };
+
+        assert!(!session.handle_connect_ack(&ack));
+        assert!(!session.state.lock().authenticated);
     }
 }

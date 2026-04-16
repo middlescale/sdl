@@ -227,7 +227,28 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, session| {
-                if self.runtime.route_manager().direct_path_count(peer_ip) > 0 {
+                let direct_ready = self.runtime.route_manager().direct_path_count(peer_ip) > 0;
+                let session_ready = self
+                    .runtime
+                    .peer_sessions
+                    .state(peer_ip)
+                    .map(|state| state.is_ready())
+                    .unwrap_or(false);
+                if direct_ready || session_ready {
+                    if direct_ready {
+                        if let Some(peer_session) = self.runtime.peer_sessions.state(peer_ip) {
+                            self.runtime
+                                .peer_sessions
+                                .mark_direct_path_ready(*peer_ip, peer_session.discovery_session);
+                        }
+                    }
+                    if let Some(_peer_session) = self.runtime.peer_sessions.state(peer_ip) {
+                        self.runtime.debug_watch.emit(
+                            "peer_session",
+                            "ready",
+                            serde_json::json!({"peer_ip": peer_ip.to_string()}),
+                        );
+                    }
                     succeeded.push((*peer_ip, *session));
                     return false;
                 }
@@ -241,6 +262,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         for (peer_ip, session) in succeeded {
             self.runtime.clear_peer_discovery_session(&peer_ip);
+            let reason = if self.runtime.route_manager().direct_path_count(&peer_ip) > 0 {
+                "p2p route established"
+            } else {
+                "peer session ready"
+            };
             self.send_punch_result(
                 current_device,
                 session.session_id,
@@ -248,7 +274,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 session.target,
                 session.attempt,
                 PunchResultCode::PunchResultSuccess,
-                "p2p route established",
+                reason,
             )?;
         }
         for (peer_ip, session) in expired {
@@ -333,9 +359,24 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     {
                         return;
                     }
-                    if runtime.route_manager().direct_path_count(&peer_ip) > 0 {
+                    let direct_ready = runtime.route_manager().direct_path_count(&peer_ip) > 0;
+                    let session_ready = runtime
+                        .peer_sessions
+                        .state(&peer_ip)
+                        .map(|state| state.is_ready())
+                        .unwrap_or(false);
+                    if direct_ready || session_ready {
                         guard.remove(&peer_ip);
-                        Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
+                        if direct_ready {
+                            if let Some(peer_session) = runtime.peer_sessions.state(&peer_ip) {
+                                runtime
+                                    .peer_sessions
+                                    .mark_direct_path_ready(peer_ip, peer_session.discovery_session);
+                            }
+                            Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
+                        } else {
+                            Some((PunchResultCode::PunchResultSuccess, "peer session ready"))
+                        }
                     } else if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
                         guard.remove(&peer_ip);
                         Some((PunchResultCode::PunchResultNoResponse, "deadline exceeded"))
@@ -749,6 +790,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     peer_nat_info.public_ports(),
                     peer_nat_info.local_ipv4()
                 );
+                self.runtime
+                    .peer_replay_guard
+                    .clear_peers_for(&HashSet::from([peer_ip]));
+                self.runtime
+                    .peer_crypto
+                    .clear_ciphers_for(&HashSet::from([peer_ip]));
+                self.runtime.peer_sessions.clear_peers_for(&HashSet::from([peer_ip]));
+                self.runtime.clear_peer_discovery_session(&peer_ip);
+                self.runtime.route_manager.clear_direct_paths(&peer_ip);
                 self.runtime.debug_watch.emit(
                     "punch",
                     "start_received",
@@ -843,6 +893,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     None => (None, Some("missing peer identity".to_string())),
                 };
                 if let Some(setup_session) = setup_session.clone() {
+                    self.runtime
+                        .peer_sessions
+                        .begin_recovery(peer_ip, setup_session.session_id);
                     self.runtime
                         .remember_peer_discovery_session(peer_ip, setup_session);
                 }
@@ -947,9 +1000,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::GatewayConnectAck => {
                 let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
-                self.runtime
+                let became_authenticated = self
+                    .runtime
                     .gateway_sessions
                     .handle_connect_ack(route_key.addr(), &ack);
+                if became_authenticated {
+                    crate::nat::punch_workers::retry_pending_relay_discovery(self.runtime.clone());
+                    self.runtime.retry_pending_peer_session_probes();
+                }
             }
             _ => {
                 log::warn!(
@@ -1042,6 +1100,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         self.runtime.peer_replay_guard.retain_peers(&active_vips);
         self.runtime.retain_peer_discovery_sessions(&active_vips);
         self.runtime.peer_crypto.clear_ciphers_for(&reset_vips);
+        self.runtime.peer_replay_guard.clear_peers_for(&reset_vips);
+        self.runtime.peer_sessions.clear_peers_for(&reset_vips);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()
@@ -1408,6 +1468,9 @@ fn should_reset_peer_runtime(
             return true;
         }
     }
+    if previous_peer.name != next_peer.name {
+        return true;
+    }
     previous_peer.status != next_peer.status
 }
 
@@ -1419,8 +1482,8 @@ mod tests {
         selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
         should_reset_peer_runtime,
     };
-    use crate::handle::{PeerDeviceInfo, PeerDeviceStatus};
     use crate::data_plane::route::Route;
+    use crate::handle::{PeerDeviceInfo, PeerDeviceStatus};
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart};
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -1597,6 +1660,21 @@ mod tests {
         let next = test_peer_info(vip, PeerDeviceStatus::Online);
         let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
 
-        assert!(!should_reset_peer_runtime(&previous, &next, &current_by_vip));
+        assert!(!should_reset_peer_runtime(
+            &previous,
+            &next,
+            &current_by_vip
+        ));
+    }
+
+    #[test]
+    fn reset_peer_runtime_when_name_changes() {
+        let vip = Ipv4Addr::new(10, 26, 0, 2);
+        let previous = test_peer_info(vip, PeerDeviceStatus::Online);
+        let mut next = test_peer_info(vip, PeerDeviceStatus::Online);
+        next.name = "renamed-peer".to_string();
+        let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
+
+        assert!(should_reset_peer_runtime(&previous, &next, &current_by_vip));
     }
 }

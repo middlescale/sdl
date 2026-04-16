@@ -137,6 +137,7 @@ impl Sdl {
         let debug_watch = DebugWatch::default();
         let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
+        let peer_sessions = Arc::new(crate::util::PeerSessionManager::new(16));
         let unknown_peer_ingress_limiter = Arc::new(crate::util::PeerIngressLimiter::new(16));
         let peer_replay_guard = Arc::new(crate::util::PeerReplayGuard::new(16));
         let unknown_peer_setup_limiter = Arc::new(crate::util::PeerSetupLimiter::new(16));
@@ -250,6 +251,7 @@ impl Sdl {
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
+                peer_sessions: peer_sessions.clone(),
                 unknown_peer_ingress_limiter: unknown_peer_ingress_limiter.clone(),
                 peer_replay_guard: peer_replay_guard.clone(),
                 unknown_peer_setup_limiter: unknown_peer_setup_limiter.clone(),

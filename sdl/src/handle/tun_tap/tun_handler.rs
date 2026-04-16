@@ -97,19 +97,13 @@ fn broadcast(
         peer_buf[..net_packet.data_len()].copy_from_slice(net_packet.buffer());
         let mut peer_packet = NetPacket::new_encrypt(peer_buf)?;
         peer_packet.set_destination(peer_ip);
-        if channel.peer_encrypt_enabled() {
-            let cipher = match peer_crypto.send_cipher(&peer_ip) {
-                Ok(cipher) => cipher,
-                Err(err) => {
-                    log::debug!(
-                        "skip broadcast without peer session cipher for {}: {:?}",
-                        peer_ip,
-                        err
-                    );
-                    continue;
-                }
-            };
-            cipher.encrypt_ipv4(&mut peer_packet)?;
+        if let Err(err) = peer_crypto.encrypt_ipv4(&peer_ip, &mut peer_packet) {
+            log::debug!(
+                "skip broadcast without peer session cipher for {}: {:?}",
+                peer_ip,
+                err
+            );
+            continue;
         }
 
         if let Some(route) = channel.direct_route(&peer_ip) {
@@ -269,10 +263,7 @@ pub(crate) fn handle(
         return Ok(());
     }
 
-    if data_channel.peer_encrypt_enabled() {
-        let cipher = peer_crypto.send_cipher(&dest_ip)?;
-        cipher.encrypt_ipv4(&mut net_packet)?;
-    }
+    peer_crypto.encrypt_ipv4(&dest_ip, &mut net_packet)?;
     if let Some(route) = data_channel.direct_route(&dest_ip) {
         if let Err(err) = data_channel.send_p2p_route(&net_packet, route) {
             if data_channel.allows_gateway_relay() {

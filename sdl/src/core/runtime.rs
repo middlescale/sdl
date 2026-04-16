@@ -16,7 +16,7 @@ use crate::cipher::CipherModel;
 use crate::control::ControlSession;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
-use crate::data_plane::route::Route;
+use crate::data_plane::route::{Route, RouteOrigin, RoutePath};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
@@ -24,7 +24,9 @@ use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::NatInfo;
 use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
+use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::peer_discovery_packet::DiscoverySessionId;
+use crate::protocol::{control_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::create_device;
@@ -99,6 +101,7 @@ pub struct SdlRuntime {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
+    pub peer_sessions: Arc<crate::util::PeerSessionManager>,
     pub unknown_peer_ingress_limiter: Arc<crate::util::PeerIngressLimiter>,
     pub peer_replay_guard: Arc<crate::util::PeerReplayGuard>,
     pub unknown_peer_setup_limiter: Arc<crate::util::PeerSetupLimiter>,
@@ -175,6 +178,30 @@ impl SdlRuntime {
             .remove(peer_ip);
     }
 
+    pub fn adopt_peer_discovery_session(
+        &self,
+        peer_ip: Ipv4Addr,
+        session_id: DiscoverySessionId,
+    ) {
+        let deadline_unix_ms = self
+            .pending_peer_discovery_sessions
+            .lock()
+            .get(&peer_ip)
+            .map(|session| session.deadline_unix_ms)
+            .unwrap_or_default();
+        self.pending_peer_discovery_sessions.lock().insert(
+            peer_ip,
+            PeerDiscoverySession {
+                session_id,
+                deadline_unix_ms,
+                hello_payload: Vec::new(),
+            },
+        );
+        self.pending_peer_discovery_initiators
+            .lock()
+            .remove(&peer_ip);
+    }
+
     pub fn remember_peer_discovery_initiator(
         &self,
         peer_ip: Ipv4Addr,
@@ -211,6 +238,79 @@ impl SdlRuntime {
         self.pending_peer_discovery_initiators
             .lock()
             .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+        self.peer_sessions.retain_peers(valid_peers);
+    }
+
+    pub fn send_peer_session_probe(&self, peer_ip: Ipv4Addr) -> anyhow::Result<()> {
+        let Some(session_state) = self.peer_sessions.state(&peer_ip) else {
+            return Ok(());
+        };
+        if !session_state.cipher_ready || session_state.is_ready() {
+            return Ok(());
+        }
+        let current_device = self.current_device.load();
+        if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
+            return Ok(());
+        }
+        let mut packet = NetPacket::new_encrypt(vec![0u8; HEAD_LEN + 4 + ENCRYPTION_RESERVED])?;
+        packet.set_default_version();
+        packet.set_protocol(Protocol::Control);
+        packet.set_transport_protocol(control_packet::Protocol::Ping.into());
+        packet.set_initial_ttl(MAX_TTL);
+        packet.set_source(current_device.virtual_ip);
+        packet.set_destination(peer_ip);
+        let mut ping = control_packet::PingPacket::new(packet.payload_mut())?;
+        ping.set_time(crate::handle::now_time() as u16);
+        ping.set_epoch(self.peer_state.lock().epoch);
+        self.peer_crypto.encrypt_ipv4(&peer_ip, &mut packet)?;
+        self.data_channel
+            .send_to_peer_during_recovery(&packet, &peer_ip)?;
+        self.peer_sessions
+            .mark_probe_sent(peer_ip, session_state.discovery_session);
+        Ok(())
+    }
+
+    pub fn retry_pending_peer_session_probes(&self) {
+        for (peer_ip, _) in self.peer_sessions.probe_candidates() {
+            if let Err(err) = self.send_peer_session_probe(peer_ip) {
+                log::debug!("send peer session probe failed for {}: {:?}", peer_ip, err);
+            }
+        }
+    }
+
+    pub fn decrypt_peer_data_packet<B: AsRef<[u8]> + AsMut<[u8]>>(
+        &self,
+        peer_ip: Ipv4Addr,
+        route_path: RoutePath,
+        net_packet: &mut NetPacket<B>,
+    ) -> anyhow::Result<bool> {
+        if net_packet.is_encrypt()
+            && !self.peer_replay_guard.check_and_remember(
+                peer_ip,
+                crate::util::PeerReplayId::from_aes_gcm_packet(net_packet)?,
+            )
+        {
+            return Ok(false);
+        }
+        if net_packet.is_encrypt() {
+            self.peer_crypto.decrypt_ipv4(&peer_ip, net_packet)?;
+        }
+        if route_path.is_gateway_path() {
+            self.peer_sessions.mark_relay_path_ready(peer_ip);
+        }
+        self.observe_peer_transport(peer_ip, route_path);
+        Ok(true)
+    }
+
+    pub fn observe_peer_transport(&self, peer_ip: Ipv4Addr, route_path: RoutePath) {
+        let transport = match route_path.origin() {
+            RouteOrigin::PeerUdp => crate::util::PeerSessionTransport::Direct,
+            RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp => {
+                crate::util::PeerSessionTransport::Relay
+            }
+            _ => return,
+        };
+        self.peer_sessions.observe_transport(peer_ip, transport);
     }
 
     pub fn is_dns_service_ip(&self, ip: Ipv4Addr) -> bool {

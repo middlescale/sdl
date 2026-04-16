@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::cipher::Cipher;
 use crate::data_plane::route::{Route, RoutePath};
 use crate::data_plane::route_snapshot::RouteSnapshot;
 use crate::data_plane::route_table::RouteTable;
@@ -191,6 +190,10 @@ impl RouteManager {
         self.route_table.clear_peer(vip)
     }
 
+    pub fn clear_direct_paths(&self, vip: &Ipv4Addr) {
+        self.route_table.clear_direct_paths(vip)
+    }
+
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         self.route_table.retain_peers(valid_peers)
     }
@@ -285,8 +288,8 @@ impl RouteManager {
             return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip)?]);
         }
         let mut packets = Vec::with_capacity(2);
-        match self.peer_crypto.current_cipher(&dest_ip) {
-            Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+        match self.peer_crypto.current_generation(&dest_ip) {
+            Ok(_) => packets.push(heartbeat_packet_client(Some((&self.peer_crypto, false)), src_ip, dest_ip)?),
             Err(err) if !self.peer_crypto.is_grace_active() => {
                 log::debug!(
                     "skip heartbeat without current peer session cipher for {}: {:?}",
@@ -304,8 +307,8 @@ impl RouteManager {
             }
         }
         if self.peer_crypto.is_grace_active() {
-            match self.peer_crypto.previous_cipher(&dest_ip) {
-                Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+            match self.peer_crypto.previous_generation(&dest_ip) {
+                Ok(_) => packets.push(heartbeat_packet_client(Some((&self.peer_crypto, true)), src_ip, dest_ip)?),
                 Err(err) if packets.is_empty() => {
                     log::debug!(
                         "skip heartbeat without grace cipher for {}: {:?}",
@@ -423,11 +426,11 @@ fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<V
 }
 
 fn heartbeat_packet_client(
-    cipher: Option<Cipher>,
+    peer_crypto: Option<(&PeerCryptoManager, bool)>,
     src: Ipv4Addr,
     dest: Ipv4Addr,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
-    let mut net_packet = if cipher.is_some() {
+    let mut net_packet = if peer_crypto.is_some() {
         let mut net_packet = NetPacket::new_encrypt(vec![0u8; HEAD_LEN + 4 + ENCRYPTION_RESERVED])?;
         net_packet.set_default_version();
         net_packet.set_protocol(Protocol::Control);
@@ -441,8 +444,12 @@ fn heartbeat_packet_client(
     } else {
         heartbeat_packet(src, dest)?
     };
-    if let Some(cipher) = cipher {
-        cipher.encrypt_ipv4(&mut net_packet)?;
+    if let Some((peer_crypto, use_previous)) = peer_crypto {
+        if use_previous {
+            peer_crypto.encrypt_ipv4_with_previous(&dest, &mut net_packet)?;
+        } else {
+            peer_crypto.encrypt_ipv4(&dest, &mut net_packet)?;
+        }
     }
     Ok(net_packet)
 }
@@ -456,18 +463,29 @@ mod tests {
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
     use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::util::PeerCryptoManager;
     use parking_lot::Mutex;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
-    fn route(metric: u8, port: u16) -> Route {
+    fn direct_route(port: u16) -> Route {
         Route::new_with_origin(
             ConnectProtocol::UDP,
             RouteOrigin::PeerUdp,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
-            metric,
+            1,
+            10,
+        )
+    }
+
+    fn relay_route(port: u16) -> Route {
+        Route::new_with_origin(
+            ConnectProtocol::UDP,
+            RouteOrigin::GatewayUdp,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
+            2,
             10,
         )
     }
@@ -475,10 +493,13 @@ mod tests {
     #[test]
     fn heartbeat_packet_client_reserves_room_for_peer_encryption() {
         let cipher = Cipher::new_key([7; 32]).expect("cipher");
+        let peer_crypto = PeerCryptoManager::new(1);
+        let dest = Ipv4Addr::new(10, 0, 0, 2);
+        peer_crypto.replace_current_cipher_with_generation(dest, cipher.clone(), 0);
         let mut packet = super::heartbeat_packet_client(
-            Some(cipher.clone()),
+            Some((&peer_crypto, false)),
             Ipv4Addr::new(10, 0, 0, 1),
-            Ipv4Addr::new(10, 0, 0, 2),
+            dest,
         )
         .expect("heartbeat packet");
         assert!(packet.is_encrypt());
@@ -494,7 +515,7 @@ mod tests {
     fn next_stale_direct_route_ignores_stale_relay_routes() {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let manager = RouteManager::new_detached(table.clone());
-        table.add_route(Ipv4Addr::new(10, 0, 0, 2), route(2, 2000));
+        table.add_route(Ipv4Addr::new(10, 0, 0, 2), relay_route(2000));
         thread::sleep(Duration::from_millis(15));
 
         assert!(matches!(
@@ -508,7 +529,7 @@ mod tests {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 3);
-        let route = route(1, 2001);
+        let route = direct_route(2001);
         table.add_route(peer, route);
         thread::sleep(Duration::from_millis(15));
 
@@ -527,8 +548,8 @@ mod tests {
         let manager = RouteManager::new_detached(table.clone());
         let relay_peer = Ipv4Addr::new(10, 0, 0, 4);
         let p2p_peer = Ipv4Addr::new(10, 0, 0, 5);
-        let relay = route(2, 2002);
-        let p2p = route(1, 2003);
+        let relay = relay_route(2002);
+        let p2p = direct_route(2003);
         table.add_route(relay_peer, relay);
         table.add_route(p2p_peer, p2p);
         thread::sleep(Duration::from_millis(15));
@@ -538,6 +559,31 @@ mod tests {
         let relay_routes = table.get_routes(&relay_peer).expect("relay routes");
         assert_eq!(relay_routes.len(), 1);
         assert_eq!(relay_routes[0].route_path(), relay.route_path());
+    }
+
+    #[test]
+    fn clear_direct_paths_keeps_relay_fallback_routes() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 11);
+        table.add_route(
+            peer,
+            Route::new_with_origin(
+                ConnectProtocol::QUIC,
+                RouteOrigin::GatewayQuic,
+                "127.0.0.1:443".parse().unwrap(),
+                2,
+                20,
+            ),
+        );
+        table.add_route(peer, direct_route(2012));
+
+        manager.clear_direct_paths(&peer);
+
+        let routes = table.get_routes(&peer).expect("relay route kept");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(manager.direct_path_count(&peer), 0);
+        assert!(!routes[0].is_p2p());
     }
 
     #[test]
@@ -552,7 +598,7 @@ mod tests {
                 timeouts.lock().push(ip);
             }));
         }
-        table.add_route(peer, route(1, 2004));
+        table.add_route(peer, direct_route(2004));
         thread::sleep(Duration::from_millis(15));
 
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
@@ -572,9 +618,9 @@ mod tests {
                 timeouts.lock().push(ip);
             }));
         }
-        table.add_route(peer, route(1, 2005));
-        table.add_route(peer, route(1, 2006));
-        table.update_read_time(&peer, &route(1, 2006).route_path());
+        table.add_route(peer, direct_route(2005));
+        table.add_route(peer, direct_route(2006));
+        table.update_read_time(&peer, &direct_route(2006).route_path());
         thread::sleep(Duration::from_millis(15));
 
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
@@ -591,14 +637,14 @@ mod tests {
         table.add_route(
             peer,
             Route::new_with_origin(
-                route(2, 2010).protocol(),
-                route(2, 2010).origin(),
-                route(2, 2010).addr(),
+                relay_route(2010).protocol(),
+                relay_route(2010).origin(),
+                relay_route(2010).addr(),
                 2,
                 1,
             ),
         );
-        table.add_route(peer, route(1, 2011));
+        table.add_route(peer, direct_route(2011));
 
         let targets = manager.heartbeat_targets();
 
@@ -615,16 +661,18 @@ mod tests {
         let peer = Ipv4Addr::new(10, 0, 0, 8);
         manager
             .peer_crypto
-            .rotate_peer_session_ciphers(std::collections::HashMap::from([(
+            .replace_current_cipher_with_generation(
                 peer,
                 Cipher::new_key([1; 32]).expect("cipher 1"),
-            )]));
+                0,
+            );
         manager
             .peer_crypto
-            .rotate_peer_session_ciphers(std::collections::HashMap::from([(
+            .replace_current_cipher_with_generation(
                 peer,
                 Cipher::new_key([2; 32]).expect("cipher 2"),
-            )]));
+                1,
+            );
 
         let packets = manager
             .heartbeat_packets_for_peer(Ipv4Addr::new(10, 0, 0, 1), peer)

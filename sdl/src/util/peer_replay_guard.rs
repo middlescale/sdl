@@ -13,6 +13,7 @@ const MAX_RECENT_PACKETS_PER_PEER: usize = 256;
 pub struct PeerReplayId {
     protocol: u8,
     transport_protocol: u8,
+    generation: u8,
     nonce: [u8; AES_GCM_NONCE_RESERVED],
     tag: [u8; TAG_RESERVED],
 }
@@ -42,6 +43,7 @@ impl PeerReplayId {
         Ok(Self {
             protocol: net_packet.protocol().into(),
             transport_protocol: net_packet.transport_protocol(),
+            generation: net_packet.peer_generation(),
             nonce,
             tag,
         })
@@ -73,6 +75,15 @@ impl PeerReplayGuard {
         self.inner
             .lock()
             .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+    }
+
+    pub fn clear_peers_for(&self, peers: &HashSet<Ipv4Addr>) {
+        if peers.is_empty() {
+            return;
+        }
+        self.inner
+            .lock()
+            .retain(|peer_ip, _| !peers.contains(peer_ip));
     }
 }
 
@@ -148,6 +159,22 @@ mod tests {
         assert!(guard.check_and_remember(peer2, replay_id));
 
         guard.retain_peers(&HashSet::from([peer2]));
+
+        assert!(guard.check_and_remember(peer1, replay_id));
+        assert!(!guard.check_and_remember(peer2, replay_id));
+    }
+
+    #[test]
+    fn clear_peers_for_drops_selected_replay_state() {
+        let guard = PeerReplayGuard::new(2);
+        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
+        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let replay_id = replay_id(5);
+
+        assert!(guard.check_and_remember(peer1, replay_id));
+        assert!(guard.check_and_remember(peer2, replay_id));
+
+        guard.clear_peers_for(&HashSet::from([peer1]));
 
         assert!(guard.check_and_remember(peer1, replay_id));
         assert!(!guard.check_and_remember(peer2, replay_id));

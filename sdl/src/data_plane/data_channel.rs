@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RoutePath};
-use crate::data_plane::use_channel_type::UseChannelType;
+use crate::util::PeerSessionTransport;
 
 #[derive(Clone)]
 pub struct DataChannel {
@@ -47,22 +47,35 @@ impl DataChannel {
             .unwrap_or(false)
     }
 
-    pub fn peer_encrypt_enabled(&self) -> bool {
-        self.runtime.upgrade().map(|_| true).unwrap_or(false)
-    }
-
     pub fn send_to_peer<B: AsRef<[u8]>>(
         &self,
         buf: &crate::protocol::NetPacket<B>,
         vip: &Ipv4Addr,
     ) -> io::Result<()> {
+        self.send_to_peer_with_context(buf, vip, false)
+    }
+
+    pub fn send_to_peer_during_recovery<B: AsRef<[u8]>>(
+        &self,
+        buf: &crate::protocol::NetPacket<B>,
+        vip: &Ipv4Addr,
+    ) -> io::Result<()> {
+        self.send_to_peer_with_context(buf, vip, true)
+    }
+
+    fn send_to_peer_with_context<B: AsRef<[u8]>>(
+        &self,
+        buf: &crate::protocol::NetPacket<B>,
+        vip: &Ipv4Addr,
+        allow_recovering: bool,
+    ) -> io::Result<()> {
         let runtime = self.runtime()?;
-        match self.select_path(runtime.as_ref(), vip) {
+        match self.select_path(runtime.as_ref(), vip, allow_recovering) {
             Some(DataPath::P2pUdp(route_key)) => self.send_udp(runtime.as_ref(), buf, route_key),
             Some(DataPath::GatewayRelay) => runtime.gateway_sessions.send_relay(buf),
             None => Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("peer route not found: {}", vip),
+                io::ErrorKind::NotConnected,
+                format!("peer session not ready: {}", vip),
             )),
         }
     }
@@ -109,11 +122,25 @@ impl DataChannel {
         }
     }
 
-    fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {
-        select_data_path(
+    fn select_path(
+        &self,
+        runtime: &SdlRuntime,
+        vip: &Ipv4Addr,
+        allow_recovering: bool,
+    ) -> Option<DataPath> {
+        let direct_route = runtime.route_manager().direct_route(vip);
+        let transport = runtime.peer_sessions.preferred_transport(
+            vip,
             runtime.route_manager().use_channel_type(),
-            runtime.route_manager().direct_route(vip),
-        )
+            direct_route,
+            allow_recovering,
+        )?;
+        match transport {
+            PeerSessionTransport::Direct => {
+                direct_route.map(|route| DataPath::P2pUdp(route.route_path()))
+            }
+            PeerSessionTransport::Relay => Some(DataPath::GatewayRelay),
+        }
     }
 
     fn send_udp<B: AsRef<[u8]>>(
@@ -132,26 +159,12 @@ impl DataChannel {
     }
 }
 
-fn select_data_path(
-    use_channel_type: UseChannelType,
-    direct_route: Option<Route>,
-) -> Option<DataPath> {
-    match use_channel_type {
-        UseChannelType::Relay => Some(DataPath::GatewayRelay),
-        UseChannelType::P2p => direct_route.map(|route| DataPath::P2pUdp(route.route_path())),
-        UseChannelType::All => direct_route
-            .map(|route| DataPath::P2pUdp(route.route_path()))
-            .or(Some(DataPath::GatewayRelay)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    use super::{select_data_path, DataPath};
+    use super::DataPath;
     use crate::data_plane::route::{Route, RouteOrigin};
-    use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
 
     fn sample_route() -> Route {
@@ -165,21 +178,9 @@ mod tests {
     }
 
     #[test]
-    fn select_data_path_prefers_direct_udp_when_available() {
+    fn data_path_wraps_direct_route() {
         let route = sample_route();
-        let path = select_data_path(UseChannelType::All, Some(route));
-        assert_eq!(path, Some(DataPath::P2pUdp(route.route_path())));
-    }
-
-    #[test]
-    fn select_data_path_falls_back_to_relay_for_all_mode() {
-        let path = select_data_path(UseChannelType::All, None);
-        assert_eq!(path, Some(DataPath::GatewayRelay));
-    }
-
-    #[test]
-    fn select_data_path_requires_direct_route_for_p2p_only_mode() {
-        let path = select_data_path(UseChannelType::P2p, None);
-        assert_eq!(path, None);
+        let path = DataPath::P2pUdp(route.route_path());
+        assert_eq!(path, DataPath::P2pUdp(route.route_path()));
     }
 }

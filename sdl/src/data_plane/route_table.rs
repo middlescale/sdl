@@ -202,6 +202,16 @@ impl RouteTable {
         self.route_table.write().remove(vip);
     }
 
+    pub fn clear_direct_paths(&self, vip: &Ipv4Addr) {
+        let mut guard = self.route_table.write();
+        if let Some(routes) = guard.get_mut(vip) {
+            routes.retain(|(route, _)| !route.is_p2p());
+            if routes.is_empty() {
+                guard.remove(vip);
+            }
+        }
+    }
+
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         self.route_table
             .write()
@@ -212,25 +222,33 @@ impl RouteTable {
 #[cfg(test)]
 mod tests {
     use super::RouteTable;
-    use crate::data_plane::route::{Route, RoutePath};
+    use crate::data_plane::route::{Route, RouteOrigin, RoutePath};
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashSet;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    fn route_key(port: u16) -> RoutePath {
+    fn route_key(origin: RouteOrigin, port: u16) -> RoutePath {
         RoutePath::new_with_origin(
             ConnectProtocol::UDP,
-            crate::data_plane::route::RouteOrigin::PeerUdp,
+            origin,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),
         )
+    }
+
+    fn direct_route(port: u16) -> Route {
+        Route::from_default_rt(route_key(RouteOrigin::PeerUdp, port), 1)
+    }
+
+    fn relay_route(port: u16) -> Route {
+        Route::from_default_rt(route_key(RouteOrigin::GatewayUdp, port), 2)
     }
 
     #[test]
     fn relay_mode_rejects_direct_routes() {
         let table = RouteTable::new(UseChannelType::Relay, false);
         let vip = Ipv4Addr::new(10, 0, 0, 2);
-        table.add_route(vip, Route::from_default_rt(route_key(1000), 1));
+        table.add_route(vip, direct_route(1000));
         assert!(table.get_first_route(&vip).is_none());
     }
 
@@ -238,7 +256,7 @@ mod tests {
     fn p2p_mode_rejects_relay_routes() {
         let table = RouteTable::new(UseChannelType::P2p, false);
         let vip = Ipv4Addr::new(10, 0, 0, 3);
-        table.add_route(vip, Route::from_default_rt(route_key(1001), 2));
+        table.add_route(vip, relay_route(1001));
         assert!(table.get_first_route(&vip).is_none());
     }
 
@@ -246,8 +264,8 @@ mod tests {
     fn direct_routes_replace_relay_routes_when_not_latency_first() {
         let table = RouteTable::new(UseChannelType::All, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
-        table.add_route(vip, Route::from_default_rt(route_key(1002), 2));
-        table.add_route(vip, Route::from_default_rt(route_key(1003), 1));
+        table.add_route(vip, relay_route(1002));
+        table.add_route(vip, direct_route(1003));
 
         let routes = table.get_routes(&vip).unwrap();
         assert_eq!(routes.len(), 1);
@@ -259,12 +277,35 @@ mod tests {
         let table = RouteTable::new(UseChannelType::All, false);
         let vip1 = Ipv4Addr::new(10, 0, 0, 4);
         let vip2 = Ipv4Addr::new(10, 0, 0, 5);
-        table.add_route(vip1, Route::from_default_rt(route_key(1002), 2));
-        table.add_route(vip2, Route::from_default_rt(route_key(1003), 2));
+        table.add_route(vip1, relay_route(1002));
+        table.add_route(vip2, relay_route(1003));
 
         table.retain_peers(&HashSet::from([vip2]));
 
         assert!(table.get_first_route(&vip1).is_none());
         assert!(table.get_first_route(&vip2).is_some());
+    }
+
+    #[test]
+    fn clear_direct_paths_preserves_relay_routes() {
+        let table = RouteTable::new(UseChannelType::All, true);
+        let vip = Ipv4Addr::new(10, 0, 0, 6);
+        table.add_route(vip, direct_route(1004));
+        table.add_route(
+            vip,
+            Route::new_with_origin(
+                ConnectProtocol::QUIC,
+                crate::data_plane::route::RouteOrigin::GatewayQuic,
+                "127.0.0.1:443".parse().unwrap(),
+                2,
+                20,
+            ),
+        );
+
+        table.clear_direct_paths(&vip);
+
+        let routes = table.get_routes(&vip).expect("relay route kept");
+        assert_eq!(routes.len(), 1);
+        assert!(!routes[0].is_p2p());
     }
 }

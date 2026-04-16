@@ -80,7 +80,7 @@ impl Route {
     }
 
     pub fn is_p2p(&self) -> bool {
-        self.metric == 1
+        self.origin == RouteOrigin::PeerUdp
     }
 
     pub fn is_udp(&self) -> bool {
@@ -110,6 +110,37 @@ impl Route {
     /// Returns a short name for the transport protocol (e.g. "Udp", "Tcp", "Quic").
     pub fn protocol_name(&self) -> String {
         format!("{:?}", self.protocol)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Route, RouteOrigin};
+    use crate::transport::connect_protocol::ConnectProtocol;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    #[test]
+    fn peer_udp_route_is_p2p() {
+        let route = Route::new_with_origin(
+            ConnectProtocol::UDP,
+            RouteOrigin::PeerUdp,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000)),
+            1,
+            10,
+        );
+        assert!(route.is_p2p());
+    }
+
+    #[test]
+    fn gateway_udp_route_is_not_p2p_even_with_metric_one() {
+        let route = Route::new_with_origin(
+            ConnectProtocol::UDP,
+            RouteOrigin::GatewayUdp,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 29901)),
+            1,
+            10,
+        );
+        assert!(!route.is_p2p());
     }
 }
 

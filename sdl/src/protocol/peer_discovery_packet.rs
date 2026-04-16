@@ -36,6 +36,10 @@ impl DiscoverySessionId {
         self.txid
     }
 
+    pub fn peer_generation(&self) -> u8 {
+        ((self.session_id ^ self.txid ^ u64::from(self.attempt)) & 0x03) as u8
+    }
+
     pub fn same_transaction(&self, other: &Self) -> bool {
         self.session_id == other.session_id
             && self.attempt == other.attempt
@@ -401,6 +405,13 @@ mod tests {
 
         let parsed = DiscoverySessionId::read(&payload).unwrap();
         assert_eq!(parsed, session);
+    }
+
+    #[test]
+    fn peer_generation_is_stable_across_txid() {
+        let a = DiscoverySessionId::new(42, 7, 100);
+        let b = DiscoverySessionId::new(42, 7, 200);
+        assert_eq!(a.peer_generation(), b.peer_generation());
     }
 
     #[test]

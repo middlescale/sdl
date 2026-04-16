@@ -18,6 +18,8 @@ use std::{fmt, io};
 */
 pub const HEAD_LEN: usize = 12;
 pub const BUFFER_SIZE: usize = 1024 * 64;
+const PEER_GENERATION_HIGH_MASK: u8 = 0x40;
+const PEER_GENERATION_LOW_MASK: u8 = 0x10;
 
 pub mod body;
 pub mod control_packet;
@@ -175,6 +177,11 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn version(&self) -> Version {
         Version::from(self.buffer.as_ref()[0] & 0x0F)
     }
+    pub fn peer_generation(&self) -> u8 {
+        (((self.buffer.as_ref()[0] & PEER_GENERATION_HIGH_MASK) >> 5)
+            | ((self.buffer.as_ref()[0] & PEER_GENERATION_LOW_MASK) >> 4))
+            & 0x03
+    }
     pub fn protocol(&self) -> Protocol {
         Protocol::from(self.buffer.as_ref()[1])
     }
@@ -230,6 +237,13 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
     pub fn set_default_version(&mut self) {
         let v: u8 = Version::V3.into();
         self.buffer.as_mut()[0] = (self.buffer.as_ref()[0] & 0xF0) | (0x0F & v);
+    }
+    pub fn set_peer_generation(&mut self, generation: u8) {
+        let generation = generation & 0x03;
+        self.buffer.as_mut()[0] = (self.buffer.as_ref()[0]
+            & !(PEER_GENERATION_HIGH_MASK | PEER_GENERATION_LOW_MASK))
+            | ((generation & 0x02) << 5)
+            | ((generation & 0x01) << 4);
     }
     pub fn set_protocol(&mut self, protocol: Protocol) {
         self.buffer.as_mut()[1] = protocol.into();
@@ -299,6 +313,7 @@ impl<B: AsRef<[u8]>> fmt::Debug for NetPacket<B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NetPacket")
             .field("version", &self.version())
+            .field("peer_generation", &self.peer_generation())
             .field("encrypt", &self.is_encrypt())
             .field("protocol", &self.protocol())
             .field("transport_protocol", &self.transport_protocol())
