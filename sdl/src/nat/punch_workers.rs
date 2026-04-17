@@ -156,10 +156,10 @@ pub fn retry_pending_relay_discovery(runtime: Arc<SdlRuntime>) {
         return;
     }
     let pending: Vec<(Ipv4Addr, DiscoverySessionId)> = runtime
-        .pending_peer_discovery_sessions
+        .peer_discovery
         .lock()
         .iter()
-        .map(|(peer_ip, session)| (*peer_ip, session.session_id))
+        .map(|(peer_ip, entry)| (*peer_ip, entry.session.session_id))
         .collect();
     for (peer_ip, session_id) in pending {
         if runtime.route_manager.has_enough_direct_paths(&peer_ip) {

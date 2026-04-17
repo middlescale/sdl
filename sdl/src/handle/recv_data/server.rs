@@ -825,9 +825,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     peer_nat_info.public_ports(),
                     peer_nat_info.local_ipv4()
                 );
-                self.runtime
-                    .peer_crypto
-                    .clear_pending_ciphers_for(&HashSet::from([peer_ip]));
+                self.runtime.peer_sessions.clear_pending_ciphers_for(&HashSet::from([peer_ip]));
                 self.runtime.clear_peer_discovery_session(&peer_ip);
                 self.runtime.route_manager.clear_direct_paths(&peer_ip);
                 self.runtime.debug_watch.emit(
@@ -1129,18 +1127,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
             }
         }
-        let reset_vips: HashSet<Ipv4Addr> = hard_reset_vips
-            .union(&soft_reset_vips)
-            .copied()
-            .collect();
-        for vip in &reset_vips {
-            self.runtime.route_manager.clear_peer(vip);
-        }
+        self.runtime.hard_reset_peers(&hard_reset_vips);
+        self.runtime.soft_reset_peers(&soft_reset_vips);
         self.runtime.route_manager.retain_peers(&active_vips);
-        self.runtime
-            .peer_nat_info_map
-            .write()
-            .retain(|vip, _| active_vips.contains(vip) && !reset_vips.contains(vip));
         {
             let mut dev = self.runtime.peer_state.lock();
             //这里可能会收到旧的消息，但是随着时间推移总会收到新的
@@ -1151,15 +1140,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             }
         }
         self.runtime.retain_peer_discovery_sessions(&active_vips);
-        self.runtime.peer_crypto.clear_ciphers_for(&hard_reset_vips);
-        self.runtime.peer_replay_guard.clear_peers_for(&hard_reset_vips);
-        self.runtime.peer_sessions.clear_peers_for(&hard_reset_vips);
-        self.runtime
-            .peer_sessions
-            .clear_runtime_state_for(&soft_reset_vips);
-        self.runtime
-            .peer_crypto
-            .clear_pending_ciphers_for(&soft_reset_vips);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()

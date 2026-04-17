@@ -55,7 +55,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        self.runtime.peer_crypto.encrypt_ipv4(peer_ip, net_packet)
+        self.runtime.peer_sessions.encrypt_ipv4(peer_ip, net_packet)
     }
 
     fn matches_active_peer_discovery_session(
@@ -879,7 +879,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     .runtime
                     .peer_sessions
                     .negotiated_generation(&source)
-                    .unwrap_or_else(|| self.runtime.peer_crypto.next_available_generation(&source));
+                    .unwrap_or_else(|| self.runtime.peer_sessions.next_available_generation(&source));
                 self.runtime.peer_sessions.set_negotiated_generation(
                     source,
                     session_id,

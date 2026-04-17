@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +33,7 @@ use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::create_device;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
-use crate::util::{DebugWatch, PeerCryptoManager, PeerDiscoveryNoiseInitiator};
+use crate::util::{DebugWatch, PeerDiscoveryNoiseInitiator};
 #[cfg(feature = "integrated_tun")]
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
@@ -92,6 +93,11 @@ pub struct PeerDiscoverySession {
     pub remote_owner: u64,
 }
 
+pub struct PeerDiscoveryEntry {
+    pub session: PeerDiscoverySession,
+    pub initiator: Option<PeerDiscoveryNoiseInitiator>,
+}
+
 #[derive(Clone)]
 pub struct SdlRuntime {
     pub config: RuntimeConfig,
@@ -103,7 +109,6 @@ pub struct SdlRuntime {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub control_registration_epoch: Arc<AtomicU64>,
     pub device_signing_key: Arc<SigningKey>,
-    pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_sessions: Arc<crate::util::PeerSessionManager>,
     pub unknown_peer_ingress_limiter: Arc<crate::util::PeerIngressLimiter>,
     pub peer_replay_guard: Arc<crate::util::PeerReplayGuard>,
@@ -112,9 +117,7 @@ pub struct SdlRuntime {
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-    pub pending_peer_discovery_sessions: Arc<Mutex<HashMap<Ipv4Addr, PeerDiscoverySession>>>,
-    pub pending_peer_discovery_initiators:
-        Arc<Mutex<HashMap<Ipv4Addr, PeerDiscoveryNoiseInitiator>>>,
+    pub peer_discovery: Arc<Mutex<HashMap<Ipv4Addr, PeerDiscoveryEntry>>>,
     pub external_route: ExternalRoute,
     pub out_external_route: AllowExternalRoute,
     pub control_session: ControlSession,
@@ -162,23 +165,20 @@ impl SdlRuntime {
         peer_ip: Ipv4Addr,
         session: PeerDiscoverySession,
     ) {
-        self.pending_peer_discovery_sessions
-            .lock()
-            .insert(peer_ip, session);
+        let mut guard = self.peer_discovery.lock();
+        let entry = guard.entry(peer_ip).or_insert_with(|| PeerDiscoveryEntry {
+            session: session.clone(),
+            initiator: None,
+        });
+        entry.session = session;
     }
 
     pub fn peer_discovery_session(&self, peer_ip: &Ipv4Addr) -> Option<PeerDiscoverySession> {
-        self.pending_peer_discovery_sessions
-            .lock()
-            .get(peer_ip)
-            .cloned()
+        self.peer_discovery.lock().get(peer_ip).map(|e| e.session.clone())
     }
 
     pub fn clear_peer_discovery_session(&self, peer_ip: &Ipv4Addr) {
-        self.pending_peer_discovery_sessions.lock().remove(peer_ip);
-        self.pending_peer_discovery_initiators
-            .lock()
-            .remove(peer_ip);
+        self.peer_discovery.lock().remove(peer_ip);
     }
 
     pub fn adopt_peer_discovery_session(
@@ -186,31 +186,29 @@ impl SdlRuntime {
         peer_ip: Ipv4Addr,
         session_id: DiscoverySessionId,
     ) {
-        let (deadline_unix_ms, local_owner, remote_owner) = self
-            .pending_peer_discovery_sessions
-            .lock()
+        let mut guard = self.peer_discovery.lock();
+        let (deadline_unix_ms, local_owner, remote_owner) = guard
             .get(&peer_ip)
-            .map(|session| {
-                (
-                    session.deadline_unix_ms,
-                    session.local_owner,
-                    session.remote_owner,
-                )
-            })
+            .map(|e| (e.session.deadline_unix_ms, e.session.local_owner, e.session.remote_owner))
             .unwrap_or_default();
-        self.pending_peer_discovery_sessions.lock().insert(
-            peer_ip,
-            PeerDiscoverySession {
+        let entry = guard.entry(peer_ip).or_insert_with(|| PeerDiscoveryEntry {
+            session: PeerDiscoverySession {
                 session_id,
                 deadline_unix_ms,
                 hello_payload: Vec::new(),
                 local_owner,
                 remote_owner,
             },
-        );
-        self.pending_peer_discovery_initiators
-            .lock()
-            .remove(&peer_ip);
+            initiator: None,
+        });
+        entry.session = PeerDiscoverySession {
+            session_id,
+            deadline_unix_ms,
+            hello_payload: Vec::new(),
+            local_owner,
+            remote_owner,
+        };
+        entry.initiator = None;
     }
 
     pub fn remember_peer_discovery_initiator(
@@ -218,9 +216,11 @@ impl SdlRuntime {
         peer_ip: Ipv4Addr,
         initiator: PeerDiscoveryNoiseInitiator,
     ) {
-        self.pending_peer_discovery_initiators
-            .lock()
-            .insert(peer_ip, initiator);
+        let mut guard = self.peer_discovery.lock();
+        if let Some(entry) = guard.get_mut(&peer_ip) {
+            entry.initiator = Some(initiator);
+        }
+        // If no session exists yet, discard (caller should call remember_peer_discovery_session first)
     }
 
     pub fn with_peer_discovery_initiator<T>(
@@ -228,27 +228,23 @@ impl SdlRuntime {
         peer_ip: &Ipv4Addr,
         f: impl FnOnce(&mut PeerDiscoveryNoiseInitiator) -> T,
     ) -> Option<T> {
-        let mut guard = self.pending_peer_discovery_initiators.lock();
-        let initiator = guard.get_mut(peer_ip)?;
+        let mut guard = self.peer_discovery.lock();
+        let entry = guard.get_mut(peer_ip)?;
+        let initiator = entry.initiator.as_mut()?;
         Some(f(initiator))
     }
 
     pub fn clear_peer_discovery_initiator(&self, peer_ip: &Ipv4Addr) {
-        self.pending_peer_discovery_initiators
-            .lock()
-            .remove(peer_ip);
+        if let Some(entry) = self.peer_discovery.lock().get_mut(peer_ip) {
+            entry.initiator = None;
+        }
     }
 
     pub fn retain_peer_discovery_sessions(
         &self,
         valid_peers: &std::collections::HashSet<Ipv4Addr>,
     ) {
-        self.pending_peer_discovery_sessions
-            .lock()
-            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
-        self.pending_peer_discovery_initiators
-            .lock()
-            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+        self.peer_discovery.lock().retain(|peer_ip, _| valid_peers.contains(peer_ip));
         self.peer_sessions.retain_peers(valid_peers);
     }
 
@@ -273,7 +269,7 @@ impl SdlRuntime {
         let mut ping = control_packet::PingPacket::new(packet.payload_mut())?;
         ping.set_time(crate::handle::now_time() as u16);
         ping.set_epoch(self.peer_state.lock().epoch);
-        self.peer_crypto.encrypt_recovery_ipv4(&peer_ip, &mut packet)?;
+        self.peer_sessions.encrypt_recovery_ipv4(&peer_ip, &mut packet)?;
         self.data_channel
             .send_to_peer_during_recovery(&packet, &peer_ip)?;
         self.peer_sessions
@@ -360,7 +356,7 @@ impl SdlRuntime {
             return Ok(false);
         }
         if net_packet.is_encrypt() {
-            if let Err(e) = self.peer_crypto.decrypt_ipv4(&peer_ip, net_packet) {
+            if let Err(e) = self.peer_sessions.decrypt_ipv4(&peer_ip, net_packet) {
                 if e.downcast_ref::<crate::util::GenerationMismatchError>().is_some() {
                     // Expected during peer recovery (restart / key-rotate): the local cipher
                     // slot has been cleared but the remote peer is still sending packets.
@@ -687,6 +683,55 @@ impl SdlRuntime {
         self.clear_applied_dns_profile();
     }
 
+    /// Hard-reset all per-peer state for peers whose VIP appears in `vips`.
+    /// Use when a peer has changed identity or departed.
+    /// Caller should still call `route_manager.retain_peers(active_vips)` for the full fleet.
+    pub fn hard_reset_peers(&self, vips: &HashSet<Ipv4Addr>) {
+        if vips.is_empty() {
+            return;
+        }
+        for vip in vips {
+            self.route_manager.clear_peer(vip);
+        }
+        {
+            let mut disc = self.peer_discovery.lock();
+            for vip in vips {
+                disc.remove(vip);
+            }
+        }
+        {
+            let mut nat = self.peer_nat_info_map.write();
+            for vip in vips {
+                nat.remove(vip);
+            }
+        }
+        self.peer_sessions.clear_crypto_for(vips);
+        self.peer_sessions.clear_peers_for(vips);
+        self.peer_replay_guard.clear_peers_for(vips);
+    }
+
+    /// Soft-reset per-peer state for peers whose VIP appears in `vips`.
+    /// Preserves the installed cipher (current/previous), resets session phase + pending.
+    pub fn soft_reset_peers(&self, vips: &HashSet<Ipv4Addr>) {
+        if vips.is_empty() {
+            return;
+        }
+        {
+            let mut disc = self.peer_discovery.lock();
+            for vip in vips {
+                disc.remove(vip);
+            }
+        }
+        {
+            let mut nat = self.peer_nat_info_map.write();
+            for vip in vips {
+                nat.remove(vip);
+            }
+        }
+        self.peer_sessions.clear_runtime_state_for(vips);
+        self.peer_sessions.clear_pending_ciphers_for(vips);
+    }
+
     pub fn debug_snapshot_json(&self, sections: &[String]) -> anyhow::Result<String> {
         let include_all = sections.is_empty() || sections.iter().any(|section| section == "all");
         let wants = |name: &str| include_all || sections.iter().any(|section| section == name);
@@ -812,7 +857,7 @@ impl SdlRuntime {
                 .collect::<Vec<_>>();
             peer_nat_items.sort_by(|a, b| a["peer_ip"].as_str().cmp(&b["peer_ip"].as_str()));
             let (current_cipher_count, previous_cipher_count, grace_active) =
-                self.peer_crypto.debug_counts();
+                self.peer_sessions.debug_counts();
             root.insert(
                 "peers".into(),
                 json!({
