@@ -357,7 +357,18 @@ impl SdlRuntime {
             return Ok(false);
         }
         if net_packet.is_encrypt() {
-            self.peer_crypto.decrypt_ipv4(&peer_ip, net_packet)?;
+            if let Err(e) = self.peer_crypto.decrypt_ipv4(&peer_ip, net_packet) {
+                if e.downcast_ref::<crate::util::GenerationMismatchError>().is_some() {
+                    // Expected during peer recovery (restart / key-rotate): the local cipher
+                    // slot has been cleared but the remote peer is still sending packets.
+                    // Drop silently at WARN level — this is NOT a data-path bug.
+                    log::warn!(
+                        "drop peer {peer_ip} packet: generation mismatch (recovery in progress)"
+                    );
+                    return Ok(false);
+                }
+                return Err(e);
+            }
         }
         match route_path.origin() {
             RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp => {

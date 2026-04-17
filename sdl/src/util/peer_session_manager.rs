@@ -1,9 +1,33 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use parking_lot::RwLock;
+
+/// Typed error returned when an incoming packet's generation does not match any
+/// installed cipher slot.  This is expected and transient during peer recovery
+/// (e.g. after a restart or key rotation) and should be handled as a silent
+/// packet drop rather than a hard error.
+#[derive(Debug)]
+pub struct GenerationMismatchError {
+    detail: String,
+}
+
+impl GenerationMismatchError {
+    fn new(detail: String) -> Self {
+        Self { detail }
+    }
+}
+
+impl fmt::Display for GenerationMismatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.detail)
+    }
+}
+
+impl std::error::Error for GenerationMismatchError {}
 
 use crate::cipher::Cipher;
 use crate::cipher::CipherModel;
@@ -433,11 +457,12 @@ impl PeerSessionManager {
         let (current, previous, next, grace_active) = {
             let guard = self.inner.read();
             let Some(state) = guard.get(peer_ip) else {
-                return Err(anyhow!(
+                return Err(GenerationMismatchError::new(format!(
                     "peer session generation mismatch for {}: packet={}, current=None, previous=None, next=None, grace_active=false",
                     peer_ip,
                     packet_generation
-                ));
+                ))
+                .into());
             };
             (
                 state.crypto.current.clone(),
@@ -470,7 +495,7 @@ impl PeerSessionManager {
             self.promote_next(peer_ip);
             return Ok(());
         }
-        Err(anyhow!(
+        Err(GenerationMismatchError::new(format!(
             "peer session generation mismatch for {}: packet={}, current={:?}, previous={:?}, next={:?}, grace_active={}",
             peer_ip,
             packet_generation,
@@ -479,6 +504,7 @@ impl PeerSessionManager {
             next.as_ref().map(|slot| slot.generation),
             grace_active
         ))
+        .into())
     }
 
     pub fn install_pending_cipher_with_generation(
