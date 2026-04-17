@@ -1073,6 +1073,8 @@ pub struct RegistrationResponse {
     pub error_message: ::std::string::String,
     // @@protoc_insertion_point(field:RegistrationResponse.dns_profile)
     pub dns_profile: ::protobuf::MessageField<DnsProfile>,
+    // @@protoc_insertion_point(field:RegistrationResponse.registration_epoch)
+    pub registration_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RegistrationResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1090,7 +1092,7 @@ impl RegistrationResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(12);
+        let mut fields = ::std::vec::Vec::with_capacity(13);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "virtual_ip",
@@ -1152,6 +1154,11 @@ impl RegistrationResponse {
             |m: &RegistrationResponse| { &m.dns_profile },
             |m: &mut RegistrationResponse| { &mut m.dns_profile },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "registration_epoch",
+            |m: &RegistrationResponse| { &m.registration_epoch },
+            |m: &mut RegistrationResponse| { &mut m.registration_epoch },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RegistrationResponse>(
             "RegistrationResponse",
             fields,
@@ -1206,6 +1213,9 @@ impl ::protobuf::Message for RegistrationResponse {
                 98 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.dns_profile)?;
                 },
+                104 => {
+                    self.registration_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1257,6 +1267,9 @@ impl ::protobuf::Message for RegistrationResponse {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
+        if self.registration_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(13, self.registration_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1299,6 +1312,9 @@ impl ::protobuf::Message for RegistrationResponse {
         if let Some(v) = self.dns_profile.as_ref() {
             ::protobuf::rt::write_message_field_with_cached_size(12, v, os)?;
         }
+        if self.registration_epoch != 0 {
+            os.write_uint64(13, self.registration_epoch)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1328,6 +1344,7 @@ impl ::protobuf::Message for RegistrationResponse {
         self.error_code = 0;
         self.error_message.clear();
         self.dns_profile.clear();
+        self.registration_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -1345,6 +1362,7 @@ impl ::protobuf::Message for RegistrationResponse {
             error_code: 0,
             error_message: ::std::string::String::new(),
             dns_profile: ::protobuf::MessageField::none(),
+            registration_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -5972,6 +5990,8 @@ pub struct DeviceInfo {
     pub device_id: ::std::string::String,
     // @@protoc_insertion_point(field:DeviceInfo.device_pub_key)
     pub device_pub_key: ::std::vec::Vec<u8>,
+    // @@protoc_insertion_point(field:DeviceInfo.registration_epoch)
+    pub registration_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -5989,7 +6009,7 @@ impl DeviceInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut fields = ::std::vec::Vec::with_capacity(6);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "name",
@@ -6015,6 +6035,11 @@ impl DeviceInfo {
             "device_pub_key",
             |m: &DeviceInfo| { &m.device_pub_key },
             |m: &mut DeviceInfo| { &mut m.device_pub_key },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "registration_epoch",
+            |m: &DeviceInfo| { &m.registration_epoch },
+            |m: &mut DeviceInfo| { &mut m.registration_epoch },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceInfo>(
             "DeviceInfo",
@@ -6049,6 +6074,9 @@ impl ::protobuf::Message for DeviceInfo {
                 66 => {
                     self.device_pub_key = is.read_bytes()?;
                 },
+                80 => {
+                    self.registration_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -6076,6 +6104,9 @@ impl ::protobuf::Message for DeviceInfo {
         if !self.device_pub_key.is_empty() {
             my_size += ::protobuf::rt::bytes_size(8, &self.device_pub_key);
         }
+        if self.registration_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(10, self.registration_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -6096,6 +6127,9 @@ impl ::protobuf::Message for DeviceInfo {
         }
         if !self.device_pub_key.is_empty() {
             os.write_bytes(8, &self.device_pub_key)?;
+        }
+        if self.registration_epoch != 0 {
+            os.write_uint64(10, self.registration_epoch)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -6119,6 +6153,7 @@ impl ::protobuf::Message for DeviceInfo {
         self.device_status = 0;
         self.device_id.clear();
         self.device_pub_key.clear();
+        self.registration_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -6129,6 +6164,7 @@ impl ::protobuf::Message for DeviceInfo {
             device_status: 0,
             device_id: ::std::string::String::new(),
             device_pub_key: ::std::vec::Vec::new(),
+            registration_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -6825,6 +6861,10 @@ pub struct PunchAck {
     pub reason: ::std::string::String,
     // @@protoc_insertion_point(field:PunchAck.phase)
     pub phase: ::protobuf::EnumOrUnknown<PunchSessionPhase>,
+    // @@protoc_insertion_point(field:PunchAck.source_owner)
+    pub source_owner: u64,
+    // @@protoc_insertion_point(field:PunchAck.target_owner)
+    pub target_owner: u64,
     // special fields
     // @@protoc_insertion_point(special_field:PunchAck.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -6842,7 +6882,7 @@ impl PunchAck {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(6);
+        let mut fields = ::std::vec::Vec::with_capacity(8);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "session_id",
@@ -6873,6 +6913,16 @@ impl PunchAck {
             "phase",
             |m: &PunchAck| { &m.phase },
             |m: &mut PunchAck| { &mut m.phase },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "source_owner",
+            |m: &PunchAck| { &m.source_owner },
+            |m: &mut PunchAck| { &mut m.source_owner },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "target_owner",
+            |m: &PunchAck| { &m.target_owner },
+            |m: &mut PunchAck| { &mut m.target_owner },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PunchAck>(
             "PunchAck",
@@ -6910,6 +6960,12 @@ impl ::protobuf::Message for PunchAck {
                 48 => {
                     self.phase = is.read_enum_or_unknown()?;
                 },
+                56 => {
+                    self.source_owner = is.read_uint64()?;
+                },
+                64 => {
+                    self.target_owner = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -6940,6 +6996,12 @@ impl ::protobuf::Message for PunchAck {
         if self.phase != ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown) {
             my_size += ::protobuf::rt::int32_size(6, self.phase.value());
         }
+        if self.source_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(7, self.source_owner);
+        }
+        if self.target_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(8, self.target_owner);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -6964,6 +7026,12 @@ impl ::protobuf::Message for PunchAck {
         if self.phase != ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown) {
             os.write_enum(6, ::protobuf::EnumOrUnknown::value(&self.phase))?;
         }
+        if self.source_owner != 0 {
+            os.write_uint64(7, self.source_owner)?;
+        }
+        if self.target_owner != 0 {
+            os.write_uint64(8, self.target_owner)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -6987,6 +7055,8 @@ impl ::protobuf::Message for PunchAck {
         self.accepted = false;
         self.reason.clear();
         self.phase = ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown);
+        self.source_owner = 0;
+        self.target_owner = 0;
         self.special_fields.clear();
     }
 
@@ -6998,6 +7068,8 @@ impl ::protobuf::Message for PunchAck {
             accepted: false,
             reason: ::std::string::String::new(),
             phase: ::protobuf::EnumOrUnknown::from_i32(0),
+            source_owner: 0,
+            target_owner: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7045,6 +7117,10 @@ pub struct PunchStart {
     pub attempt_budget: u32,
     // @@protoc_insertion_point(field:PunchStart.endpoint_selection_policy)
     pub endpoint_selection_policy: ::protobuf::EnumOrUnknown<PunchEndpointSelectionPolicy>,
+    // @@protoc_insertion_point(field:PunchStart.source_owner)
+    pub source_owner: u64,
+    // @@protoc_insertion_point(field:PunchStart.target_owner)
+    pub target_owner: u64,
     // special fields
     // @@protoc_insertion_point(special_field:PunchStart.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -7062,7 +7138,7 @@ impl PunchStart {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(10);
+        let mut fields = ::std::vec::Vec::with_capacity(12);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "session_id",
@@ -7114,6 +7190,16 @@ impl PunchStart {
             |m: &PunchStart| { &m.endpoint_selection_policy },
             |m: &mut PunchStart| { &mut m.endpoint_selection_policy },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "source_owner",
+            |m: &PunchStart| { &m.source_owner },
+            |m: &mut PunchStart| { &mut m.source_owner },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "target_owner",
+            |m: &PunchStart| { &m.target_owner },
+            |m: &mut PunchStart| { &mut m.target_owner },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PunchStart>(
             "PunchStart",
             fields,
@@ -7162,6 +7248,12 @@ impl ::protobuf::Message for PunchStart {
                 80 => {
                     self.endpoint_selection_policy = is.read_enum_or_unknown()?;
                 },
+                88 => {
+                    self.source_owner = is.read_uint64()?;
+                },
+                96 => {
+                    self.target_owner = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -7205,6 +7297,12 @@ impl ::protobuf::Message for PunchStart {
         if self.endpoint_selection_policy != ::protobuf::EnumOrUnknown::new(PunchEndpointSelectionPolicy::PunchEndpointSelectionDefault) {
             my_size += ::protobuf::rt::int32_size(10, self.endpoint_selection_policy.value());
         }
+        if self.source_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(11, self.source_owner);
+        }
+        if self.target_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(12, self.target_owner);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -7241,6 +7339,12 @@ impl ::protobuf::Message for PunchStart {
         if self.endpoint_selection_policy != ::protobuf::EnumOrUnknown::new(PunchEndpointSelectionPolicy::PunchEndpointSelectionDefault) {
             os.write_enum(10, ::protobuf::EnumOrUnknown::value(&self.endpoint_selection_policy))?;
         }
+        if self.source_owner != 0 {
+            os.write_uint64(11, self.source_owner)?;
+        }
+        if self.target_owner != 0 {
+            os.write_uint64(12, self.target_owner)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -7268,6 +7372,8 @@ impl ::protobuf::Message for PunchStart {
         self.trigger_reason = ::protobuf::EnumOrUnknown::new(PunchTriggerReason::PunchTriggerUnknown);
         self.attempt_budget = 0;
         self.endpoint_selection_policy = ::protobuf::EnumOrUnknown::new(PunchEndpointSelectionPolicy::PunchEndpointSelectionDefault);
+        self.source_owner = 0;
+        self.target_owner = 0;
         self.special_fields.clear();
     }
 
@@ -7283,6 +7389,8 @@ impl ::protobuf::Message for PunchStart {
             trigger_reason: ::protobuf::EnumOrUnknown::from_i32(0),
             attempt_budget: 0,
             endpoint_selection_policy: ::protobuf::EnumOrUnknown::from_i32(0),
+            source_owner: 0,
+            target_owner: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7326,6 +7434,10 @@ pub struct PunchResult {
     pub selected_endpoint: ::protobuf::MessageField<PunchEndpoint>,
     // @@protoc_insertion_point(field:PunchResult.phase)
     pub phase: ::protobuf::EnumOrUnknown<PunchSessionPhase>,
+    // @@protoc_insertion_point(field:PunchResult.source_owner)
+    pub source_owner: u64,
+    // @@protoc_insertion_point(field:PunchResult.target_owner)
+    pub target_owner: u64,
     // special fields
     // @@protoc_insertion_point(special_field:PunchResult.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -7343,7 +7455,7 @@ impl PunchResult {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(8);
+        let mut fields = ::std::vec::Vec::with_capacity(10);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "session_id",
@@ -7384,6 +7496,16 @@ impl PunchResult {
             "phase",
             |m: &PunchResult| { &m.phase },
             |m: &mut PunchResult| { &mut m.phase },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "source_owner",
+            |m: &PunchResult| { &m.source_owner },
+            |m: &mut PunchResult| { &mut m.source_owner },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "target_owner",
+            |m: &PunchResult| { &m.target_owner },
+            |m: &mut PunchResult| { &mut m.target_owner },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<PunchResult>(
             "PunchResult",
@@ -7427,6 +7549,12 @@ impl ::protobuf::Message for PunchResult {
                 64 => {
                     self.phase = is.read_enum_or_unknown()?;
                 },
+                72 => {
+                    self.source_owner = is.read_uint64()?;
+                },
+                80 => {
+                    self.target_owner = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -7464,6 +7592,12 @@ impl ::protobuf::Message for PunchResult {
         if self.phase != ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown) {
             my_size += ::protobuf::rt::int32_size(8, self.phase.value());
         }
+        if self.source_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(9, self.source_owner);
+        }
+        if self.target_owner != 0 {
+            my_size += ::protobuf::rt::uint64_size(10, self.target_owner);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -7494,6 +7628,12 @@ impl ::protobuf::Message for PunchResult {
         if self.phase != ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown) {
             os.write_enum(8, ::protobuf::EnumOrUnknown::value(&self.phase))?;
         }
+        if self.source_owner != 0 {
+            os.write_uint64(9, self.source_owner)?;
+        }
+        if self.target_owner != 0 {
+            os.write_uint64(10, self.target_owner)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -7519,6 +7659,8 @@ impl ::protobuf::Message for PunchResult {
         self.reason.clear();
         self.selected_endpoint.clear();
         self.phase = ::protobuf::EnumOrUnknown::new(PunchSessionPhase::PunchPhaseUnknown);
+        self.source_owner = 0;
+        self.target_owner = 0;
         self.special_fields.clear();
     }
 
@@ -7532,6 +7674,8 @@ impl ::protobuf::Message for PunchResult {
             reason: ::std::string::String::new(),
             selected_endpoint: ::protobuf::MessageField::none(),
             phase: ::protobuf::EnumOrUnknown::from_i32(0),
+            source_owner: 0,
+            target_owner: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8404,7 +8548,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     R\trequestId\x12\x14\n\x05query\x18\x02\x20\x01(\x0cR\x05query\"c\n\x10D\
     nsQueryResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
     \x12\x1a\n\x08response\x18\x02\x20\x01(\x0cR\x08response\x12\x14\n\x05er\
-    ror\x18\x03\x20\x01(\tR\x05error\"\xec\x03\n\x14RegistrationResponse\x12\
+    ror\x18\x03\x20\x01(\tR\x05error\"\x9b\x04\n\x14RegistrationResponse\x12\
     \x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\x12'\n\x0fvirtual_ga\
     teway\x18\x02\x20\x01(\x07R\x0evirtualGateway\x12'\n\x0fvirtual_netmask\
     \x18\x03\x20\x01(\x07R\x0evirtualNetmask\x12\x14\n\x05epoch\x18\x04\x20\
@@ -8415,8 +8559,9 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     teway_access_grant\x18\t\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewa\
     yAccessGrant\x12\x1d\n\nerror_code\x18\n\x20\x01(\rR\terrorCode\x12#\n\r\
     error_message\x18\x0b\x20\x01(\tR\x0cerrorMessage\x12,\n\x0bdns_profile\
-    \x18\x0c\x20\x01(\x0b2\x0b.DnsProfileR\ndnsProfile\"t\n\x0eGatewayChanne\
-    l\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayChannelKindR\x04kind\
+    \x18\x0c\x20\x01(\x0b2\x0b.DnsProfileR\ndnsProfile\x12-\n\x12registratio\
+    n_epoch\x18\r\x20\x01(\x04R\x11registrationEpoch\"t\n\x0eGatewayChannel\
+    \x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayChannelKindR\x04kind\
     \x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\n\x0bserver_name\
     \x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\x05\"\xa3\x04\n\x12Gat\
     ewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\
@@ -8525,14 +8670,15 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x19\n\x08watch_id\x18\x01\x20\x01(\x04R\x07watchId\x12\x18\n\x07section\
     \x18\x02\x20\x01(\tR\x07section\x12\x1d\n\nevent_type\x18\x03\x20\x01(\t\
     R\teventType\x12\"\n\revent_unix_ms\x18\x04\x20\x01(\x03R\x0beventUnixMs\
-    \x12!\n\x0cpayload_json\x18\x05\x20\x01(\tR\x0bpayloadJson\"\xad\x01\n\n\
+    \x12!\n\x0cpayload_json\x18\x05\x20\x01(\tR\x0bpayloadJson\"\xdc\x01\n\n\
     DeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirt\
     ual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\rdevice_status\x18\x03\
     \x20\x01(\rR\x0cdeviceStatus\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\
     \x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePub\
-    KeyJ\x04\x08\t\x10\n\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01\
-    (\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.Devic\
-    eInfoR\x0edeviceInfoList\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\
+    Key\x12-\n\x12registration_epoch\x18\n\x20\x01(\x04R\x11registrationEpoc\
+    hJ\x04\x08\t\x10\n\"Y\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\x01(\
+    \rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.Device\
+    InfoR\x0edeviceInfoList\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\
     \x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\x01(\rR\x04port\x12\x12\n\
     \x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\
     \x08R\x03tcp\"\xe2\x04\n\x0cPunchRequest\x12\x1d\n\nsession_id\x18\x01\
@@ -8548,60 +8694,65 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     gger_reason\x18\x0b\x20\x01(\x0e2\x13.PunchTriggerReasonR\rtriggerReason\
     \x12%\n\x0eattempt_budget\x18\x0c\x20\x01(\rR\rattemptBudget\x12Y\n\x19e\
     ndpoint_selection_policy\x18\r\x20\x01(\x0e2\x1d.PunchEndpointSelectionP\
-    olicyR\x17endpointSelectionPolicy\"\xb9\x01\n\x08PunchAck\x12\x1d\n\nses\
+    olicyR\x17endpointSelectionPolicy\"\xff\x01\n\x08PunchAck\x12\x1d\n\nses\
     sion_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\
     \x01(\x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\
     \x12\x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06re\
     ason\x18\x05\x20\x01(\tR\x06reason\x12(\n\x05phase\x18\x06\x20\x01(\x0e2\
-    \x12.PunchSessionPhaseR\x05phase\"\xb3\x03\n\nPunchStart\x12\x1d\n\nsess\
-    ion_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\
-    \x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\
-    \x125\n\x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeer\
-    Endpoints\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\
-    \ntimeout_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\
-    \x18\x07\x20\x01(\x03R\x0edeadlineUnixMs\x12:\n\x0etrigger_reason\x18\
-    \x08\x20\x01(\x0e2\x13.PunchTriggerReasonR\rtriggerReason\x12%\n\x0eatte\
-    mpt_budget\x18\t\x20\x01(\rR\rattemptBudget\x12Y\n\x19endpoint_selection\
-    _policy\x18\n\x20\x01(\x0e2\x1d.PunchEndpointSelectionPolicyR\x17endpoin\
-    tSelectionPolicy\"\x9b\x02\n\x0bPunchResult\x12\x1d\n\nsession_id\x18\
-    \x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\
-    \x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x12\x18\n\
-    \x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\x18\x05\x20\
-    \x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\x18\x06\x20\
-    \x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\x01(\x0b2\x0e\
-    .PunchEndpointR\x10selectedEndpoint\x12(\n\x05phase\x18\x08\x20\x01(\x0e\
-    2\x12.PunchSessionPhaseR\x05phase\"\xfc\x02\n\x10ClientStatusInfo\x12\
-    \x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08p2p_list\x18\
-    \x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_stream\x18\x03\
-    \x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04\
-    R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\
-    \x07natType\x12&\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\
-    \x12@\n\x14public_udp_endpoints\x18\n\x20\x03(\x0b2\x0e.PunchEndpointR\
-    \x12publicUdpEndpoints\x12E\n\x14punch_trigger_reason\x18\x0b\x20\x01(\
-    \x0e2\x13.PunchTriggerReasonR\x12punchTriggerReasonJ\x04\x08\x06\x10\x07\
-    J\x04\x08\x07\x10\x08J\x04\x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next\
-    _ip\x18\x01\x20\x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\
-    \x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\
-    \x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\
-    \n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\x12\x07\
-    \n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\
-    \x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\xab\x01\n\x12Pun\
-    chTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\x12\x1c\n\x18Punc\
-    hTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchTriggerRouteTimeout\x10\
-    \x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\x1d\n\x19PunchT\
-    riggerManualRequest\x10\x04*\xb5\x01\n\x11PunchSessionPhase\x12\x15\n\
-    \x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\x01\x12\
-    \x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11PunchPhaseWaiting\x10\
-    \x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11PunchPhaseTimeo\
-    ut\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPunchEndp\
-    ointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\x10\0\x12\
-    \x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpointSelecti\
-    onPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchR\
-    esultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11\
-    PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\
-    \x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchResultRejected\
-    \x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15PunchRe\
-    sultSuperseded\x10\x07b\x06proto3\
+    \x12.PunchSessionPhaseR\x05phase\x12!\n\x0csource_owner\x18\x07\x20\x01(\
+    \x04R\x0bsourceOwner\x12!\n\x0ctarget_owner\x18\x08\x20\x01(\x04R\x0btar\
+    getOwner\"\xf9\x03\n\nPunchStart\x12\x1d\n\nsession_id\x18\x01\x20\x01(\
+    \x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\
+    \x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\x0epeer_endpoint\
+    s\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeerEndpoints\x12\x18\n\x07a\
+    ttempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\x06\x20\
+    \x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\x07\x20\x01(\x03R\x0e\
+    deadlineUnixMs\x12:\n\x0etrigger_reason\x18\x08\x20\x01(\x0e2\x13.PunchT\
+    riggerReasonR\rtriggerReason\x12%\n\x0eattempt_budget\x18\t\x20\x01(\rR\
+    \rattemptBudget\x12Y\n\x19endpoint_selection_policy\x18\n\x20\x01(\x0e2\
+    \x1d.PunchEndpointSelectionPolicyR\x17endpointSelectionPolicy\x12!\n\x0c\
+    source_owner\x18\x0b\x20\x01(\x04R\x0bsourceOwner\x12!\n\x0ctarget_owner\
+    \x18\x0c\x20\x01(\x04R\x0btargetOwner\"\xe1\x02\n\x0bPunchResult\x12\x1d\
+    \n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\
+    \x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\
+    \x06target\x12\x18\n\x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\
+    \x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\
+    \x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\
+    \x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\x12(\n\x05phas\
+    e\x18\x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\x12!\n\x0csource\
+    _owner\x18\t\x20\x01(\x04R\x0bsourceOwner\x12!\n\x0ctarget_owner\x18\n\
+    \x20\x01(\x04R\x0btargetOwner\"\xfc\x02\n\x10ClientStatusInfo\x12\x16\n\
+    \x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08p2p_list\x18\x02\
+    \x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\
+    \x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\nd\
+    ownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07na\
+    tType\x12&\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\x12@\
+    \n\x14public_udp_endpoints\x18\n\x20\x03(\x0b2\x0e.PunchEndpointR\x12pub\
+    licUdpEndpoints\x12E\n\x14punch_trigger_reason\x18\x0b\x20\x01(\x0e2\x13\
+    .PunchTriggerReasonR\x12punchTriggerReasonJ\x04\x08\x06\x10\x07J\x04\x08\
+    \x07\x10\x08J\x04\x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\
+    \x01\x20\x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATE\
+    WAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\
+    \x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymm\
+    etric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\x12\x07\n\x03Al\
+    l\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\
+    \x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\xab\x01\n\x12PunchTrig\
+    gerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\x12\x1c\n\x18PunchTrigg\
+    erStatusUpdate\x10\x01\x12\x1c\n\x18PunchTriggerRouteTimeout\x10\x02\x12\
+    !\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\x1d\n\x19PunchTriggerMa\
+    nualRequest\x10\x04*\xb5\x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPh\
+    aseUnknown\x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11P\
+    unchPhaseSending\x10\x02\x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\
+    \n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\
+    \x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelect\
+    ionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\x10\0\x12\x1d\n\x19Pun\
+    chEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpointSelectionPreferPubli\
+    c\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\
+    \x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultF\
+    ailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13Punch\
+    ResultCanceled\x10\x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\
+    \n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15PunchResultSuperseded\
+    \x10\x07b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

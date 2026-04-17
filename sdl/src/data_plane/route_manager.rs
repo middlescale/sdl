@@ -288,9 +288,10 @@ impl RouteManager {
             return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip)?]);
         }
         let mut packets = Vec::with_capacity(2);
+        let grace_active = self.peer_crypto.is_grace_active_for(&dest_ip);
         match self.peer_crypto.current_generation(&dest_ip) {
             Ok(_) => packets.push(heartbeat_packet_client(Some((&self.peer_crypto, false)), src_ip, dest_ip)?),
-            Err(err) if !self.peer_crypto.is_grace_active() => {
+            Err(err) if !grace_active => {
                 log::debug!(
                     "skip heartbeat without current peer session cipher for {}: {:?}",
                     dest_ip,
@@ -306,7 +307,7 @@ impl RouteManager {
                 );
             }
         }
-        if self.peer_crypto.is_grace_active() {
+        if grace_active {
             match self.peer_crypto.previous_generation(&dest_ip) {
                 Ok(_) => packets.push(heartbeat_packet_client(Some((&self.peer_crypto, true)), src_ip, dest_ip)?),
                 Err(err) if packets.is_empty() => {

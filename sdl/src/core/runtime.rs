@@ -88,6 +88,8 @@ pub struct PeerDiscoverySession {
     pub session_id: DiscoverySessionId,
     pub deadline_unix_ms: i64,
     pub hello_payload: Vec<u8>,
+    pub local_owner: u64,
+    pub remote_owner: u64,
 }
 
 #[derive(Clone)]
@@ -99,6 +101,7 @@ pub struct SdlRuntime {
     pub rename_request_seq: Arc<AtomicU64>,
     pub pending_rename_requests: Arc<Mutex<HashMap<u64, PendingRenameRequest>>>,
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    pub control_registration_epoch: Arc<AtomicU64>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_sessions: Arc<crate::util::PeerSessionManager>,
@@ -183,11 +186,17 @@ impl SdlRuntime {
         peer_ip: Ipv4Addr,
         session_id: DiscoverySessionId,
     ) {
-        let deadline_unix_ms = self
+        let (deadline_unix_ms, local_owner, remote_owner) = self
             .pending_peer_discovery_sessions
             .lock()
             .get(&peer_ip)
-            .map(|session| session.deadline_unix_ms)
+            .map(|session| {
+                (
+                    session.deadline_unix_ms,
+                    session.local_owner,
+                    session.remote_owner,
+                )
+            })
             .unwrap_or_default();
         self.pending_peer_discovery_sessions.lock().insert(
             peer_ip,
@@ -195,6 +204,8 @@ impl SdlRuntime {
                 session_id,
                 deadline_unix_ms,
                 hello_payload: Vec::new(),
+                local_owner,
+                remote_owner,
             },
         );
         self.pending_peer_discovery_initiators
@@ -262,11 +273,38 @@ impl SdlRuntime {
         let mut ping = control_packet::PingPacket::new(packet.payload_mut())?;
         ping.set_time(crate::handle::now_time() as u16);
         ping.set_epoch(self.peer_state.lock().epoch);
-        self.peer_crypto.encrypt_ipv4(&peer_ip, &mut packet)?;
+        self.peer_crypto.encrypt_recovery_ipv4(&peer_ip, &mut packet)?;
         self.data_channel
             .send_to_peer_during_recovery(&packet, &peer_ip)?;
         self.peer_sessions
             .mark_probe_sent(peer_ip, session_state.discovery_session);
+        Ok(())
+    }
+
+    pub fn install_peer_session_cipher(
+        &self,
+        peer_ip: Ipv4Addr,
+        discovery_session: DiscoverySessionId,
+        session_key: [u8; 32],
+        generation: u8,
+        role: &'static str,
+    ) -> anyhow::Result<()> {
+        let cipher_model = self.config.cipher_model;
+        log::info!(
+            "install peer session cipher role={} peer={} session_id={} attempt={} txid={} generation={} cipher_model={}",
+            role,
+            peer_ip,
+            discovery_session.session_id(),
+            discovery_session.attempt(),
+            discovery_session.txid(),
+            generation,
+            cipher_model
+        );
+        let cipher = crate::cipher::Cipher::new_session_key(cipher_model, session_key)?;
+        self.peer_crypto
+            .install_pending_cipher_with_generation(peer_ip, cipher, generation);
+        self.peer_sessions
+            .install_cipher(peer_ip, discovery_session, cipher_model, generation);
         Ok(())
     }
 
@@ -276,6 +314,32 @@ impl SdlRuntime {
                 log::debug!("send peer session probe failed for {}: {:?}", peer_ip, err);
             }
         }
+    }
+
+    pub fn mark_peer_session_probe_succeeded(&self, peer_ip: Ipv4Addr) {
+        let _ = self.peer_sessions.mark_probe_succeeded(peer_ip);
+    }
+
+    pub fn mark_peer_session_relay_path_ready(&self, peer_ip: Ipv4Addr, generation: u8) {
+        let _ = self
+            .peer_sessions
+            .mark_relay_path_ready(peer_ip, generation);
+    }
+
+    pub fn mark_peer_session_direct_data_confirmed(&self, peer_ip: Ipv4Addr, generation: u8) {
+        let _ = self
+            .peer_sessions
+            .mark_direct_data_confirmed(peer_ip, generation);
+    }
+
+    pub fn mark_peer_session_direct_path_ready(
+        &self,
+        peer_ip: Ipv4Addr,
+        discovery_session: DiscoverySessionId,
+    ) {
+        let _ = self
+            .peer_sessions
+            .mark_direct_path_ready(peer_ip, discovery_session);
     }
 
     pub fn decrypt_peer_data_packet<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -295,8 +359,14 @@ impl SdlRuntime {
         if net_packet.is_encrypt() {
             self.peer_crypto.decrypt_ipv4(&peer_ip, net_packet)?;
         }
-        if route_path.is_gateway_path() {
-            self.peer_sessions.mark_relay_path_ready(peer_ip);
+        match route_path.origin() {
+            RouteOrigin::GatewayQuic | RouteOrigin::GatewayUdp => {
+                self.mark_peer_session_relay_path_ready(peer_ip, net_packet.peer_generation());
+            }
+            RouteOrigin::PeerUdp => {
+                self.mark_peer_session_direct_data_confirmed(peer_ip, net_packet.peer_generation());
+            }
+            _ => {}
         }
         self.observe_peer_transport(peer_ip, route_path);
         Ok(true)

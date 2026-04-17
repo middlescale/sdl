@@ -136,8 +136,8 @@ impl Sdl {
         let punch_coordinator = PunchCoordinator::new();
         let debug_watch = DebugWatch::default();
         let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
-        let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_sessions = Arc::new(crate::util::PeerSessionManager::new(16));
+        let peer_crypto = Arc::new(PeerCryptoManager::from_sessions(peer_sessions.clone()));
         let unknown_peer_ingress_limiter = Arc::new(crate::util::PeerIngressLimiter::new(16));
         let peer_replay_guard = Arc::new(crate::util::PeerReplayGuard::new(16));
         let unknown_peer_setup_limiter = Arc::new(crate::util::PeerSetupLimiter::new(16));
@@ -249,6 +249,7 @@ impl Sdl {
                 rename_request_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 pending_rename_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 current_device: current_device.clone(),
+                control_registration_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
                 peer_sessions: peer_sessions.clone(),

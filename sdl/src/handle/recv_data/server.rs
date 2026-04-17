@@ -51,6 +51,8 @@ struct ActivePunchSession {
     session_id: u64,
     source: u32,
     target: u32,
+    source_owner: u64,
+    target_owner: u64,
     attempt: u32,
     deadline_unix_ms: i64,
 }
@@ -227,21 +229,13 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, session| {
-                let direct_ready = self.runtime.route_manager().direct_path_count(peer_ip) > 0;
                 let session_ready = self
                     .runtime
                     .peer_sessions
                     .state(peer_ip)
                     .map(|state| state.is_ready())
                     .unwrap_or(false);
-                if direct_ready || session_ready {
-                    if direct_ready {
-                        if let Some(peer_session) = self.runtime.peer_sessions.state(peer_ip) {
-                            self.runtime
-                                .peer_sessions
-                                .mark_direct_path_ready(*peer_ip, peer_session.discovery_session);
-                        }
-                    }
+                if session_ready {
                     if let Some(_peer_session) = self.runtime.peer_sessions.state(peer_ip) {
                         self.runtime.debug_watch.emit(
                             "peer_session",
@@ -262,7 +256,13 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         for (peer_ip, session) in succeeded {
             self.runtime.clear_peer_discovery_session(&peer_ip);
-            let reason = if self.runtime.route_manager().direct_path_count(&peer_ip) > 0 {
+            let reason = if self
+                .runtime
+                .peer_sessions
+                .state(&peer_ip)
+                .map(|state| state.preferred_transport == crate::util::PeerSessionTransport::Direct)
+                .unwrap_or(false)
+            {
                 "p2p route established"
             } else {
                 "peer session ready"
@@ -272,6 +272,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 session.session_id,
                 session.source,
                 session.target,
+                session.source_owner,
+                session.target_owner,
                 session.attempt,
                 PunchResultCode::PunchResultSuccess,
                 reason,
@@ -284,6 +286,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 session.session_id,
                 session.source,
                 session.target,
+                session.source_owner,
+                session.target_owner,
                 session.attempt,
                 PunchResultCode::PunchResultNoResponse,
                 "deadline exceeded",
@@ -310,6 +314,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         session_id: u64,
         source: u32,
         target: u32,
+        source_owner: u64,
+        target_owner: u64,
         attempt: u32,
         code: PunchResultCode,
         reason: &str,
@@ -336,6 +342,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             session_id,
             source,
             target,
+            source_owner,
+            target_owner,
             attempt,
             code,
             reason,
@@ -359,20 +367,22 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     {
                         return;
                     }
-                    let direct_ready = runtime.route_manager().direct_path_count(&peer_ip) > 0;
                     let session_ready = runtime
                         .peer_sessions
                         .state(&peer_ip)
                         .map(|state| state.is_ready())
                         .unwrap_or(false);
-                    if direct_ready || session_ready {
+                    if session_ready {
                         guard.remove(&peer_ip);
-                        if direct_ready {
-                            if let Some(peer_session) = runtime.peer_sessions.state(&peer_ip) {
-                                runtime
-                                    .peer_sessions
-                                    .mark_direct_path_ready(peer_ip, peer_session.discovery_session);
-                            }
+                        if runtime
+                            .peer_sessions
+                            .state(&peer_ip)
+                            .map(|state| {
+                                state.preferred_transport
+                                    == crate::util::PeerSessionTransport::Direct
+                            })
+                            .unwrap_or(false)
+                        {
                             Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
                         } else {
                             Some((PunchResultCode::PunchResultSuccess, "peer session ready"))
@@ -412,6 +422,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         session.session_id,
                         session.source,
                         session.target,
+                        session.source_owner,
+                        session.target_owner,
                         session.attempt,
                         code,
                         reason,
@@ -427,6 +439,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     }
                     return;
                 }
+                // Retry any pending probes whose first send was dropped (e.g. the
+                // responder's initial probe arrives before the initiator has
+                // installed its cipher).  Retrying here ensures both sides can
+                // reach is_ready() without waiting for the next GatewayConnectAck.
+                runtime.retry_pending_peer_session_probes();
                 let sleep = if session.deadline_unix_ms > 0 {
                     let remaining = session.deadline_unix_ms.saturating_sub(now_ms) as u64;
                     Duration::from_millis(remaining.clamp(1, 200))
@@ -471,6 +488,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Ipv4Addr::from(response.virtual_ip & response.virtual_netmask);
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
                 log::info!("注册成功：{:?}", register_info);
+                self.runtime
+                    .control_registration_epoch
+                    .store(response.registration_epoch, std::sync::atomic::Ordering::Relaxed);
                 self.apply_gateway_grant(response.gateway_access_grant.as_ref(), virtual_ip);
                 let dns_profile = response.dns_profile.as_ref().map(|profile| DnsProfile {
                     servers: profile.servers.clone(),
@@ -779,6 +799,21 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::PunchStart => {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PunchStart {:?}", e)))?;
+                let local_registration_epoch = self
+                    .runtime
+                    .control_registration_epoch
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                if !punch_start_matches_local_owner(local_registration_epoch, &punch_start) {
+                    log::warn!(
+                        "drop punch start with stale local owner peer={} session_id={} attempt={} local_owner={} packet_source_owner={}",
+                        Ipv4Addr::from(punch_start.target),
+                        punch_start.session_id,
+                        punch_start.attempt,
+                        local_registration_epoch,
+                        punch_start.source_owner
+                    );
+                    return Ok(());
+                }
                 let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
                 log::info!(
                     "PunchStart received peer={} session_id={} attempt={} endpoints={} public_ips={:?} public_ports={:?} local_ipv4={:?}",
@@ -791,12 +826,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     peer_nat_info.local_ipv4()
                 );
                 self.runtime
-                    .peer_replay_guard
-                    .clear_peers_for(&HashSet::from([peer_ip]));
-                self.runtime
                     .peer_crypto
-                    .clear_ciphers_for(&HashSet::from([peer_ip]));
-                self.runtime.peer_sessions.clear_peers_for(&HashSet::from([peer_ip]));
+                    .clear_pending_ciphers_for(&HashSet::from([peer_ip]));
                 self.runtime.clear_peer_discovery_session(&peer_ip);
                 self.runtime.route_manager.clear_direct_paths(&peer_ip);
                 self.runtime.debug_watch.emit(
@@ -833,6 +864,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     session_id: punch_start.session_id,
                     source: u32::from(current_device.virtual_ip),
                     target: punch_start.target,
+                    source_owner: punch_start.source_owner,
+                    target_owner: punch_start.target_owner,
                     attempt: punch_start.attempt,
                     deadline_unix_ms,
                 };
@@ -859,6 +892,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                             session_id,
                                             deadline_unix_ms,
                                             hello_payload,
+                                            local_owner: punch_start.source_owner,
+                                            remote_owner: punch_start.target_owner,
                                         }),
                                         None,
                                     )
@@ -918,6 +953,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         prev.session_id,
                         prev.source,
                         prev.target,
+                        prev.source_owner,
+                        prev.target_owner,
                         prev.attempt,
                         PunchResultCode::PunchResultSuperseded,
                         "superseded by new attempt",
@@ -954,6 +991,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let ack = build_punch_ack(
                     punch_start.session_id,
                     u32::from(current_device.virtual_ip),
+                    punch_start.source_owner,
+                    punch_start.target_owner,
                     punch_start.attempt,
                     accepted,
                     reason,
@@ -974,6 +1013,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         punch_start.session_id,
                         u32::from(current_device.virtual_ip),
                         punch_start.target,
+                        punch_start.source_owner,
+                        punch_start.target_owner,
                         punch_start.attempt,
                         PunchResultCode::PunchResultRejected,
                         reason,
@@ -1041,6 +1082,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     info.device_status as u8,
                     info.device_id,
                     info.device_pub_key,
+                    info.registration_epoch,
                 )
             })
             .collect();
@@ -1053,15 +1095,23 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .iter()
             .map(|peer| (peer.virtual_ip, peer_identity_key(peer)))
             .collect();
-        let mut reset_vips: HashSet<Ipv4Addr> = previous_peers
+        let hard_reset_vips: HashSet<Ipv4Addr> = HashSet::new();
+        let mut soft_reset_vips: HashSet<Ipv4Addr> = previous_peers
             .keys()
             .filter(|vip| !active_vips.contains(vip))
             .copied()
             .collect();
+        let mut hard_reset_vips = hard_reset_vips;
         for (vip, previous_peer) in &previous_peers {
             if let Some(next_peer) = ip_list.iter().find(|peer| peer.virtual_ip == *vip) {
-                if should_reset_peer_runtime(previous_peer, next_peer, &current_by_vip) {
-                    reset_vips.insert(*vip);
+                match peer_runtime_reset_kind(previous_peer, next_peer, &current_by_vip) {
+                    Some(PeerRuntimeReset::Hard) => {
+                        hard_reset_vips.insert(*vip);
+                    }
+                    Some(PeerRuntimeReset::Soft) => {
+                        soft_reset_vips.insert(*vip);
+                    }
+                    None => {}
                 }
             }
         }
@@ -1075,10 +1125,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         previous_vip,
                         peer.virtual_ip
                     );
-                    reset_vips.insert(*previous_vip);
+                    hard_reset_vips.insert(*previous_vip);
                 }
             }
         }
+        let reset_vips: HashSet<Ipv4Addr> = hard_reset_vips
+            .union(&soft_reset_vips)
+            .copied()
+            .collect();
         for vip in &reset_vips {
             self.runtime.route_manager.clear_peer(vip);
         }
@@ -1096,12 +1150,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 dev.devices.insert(peer_info.virtual_ip, peer_info);
             }
         }
-        self.runtime.peer_crypto.retain_peers(&active_vips);
-        self.runtime.peer_replay_guard.retain_peers(&active_vips);
         self.runtime.retain_peer_discovery_sessions(&active_vips);
-        self.runtime.peer_crypto.clear_ciphers_for(&reset_vips);
-        self.runtime.peer_replay_guard.clear_peers_for(&reset_vips);
-        self.runtime.peer_sessions.clear_peers_for(&reset_vips);
+        self.runtime.peer_crypto.clear_ciphers_for(&hard_reset_vips);
+        self.runtime.peer_replay_guard.clear_peers_for(&hard_reset_vips);
+        self.runtime.peer_sessions.clear_peers_for(&hard_reset_vips);
+        self.runtime
+            .peer_sessions
+            .clear_runtime_state_for(&soft_reset_vips);
+        self.runtime
+            .peer_crypto
+            .clear_pending_ciphers_for(&soft_reset_vips);
         self.callback.peer_client_list(
             ip_list
                 .into_iter()
@@ -1143,6 +1201,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     &self.runtime.current_device,
                     ConnectStatus::Connecting,
                 );
+                self.runtime
+                    .control_registration_epoch
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 let err = ErrorInfo::new(ErrorType::Disconnect);
                 self.callback.error(err);
                 //掉线epoch要归零
@@ -1230,6 +1291,8 @@ fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
 fn build_punch_ack(
     session_id: u64,
     source: u32,
+    source_owner: u64,
+    target_owner: u64,
     attempt: u32,
     accepted: bool,
     reason: &str,
@@ -1237,6 +1300,8 @@ fn build_punch_ack(
     let mut ack = PunchAck::new();
     ack.session_id = session_id;
     ack.source = source;
+    ack.source_owner = source_owner;
+    ack.target_owner = target_owner;
     ack.attempt = attempt;
     ack.accepted = accepted;
     ack.reason = reason.to_string();
@@ -1252,6 +1317,8 @@ fn build_punch_result(
     session_id: u64,
     source: u32,
     target: u32,
+    source_owner: u64,
+    target_owner: u64,
     attempt: u32,
     code: PunchResultCode,
     reason: &str,
@@ -1261,6 +1328,8 @@ fn build_punch_result(
     result.session_id = session_id;
     result.source = source;
     result.target = target;
+    result.source_owner = source_owner;
+    result.target_owner = target_owner;
     result.attempt = attempt;
     result.code = protobuf::EnumOrUnknown::new(code);
     result.reason = reason.to_string();
@@ -1290,6 +1359,8 @@ fn send_punch_result_via_control(
     session_id: u64,
     source: u32,
     target: u32,
+    source_owner: u64,
+    target_owner: u64,
     attempt: u32,
     code: PunchResultCode,
     reason: &str,
@@ -1299,6 +1370,8 @@ fn send_punch_result_via_control(
         session_id,
         source,
         target,
+        source_owner,
+        target_owner,
         attempt,
         code,
         reason,
@@ -1335,6 +1408,13 @@ fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
     }
     endpoint.tcp = route.protocol().is_base_tcp() && !route.protocol().is_quic();
     endpoint
+}
+
+fn punch_start_matches_local_owner(local_owner: u64, punch_start: &PunchStart) -> bool {
+    if local_owner == 0 || punch_start.source_owner == 0 {
+        return true;
+    }
+    local_owner == punch_start.source_owner
 }
 
 fn format_punch_endpoint(endpoint: Option<&PunchEndpoint>) -> String {
@@ -1457,21 +1537,30 @@ fn should_refresh_gateway_grant_after_registration(
     was_offline && !registration_has_gateway_grant
 }
 
-fn should_reset_peer_runtime(
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PeerRuntimeReset {
+    Soft,
+    Hard,
+}
+
+fn peer_runtime_reset_kind(
     previous_peer: &PeerDeviceInfo,
     next_peer: &PeerDeviceInfo,
     current_by_vip: &HashMap<Ipv4Addr, Vec<u8>>,
-) -> bool {
+) -> Option<PeerRuntimeReset> {
     if let Some(next_identity) = current_by_vip.get(&previous_peer.virtual_ip) {
         let previous_identity = peer_identity_key(previous_peer);
         if &previous_identity != next_identity {
-            return true;
+            return Some(PeerRuntimeReset::Hard);
         }
     }
     if previous_peer.name != next_peer.name {
-        return true;
+        return Some(PeerRuntimeReset::Soft);
     }
-    previous_peer.status != next_peer.status
+    if previous_peer.registration_epoch != next_peer.registration_epoch {
+        return Some(PeerRuntimeReset::Soft);
+    }
+    (previous_peer.status != next_peer.status).then_some(PeerRuntimeReset::Soft)
 }
 
 #[cfg(test)]
@@ -1479,8 +1568,8 @@ mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         format_punch_endpoint, observed_udp_port_from_registration, punch_endpoint_from_route,
-        selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
-        should_reset_peer_runtime,
+        punch_start_matches_local_owner, peer_runtime_reset_kind, selected_endpoint_for_result,
+        should_refresh_gateway_grant_after_registration, PeerRuntimeReset,
     };
     use crate::data_plane::route::Route;
     use crate::handle::{PeerDeviceInfo, PeerDeviceStatus};
@@ -1531,9 +1620,11 @@ mod tests {
 
     #[test]
     fn build_punch_ack_sets_reason() {
-        let ack = build_punch_ack(11, 2, 4, false, "busy");
+        let ack = build_punch_ack(11, 2, 21, 22, 4, false, "busy");
         assert_eq!(ack.session_id, 11);
         assert_eq!(ack.source, 2);
+        assert_eq!(ack.source_owner, 21);
+        assert_eq!(ack.target_owner, 22);
         assert_eq!(ack.attempt, 4);
         assert!(!ack.accepted);
         assert_eq!(ack.reason, "busy");
@@ -1549,6 +1640,8 @@ mod tests {
             12,
             3,
             4,
+            31,
+            32,
             5,
             PunchResultCode::PunchResultNoResponse,
             "timeout",
@@ -1557,6 +1650,8 @@ mod tests {
         assert_eq!(result.session_id, 12);
         assert_eq!(result.source, 3);
         assert_eq!(result.target, 4);
+        assert_eq!(result.source_owner, 31);
+        assert_eq!(result.target_owner, 32);
         assert_eq!(result.attempt, 5);
         assert_eq!(
             result.code.enum_value_or_default(),
@@ -1567,6 +1662,21 @@ mod tests {
             result.phase.enum_value_or_default(),
             PunchSessionPhase::PunchPhaseTimeout
         );
+    }
+
+    #[test]
+    fn punch_start_local_owner_matches_when_equal() {
+        let mut start = PunchStart::new();
+        start.source_owner = 42;
+        assert!(punch_start_matches_local_owner(42, &start));
+        assert!(!punch_start_matches_local_owner(43, &start));
+    }
+
+    #[test]
+    fn punch_start_local_owner_allows_unknown_owner() {
+        let start = PunchStart::new();
+        assert!(punch_start_matches_local_owner(0, &start));
+        assert!(punch_start_matches_local_owner(42, &start));
     }
 
     #[test]
@@ -1640,17 +1750,21 @@ mod tests {
             status,
             device_id: "dev-1".to_string(),
             device_pub_key: vec![1, 2, 3],
+            registration_epoch: 1,
         }
     }
 
     #[test]
-    fn reset_peer_runtime_when_status_changes() {
+    fn status_change_uses_soft_reset() {
         let vip = Ipv4Addr::new(10, 26, 0, 2);
         let previous = test_peer_info(vip, PeerDeviceStatus::Online);
         let next = test_peer_info(vip, PeerDeviceStatus::Offline);
         let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
 
-        assert!(should_reset_peer_runtime(&previous, &next, &current_by_vip));
+        assert_eq!(
+            peer_runtime_reset_kind(&previous, &next, &current_by_vip),
+            Some(PeerRuntimeReset::Soft)
+        );
     }
 
     #[test]
@@ -1660,21 +1774,49 @@ mod tests {
         let next = test_peer_info(vip, PeerDeviceStatus::Online);
         let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
 
-        assert!(!should_reset_peer_runtime(
-            &previous,
-            &next,
-            &current_by_vip
-        ));
+        assert_eq!(peer_runtime_reset_kind(&previous, &next, &current_by_vip), None);
     }
 
     #[test]
-    fn reset_peer_runtime_when_name_changes() {
+    fn name_change_uses_soft_reset() {
         let vip = Ipv4Addr::new(10, 26, 0, 2);
         let previous = test_peer_info(vip, PeerDeviceStatus::Online);
         let mut next = test_peer_info(vip, PeerDeviceStatus::Online);
         next.name = "renamed-peer".to_string();
         let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
 
-        assert!(should_reset_peer_runtime(&previous, &next, &current_by_vip));
+        assert_eq!(
+            peer_runtime_reset_kind(&previous, &next, &current_by_vip),
+            Some(PeerRuntimeReset::Soft)
+        );
+    }
+
+    #[test]
+    fn registration_epoch_change_uses_soft_reset() {
+        let vip = Ipv4Addr::new(10, 26, 0, 2);
+        let previous = test_peer_info(vip, PeerDeviceStatus::Online);
+        let mut next = test_peer_info(vip, PeerDeviceStatus::Online);
+        next.registration_epoch = 2;
+        let current_by_vip = HashMap::from([(vip, b"id:dev-1".to_vec())]);
+
+        assert_eq!(
+            peer_runtime_reset_kind(&previous, &next, &current_by_vip),
+            Some(PeerRuntimeReset::Soft)
+        );
+    }
+
+    #[test]
+    fn identity_change_uses_hard_reset() {
+        let vip = Ipv4Addr::new(10, 26, 0, 2);
+        let previous = test_peer_info(vip, PeerDeviceStatus::Online);
+        let mut next = test_peer_info(vip, PeerDeviceStatus::Online);
+        next.device_id = "dev-2".to_string();
+        next.device_pub_key = vec![9, 9, 9];
+        let current_by_vip = HashMap::from([(vip, b"id:dev-2".to_vec())]);
+
+        assert_eq!(
+            peer_runtime_reset_kind(&previous, &next, &current_by_vip),
+            Some(PeerRuntimeReset::Hard)
+        );
     }
 }

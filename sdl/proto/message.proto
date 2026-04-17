@@ -52,6 +52,7 @@ message RegistrationResponse {
     uint32 error_code = 10;
     string error_message = 11;
     DnsProfile dns_profile = 12;
+    uint64 registration_epoch = 13;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
@@ -235,6 +236,7 @@ message DeviceInfo {
     uint32 device_status = 3;
     string device_id = 7;
     bytes device_pub_key = 8;
+    uint64 registration_epoch = 10;
 }
 
 message DeviceList {
@@ -312,6 +314,8 @@ message PunchAck {
     bool accepted = 4;
     string reason = 5;
     PunchSessionPhase phase = 6;
+    uint64 source_owner = 7;
+    uint64 target_owner = 8;
 }
 message PunchStart {
     uint64 session_id = 1;
@@ -324,6 +328,8 @@ message PunchStart {
     PunchTriggerReason trigger_reason = 8;
     uint32 attempt_budget = 9;
     PunchEndpointSelectionPolicy endpoint_selection_policy = 10;
+    uint64 source_owner = 11;
+    uint64 target_owner = 12;
 }
 message PunchResult {
     uint64 session_id = 1;
@@ -334,6 +340,8 @@ message PunchResult {
     string reason = 6;
     PunchEndpoint selected_endpoint = 7;
     PunchSessionPhase phase = 8;
+    uint64 source_owner = 9;
+    uint64 target_owner = 10;
 }
 
 /// 向服务器上报客户端状态信息

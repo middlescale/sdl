@@ -89,10 +89,7 @@ impl Config {
             vec![],
             None,
             ip,
-            #[cfg(feature = "aes_gcm")]
-            CipherModel::AesGcm,
-            #[cfg(not(feature = "aes_gcm"))]
-            CipherModel::None,
+            CipherModel::default_runtime(),
             PunchModel::All,
             ports,
             false,

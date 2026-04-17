@@ -72,11 +72,24 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             self.runtime.clear_peer_discovery_session(peer_ip);
             return false;
         }
-        if require_txid {
+        let local_owner = self
+            .runtime
+            .control_registration_epoch
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if session.local_owner != 0 && local_owner != 0 && session.local_owner != local_owner {
+            self.runtime.clear_peer_discovery_session(peer_ip);
+            return false;
+        }
+        let pending_matches = if require_txid {
             session_id.same_transaction(&session.session_id)
         } else {
             session_id.same_attempt(&session.session_id)
-        }
+        };
+        pending_matches
+            && self
+                .runtime
+                .peer_sessions
+                .matches_current_session(peer_ip, session_id, require_txid)
     }
 
     fn discovery_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<crate::cipher::Cipher> {
@@ -725,10 +738,21 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 if current_time < pong_packet.time() {
                     return Ok(());
                 }
+                let current_epoch = self.runtime.peer_state.lock().epoch;
+                if pong_packet.epoch() != current_epoch {
+                    log::debug!(
+                        "ignore stale peer session pong source={} route={:?} pong_epoch={} current_epoch={}",
+                        from,
+                        route_path,
+                        pong_packet.epoch(),
+                        current_epoch
+                    );
+                    return Ok(());
+                }
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_path, metric, rt);
                 self.runtime.route_manager().add_path(from, route);
-                self.runtime.peer_sessions.mark_probe_succeeded(from);
+                self.runtime.mark_peer_session_probe_succeeded(from);
             }
             ControlPacket::AddrRequest => match route_path.addr().ip() {
                 std::net::IpAddr::V4(ipv4) => {
@@ -834,6 +858,17 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 let authoritative_initiator =
                     local_is_authoritative_discovery_initiator(current_device.virtual_ip, source);
                 if !authoritative_initiator {
+                    if !self.runtime.peer_sessions.allows_attempt(&source, session_id) {
+                        log::warn!(
+                            "drop peer discovery hello with superseded attempt source={} route_key={:?} session_id={} attempt={} txid={}",
+                            source,
+                            route_path,
+                            session_id.session_id(),
+                            session_id.attempt(),
+                            session_id.txid()
+                        );
+                        return Ok(());
+                    }
                     self.runtime
                         .peer_sessions
                         .begin_recovery(source, session_id);
@@ -885,30 +920,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         }
                     };
                     if !authoritative_initiator {
-                        log::warn!(
-                            "install peer session cipher role=responder peer={} session_id={} attempt={} txid={} generation={}",
-                            source,
-                            session_id.session_id(),
-                            session_id.attempt(),
-                            session_id.txid(),
-                            negotiated_generation
-                        );
-                        let cipher = crate::cipher::Cipher::new_key(session_key)?;
-                        self.runtime
-                            .peer_crypto
-                            .replace_current_cipher_with_generation(
-                                source,
-                                cipher,
-                                negotiated_generation,
-                            );
-                        self.runtime.peer_sessions.set_negotiated_generation(
+                        self.runtime.install_peer_session_cipher(
                             source,
                             session_id,
+                            session_key,
                             negotiated_generation,
-                        );
-                        self.runtime
-                            .peer_sessions
-                            .mark_cipher_ready(source, session_id);
+                            "responder",
+                        )?;
                         let _ = self.runtime.send_peer_session_probe(source);
                     }
                 }
@@ -988,30 +1006,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             source,
                         ) {
                             let negotiated_generation = net_packet.peer_generation() & 0x03;
-                            log::warn!(
-                                "install peer session cipher role=initiator peer={} session_id={} attempt={} txid={} generation={}",
-                                source,
-                                session_id.session_id(),
-                                session_id.attempt(),
-                                session_id.txid(),
-                                negotiated_generation
-                            );
-                            let cipher = crate::cipher::Cipher::new_key(session_key)?;
-                            self.runtime
-                                .peer_crypto
-                                .replace_current_cipher_with_generation(
-                                    source,
-                                    cipher,
-                                    negotiated_generation,
-                                );
-                            self.runtime.peer_sessions.set_negotiated_generation(
+                            self.runtime.install_peer_session_cipher(
                                 source,
                                 session_id,
+                                session_key,
                                 negotiated_generation,
-                            );
-                            self.runtime
-                                .peer_sessions
-                                .mark_cipher_ready(source, session_id);
+                                "initiator",
+                            )?;
                             let _ = self.runtime.send_peer_session_probe(source);
                             if !self
                                 .runtime
@@ -1121,8 +1122,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             .route_manager()
             .add_path_if_absent(source, route);
         self.runtime
-            .peer_sessions
-            .mark_direct_path_ready(source, session_id);
+            .mark_peer_session_direct_path_ready(source, session_id);
         let _ = self.runtime.send_peer_session_probe(source);
         if !endpoint_info.is_reply() {
             let punch_packet =

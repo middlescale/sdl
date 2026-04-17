@@ -109,7 +109,7 @@ impl FileConfig {
         let cipher_model = if let Some(v) = self.cipher_model.clone() {
             CipherModel::from_str(&v).map_err(|e| anyhow!("{}", e))?
         } else {
-            CipherModel::AesGcm
+            CipherModel::default_runtime()
         };
 
         let punch_model = PunchModel::from_str(&self.punch_model).map_err(|e| anyhow!("{}", e))?;

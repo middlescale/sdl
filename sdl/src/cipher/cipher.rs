@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::fmt::Display;
 use std::str::FromStr;
 
@@ -56,6 +57,17 @@ impl Display for CipherModel {
 }
 
 impl CipherModel {
+    pub fn default_runtime() -> Self {
+        #[cfg(feature = "aes_gcm")]
+        {
+            CipherModel::AesGcm
+        }
+        #[cfg(not(feature = "aes_gcm"))]
+        {
+            CipherModel::None
+        }
+    }
+
     pub fn is_runtime_supported(self) -> bool {
         #[cfg(feature = "aes_gcm")]
         {
@@ -130,6 +142,40 @@ pub enum Cipher {
 }
 
 impl Cipher {
+    pub fn new_session_key(model: CipherModel, key: [u8; 32]) -> anyhow::Result<Self> {
+        match model {
+            #[cfg(feature = "aes_gcm")]
+            CipherModel::AesGcm => Self::new_key(key),
+            #[cfg(feature = "chacha20_poly1305")]
+            CipherModel::Chacha20Poly1305 => Err(anyhow!(
+                "cipher '{}' is not supported for peer sessions at runtime",
+                model
+            )),
+            #[cfg(feature = "chacha20_poly1305")]
+            CipherModel::Chacha20 => Err(anyhow!(
+                "cipher '{}' is not supported for peer sessions at runtime",
+                model
+            )),
+            #[cfg(feature = "aes_cbc")]
+            CipherModel::AesCbc => Err(anyhow!(
+                "cipher '{}' is not supported for peer sessions at runtime",
+                model
+            )),
+            #[cfg(feature = "aes_ecb")]
+            CipherModel::AesEcb => Err(anyhow!(
+                "cipher '{}' is not supported for peer sessions at runtime",
+                model
+            )),
+            #[cfg(feature = "sm4_cbc")]
+            CipherModel::Sm4Cbc => Err(anyhow!(
+                "cipher '{}' is not supported for peer sessions at runtime",
+                model
+            )),
+            #[cfg(not(feature = "aes_gcm"))]
+            CipherModel::None => Err(anyhow!("key error")),
+        }
+    }
+
     #[cfg(not(feature = "aes_gcm"))]
     pub fn new_key(_key: [u8; 32]) -> anyhow::Result<Self> {
         Err(anyhow!("key error"))
