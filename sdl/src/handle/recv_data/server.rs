@@ -872,20 +872,18 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     punch_start.attempt,
                     rand::thread_rng().next_u64(),
                 );
-                let (setup_session, failure_reason) = match self.runtime.peer_info(&peer_ip) {
-                    Some(peer_info) => {
-                        match crate::util::build_peer_discovery_noise_initiator(
-                            &self.runtime.device_signing_key,
-                            &peer_info.device_pub_key,
-                            session_id,
-                            current_device.virtual_ip,
-                            peer_ip,
-                        ) {
-                            Ok(mut initiator) => match initiator.write_hello(&[]) {
-                                Ok(hello_payload) => {
-                                    self.runtime
-                                        .remember_peer_discovery_initiator(peer_ip, initiator);
-                                    (
+                let (setup_session, setup_initiator, failure_reason) =
+                    match self.runtime.peer_info(&peer_ip) {
+                        Some(peer_info) => {
+                            match crate::util::build_peer_discovery_noise_initiator(
+                                &self.runtime.device_signing_key,
+                                &peer_info.device_pub_key,
+                                session_id,
+                                current_device.virtual_ip,
+                                peer_ip,
+                            ) {
+                                Ok(mut initiator) => match initiator.write_hello(&[]) {
+                                    Ok(hello_payload) => (
                                         Some(crate::core::PeerDiscoverySession {
                                             session_id,
                                             deadline_unix_ms,
@@ -893,44 +891,55 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                             local_owner: punch_start.source_owner,
                                             remote_owner: punch_start.target_owner,
                                         }),
+                                        Some(initiator),
                                         None,
-                                    )
-                                }
+                                    ),
+                                    Err(err) => {
+                                        log::warn!(
+                                            "encode peer discovery hello failed peer={} device_id={} err={:?}",
+                                            peer_ip,
+                                            peer_info.device_id,
+                                            err
+                                        );
+                                        (
+                                            None,
+                                            None,
+                                            Some(format!(
+                                                "encode discovery hello failed: {}",
+                                                err
+                                            )),
+                                        )
+                                    }
+                                },
                                 Err(err) => {
                                     log::warn!(
-                                        "encode peer discovery hello failed peer={} device_id={} err={:?}",
+                                        "init peer discovery noise failed peer={} device_id={} err={:?}",
                                         peer_ip,
                                         peer_info.device_id,
                                         err
                                     );
                                     (
                                         None,
-                                        Some(format!("encode discovery hello failed: {}", err)),
+                                        None,
+                                        Some(format!("init discovery handshake failed: {}", err)),
                                     )
                                 }
-                            },
-                            Err(err) => {
-                                log::warn!(
-                                    "init peer discovery noise failed peer={} device_id={} err={:?}",
-                                    peer_ip,
-                                    peer_info.device_id,
-                                    err
-                                );
-                                (
-                                    None,
-                                    Some(format!("init discovery handshake failed: {}", err)),
-                                )
                             }
                         }
-                    }
-                    None => (None, Some("missing peer identity".to_string())),
-                };
+                        None => (None, None, Some("missing peer identity".to_string())),
+                    };
                 if let Some(setup_session) = setup_session.clone() {
                     self.runtime
                         .peer_sessions
                         .begin_recovery(peer_ip, setup_session.session_id);
+                    // Session entry must be created before storing the initiator so
+                    // remember_peer_discovery_initiator finds an existing entry.
                     self.runtime
                         .remember_peer_discovery_session(peer_ip, setup_session);
+                    if let Some(initiator) = setup_initiator {
+                        self.runtime
+                            .remember_peer_discovery_initiator(peer_ip, initiator);
+                    }
                 }
                 let replaced = {
                     let mut sessions = self.punch_active_sessions.lock();
