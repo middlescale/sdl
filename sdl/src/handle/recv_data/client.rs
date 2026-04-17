@@ -928,6 +928,20 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             "responder",
                         )?;
                         let _ = self.runtime.send_peer_session_probe(source);
+                    } else {
+                        // Auth side received a non-auth Hello. The non-auth peer's gateway
+                        // channel is now confirmed active, but our own authoritative Hello may
+                        // have been lost (e.g. sent before the peer's gateway connected after a
+                        // restart). Re-send our authoritative Hello so the cipher exchange can
+                        // complete through the correct initiator path.
+                        log::info!(
+                            "auth side received non-auth Hello from {}; re-sending authoritative Hello",
+                            source
+                        );
+                        let runtime = Arc::clone(&self.runtime);
+                        std::thread::spawn(move || {
+                            crate::nat::punch_workers::retry_pending_relay_discovery(runtime);
+                        });
                     }
                 }
             }
