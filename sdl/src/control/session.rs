@@ -178,6 +178,9 @@ impl ControlSession {
         let mut last_heartbeat_at = Instant::now()
             .checked_sub(Duration::from_secs(3))
             .unwrap_or_else(Instant::now);
+        let mut last_no_grant_refresh_at = Instant::now()
+            .checked_sub(Duration::from_secs(30))
+            .unwrap_or_else(Instant::now);
         let mut last_status_report_at = Instant::now();
         let mut status_report_delay = Duration::from_secs(60);
         let mut last_public_addr_at = Instant::now()
@@ -220,7 +223,11 @@ impl ControlSession {
                         log::warn!("heartbeat err={:?}", e);
                     }
                 }
-                try_refresh_gateway_grant(self, &self.data_plane.gateway_sessions);
+                try_refresh_gateway_grant(
+                    self,
+                    &self.data_plane.gateway_sessions,
+                    &mut last_no_grant_refresh_at,
+                );
             }
             if last_status_report_at.elapsed() >= status_report_delay {
                 if let Err(e) =
@@ -593,13 +600,35 @@ fn handshake_request_packet() -> io::Result<NetPacket<Vec<u8>>> {
     Ok(net_packet)
 }
 
-fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions: &GatewaySessions) {
+fn try_refresh_gateway_grant(
+    control_session: &ControlSession,
+    gateway_sessions: &GatewaySessions,
+    last_no_grant_refresh_at: &mut Instant,
+) {
     let current_device = control_session.current_device();
     if !current_device.status.online() {
         return;
     }
     let expire_unix_ms = gateway_sessions.ticket_expire_unix_ms();
     if expire_unix_ms <= 0 {
+        // No valid grant yet.  Only retry when relay channel is relevant (relay or all mode).
+        let use_channel = control_session.data_plane.route_manager.use_channel_type();
+        if use_channel.is_only_p2p() {
+            return;
+        }
+        // Rate-limit retries to once every 30 seconds to avoid hammering control.
+        if last_no_grant_refresh_at.elapsed() < Duration::from_secs(30) {
+            return;
+        }
+        *last_no_grant_refresh_at = Instant::now();
+        match control_session.send_refresh_gateway_grant_request(gateway_sessions, false) {
+            Err(e) => {
+                log::warn!("gateway grant refresh (no grant) send failed: {:?}", e);
+            }
+            Ok(_) => {
+                log::info!("no gateway grant available, requested dedicated refresh");
+            }
+        }
         return;
     }
     let now_ms = crate::handle::now_time() as i64;
