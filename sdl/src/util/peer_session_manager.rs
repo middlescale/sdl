@@ -86,6 +86,7 @@ pub struct PeerSessionState {
     pub relay_path_ready: bool,
     pub probe_sent: bool,
     pub probe_succeeded: bool,
+    pub pending_relay_ready: Option<u8>,
     pub preferred_transport: PeerSessionTransport,
     crypto: PeerCryptoState,
 }
@@ -102,6 +103,7 @@ impl PeerSessionState {
             relay_path_ready: false,
             probe_sent: false,
             probe_succeeded: false,
+            pending_relay_ready: None,
             preferred_transport: PeerSessionTransport::Relay,
             crypto: PeerCryptoState::default(),
         }
@@ -117,6 +119,17 @@ impl PeerSessionState {
         self.cipher_ready = true;
         if self.phase != PeerSessionPhase::Ready {
             self.phase = PeerSessionPhase::CipherReady;
+        }
+        // flush any buffered relay-ready signal
+        if let Some(gen) = self.pending_relay_ready {
+            if self.negotiated_generation == Some(gen & 0x03) {
+                self.pending_relay_ready = None;
+                self.relay_path_ready = true;
+                if !self.direct_path_ready {
+                    self.preferred_transport = PeerSessionTransport::Relay;
+                }
+                self.phase = PeerSessionPhase::Ready;
+            }
         }
     }
 
@@ -135,10 +148,12 @@ impl PeerSessionState {
         self.phase = PeerSessionPhase::Ready;
     }
 
-    fn set_relay_path_ready(&mut self) {
-        if !self.cipher_ready {
+    fn set_relay_path_ready(&mut self, generation: u8) {
+        if !self.cipher_ready || self.negotiated_generation != Some(generation & 0x03) {
+            self.pending_relay_ready = Some(generation);
             return;
         }
+        self.pending_relay_ready = None;
         self.relay_path_ready = true;
         if !self.direct_path_ready {
             self.preferred_transport = PeerSessionTransport::Relay;
@@ -159,7 +174,7 @@ impl PeerSessionState {
     }
 
     pub fn is_ready(&self) -> bool {
-        self.relay_path_ready || self.probe_succeeded
+        self.phase == PeerSessionPhase::Ready
     }
 
     fn reset_runtime_state_preserving_crypto(&mut self) {
@@ -171,6 +186,7 @@ impl PeerSessionState {
         self.relay_path_ready = false;
         self.probe_sent = false;
         self.probe_succeeded = false;
+        self.pending_relay_ready = None;
         self.preferred_transport = PeerSessionTransport::Relay;
     }
 }
@@ -249,6 +265,40 @@ impl PeerSessionManager {
         });
     }
 
+    pub fn install_session_cipher_complete(
+        &self,
+        peer_ip: Ipv4Addr,
+        discovery_session: DiscoverySessionId,
+        cipher: Cipher,
+        cipher_model: CipherModel,
+        generation: u8,
+    ) {
+        let mut guard = self.inner.write();
+        let Some(state) = guard.get_mut(&peer_ip) else {
+            return;
+        };
+        if !state.discovery_session.same_attempt(&discovery_session) {
+            return;
+        }
+        // install crypto slot
+        let next_slot = PeerCipherSlot {
+            cipher,
+            generation: generation & 0x03,
+        };
+        if state.crypto.current.is_none() {
+            state.crypto.current = Some(next_slot);
+            state.crypto.next = None;
+            state.crypto.previous = None;
+            state.crypto.grace_until = None;
+        } else {
+            state.crypto.next = Some(next_slot);
+        }
+        // update session metadata
+        state.negotiated_generation = Some(generation & 0x03);
+        state.cipher_model = Some(cipher_model);
+        state.set_cipher_ready();
+    }
+
     pub fn set_negotiated_generation(
         &self,
         peer_ip: Ipv4Addr,
@@ -295,10 +345,7 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return false;
         };
-        if !state.cipher_ready || state.negotiated_generation != Some(generation & 0x03) {
-            return false;
-        }
-        state.set_relay_path_ready();
+        state.set_relay_path_ready(generation);
         state.is_ready()
     }
 

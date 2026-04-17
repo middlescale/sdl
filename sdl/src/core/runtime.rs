@@ -301,10 +301,13 @@ impl SdlRuntime {
             cipher_model
         );
         let cipher = crate::cipher::Cipher::new_session_key(cipher_model, session_key)?;
-        self.peer_crypto
-            .install_pending_cipher_with_generation(peer_ip, cipher, generation);
-        self.peer_sessions
-            .install_cipher(peer_ip, discovery_session, cipher_model, generation);
+        self.peer_sessions.install_session_cipher_complete(
+            peer_ip,
+            discovery_session,
+            cipher,
+            cipher_model,
+            generation,
+        );
         Ok(())
     }
 
