@@ -1057,6 +1057,14 @@ fn select_transport(
                 }
             }
         },
+        // Cipher installed but probe not yet confirmed: allow relay sends.
+        // The cipher was established via a valid discovery handshake, so it is
+        // safe to use. Blocking here creates a window where the route table
+        // already shows gateway-relay but data packets are silently dropped.
+        Some(state) if state.cipher_ready => match use_channel_type {
+            UseChannelType::Relay => Some(PeerSessionTransport::Relay),
+            _ => None,
+        },
         None => match use_channel_type {
             UseChannelType::Relay => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => direct_available.then_some(PeerSessionTransport::Direct),
