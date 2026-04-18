@@ -177,13 +177,10 @@ pub fn retry_pending_relay_discovery(runtime: Arc<SdlRuntime>) {
             session.session_id.attempt(),
             session.session_id.txid()
         );
-        send_relay_discovery_hello(
-            runtime.as_ref(),
-            &packet,
-            peer_ip,
-            0,
-            session.deadline_unix_ms,
-        );
+        // Pass deadline=0 so the retry is not gated by the original punch deadline,
+        // which may have already expired when this retry fires (e.g. after all P2P
+        // attempts timed out and the gateway relay only became authenticated later).
+        send_relay_discovery_hello(runtime.as_ref(), &packet, peer_ip, 0, 0);
     }
 }
 
