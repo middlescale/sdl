@@ -950,14 +950,29 @@ mod tests {
     }
 
     #[test]
-    fn select_transport_blocks_unready_session_for_normal_data() {
+    fn select_transport_allows_relay_fallback_when_cipher_ready_all_mode() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerSessionManager::new(1);
         let discovery = session(7, 1, 9);
         manager.begin_recovery(peer, discovery);
         manager.mark_cipher_ready(peer, discovery);
 
+        // All mode: relay is used as fallback even before probe confirms is_ready().
         let transport = manager.preferred_transport(&peer, UseChannelType::All, None, false);
+        assert_eq!(transport, Some(PeerSessionTransport::Relay));
+    }
+
+    #[test]
+    fn select_transport_blocks_p2p_only_when_unready() {
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let manager = PeerSessionManager::new(1);
+        let discovery = session(7, 1, 9);
+        manager.begin_recovery(peer, discovery);
+        manager.mark_cipher_ready(peer, discovery);
+
+        // P2p-only mode: still blocks until is_ready() because there is no relay fallback.
+        let transport =
+            manager.preferred_transport(&peer, UseChannelType::P2p, Some(direct_route()), false);
         assert_eq!(transport, None);
     }
 
@@ -1061,9 +1076,12 @@ fn select_transport(
         // The cipher was established via a valid discovery handshake, so it is
         // safe to use. Blocking here creates a window where the route table
         // already shows gateway-relay but data packets are silently dropped.
+        // For All mode, use relay as a conservative fallback; the direct path
+        // is only used once the probe confirms is_ready(). P2p-only mode
+        // still blocks because it has no relay fallback to fall back to.
         Some(state) if state.cipher_ready => match use_channel_type {
-            UseChannelType::Relay => Some(PeerSessionTransport::Relay),
-            _ => None,
+            UseChannelType::Relay | UseChannelType::All => Some(PeerSessionTransport::Relay),
+            UseChannelType::P2p => None,
         },
         None => match use_channel_type {
             UseChannelType::Relay => Some(PeerSessionTransport::Relay),
