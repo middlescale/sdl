@@ -15,7 +15,6 @@ pub use debug_watch::*;
 pub(crate) mod linux_dns;
 #[cfg(any(test, all(feature = "integrated_tun", target_os = "macos")))]
 pub(crate) mod macos_dns;
-mod peer_crypto_manager;
 mod peer_discovery_noise;
 mod peer_ingress_limiter;
 mod peer_replay_guard;
@@ -23,7 +22,6 @@ mod peer_session_manager;
 mod peer_setup_limiter;
 #[cfg(any(test, all(feature = "integrated_tun", target_os = "windows")))]
 pub(crate) mod windows_dns;
-pub use peer_crypto_manager::*;
 pub use peer_discovery_noise::*;
 pub use peer_ingress_limiter::*;
 pub use peer_replay_guard::*;

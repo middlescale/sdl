@@ -30,7 +30,7 @@ use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{load_or_create_device_signing_key, DebugWatch, PeerCryptoManager, StopManager};
+use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
 use crate::{nat, DnsProfile, SdlCallback};
 
 #[derive(Clone)]
@@ -137,7 +137,6 @@ impl Sdl {
         let debug_watch = DebugWatch::default();
         let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
         let peer_sessions = Arc::new(crate::util::PeerSessionManager::new(16));
-        let peer_crypto = Arc::new(PeerCryptoManager::from_sessions(peer_sessions.clone()));
         let unknown_peer_ingress_limiter = Arc::new(crate::util::PeerIngressLimiter::new(16));
         let peer_replay_guard = Arc::new(crate::util::PeerReplayGuard::new(16));
         let unknown_peer_setup_limiter = Arc::new(crate::util::PeerSetupLimiter::new(16));
@@ -153,7 +152,7 @@ impl Sdl {
             udp_channel.clone(),
             stop_manager.clone(),
             current_device.clone(),
-            peer_crypto.clone(),
+            peer_sessions.clone(),
             true,
             std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
             std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
@@ -163,7 +162,6 @@ impl Sdl {
             runtime_config.clone(),
             crate::control::SharedDataPlane {
                 current_device: current_device.clone(),
-                peer_crypto: peer_crypto.clone(),
                 peer_state: peer_state.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 route_manager: route_manager.clone(),

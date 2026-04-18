@@ -28,7 +28,7 @@ use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::control_addr::parse_control_address;
 use crate::transport::http3_channel::Http3Channel;
 use crate::util::{
-    address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
+    address_choose, dns_query_all, sign_device_payload, StopManager,
 };
 use crate::{ErrorInfo, SdlCallback};
 use parking_lot::{Mutex, RwLock};
@@ -44,7 +44,6 @@ const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Clone)]
 pub struct SharedDataPlane {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub gateway_sessions: GatewaySessions,
     pub route_manager: RouteManager,

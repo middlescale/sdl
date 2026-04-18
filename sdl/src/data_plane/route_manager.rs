@@ -14,7 +14,7 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::{PeerSessionManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
@@ -23,7 +23,7 @@ const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
 #[derive(Clone)]
 pub struct RouteManager {
     route_table: Arc<RouteTable>,
-    peer_crypto: Arc<PeerCryptoManager>,
+    peer_crypto: Arc<PeerSessionManager>,
     peer_encrypt: bool,
     sender: Option<RouteSender>,
     direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
@@ -52,7 +52,7 @@ impl RouteManager {
         udp_channel: UdpChannel,
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        peer_crypto: Arc<PeerCryptoManager>,
+        peer_crypto: Arc<PeerSessionManager>,
         peer_encrypt: bool,
         heartbeat_interval: Duration,
         stale_direct_timeout: Duration,
@@ -74,7 +74,7 @@ impl RouteManager {
     pub fn new_detached(route_table: Arc<RouteTable>) -> Self {
         Self {
             route_table,
-            peer_crypto: Arc::new(PeerCryptoManager::new(0)),
+            peer_crypto: Arc::new(PeerSessionManager::new(0)),
             peer_encrypt: true,
             sender: None,
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
@@ -427,7 +427,7 @@ fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<V
 }
 
 fn heartbeat_packet_client(
-    peer_crypto: Option<(&PeerCryptoManager, bool)>,
+    peer_crypto: Option<(&PeerSessionManager, bool)>,
     src: Ipv4Addr,
     dest: Ipv4Addr,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
@@ -464,7 +464,7 @@ mod tests {
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
     use crate::transport::connect_protocol::ConnectProtocol;
-    use crate::util::PeerCryptoManager;
+    use crate::util::PeerSessionManager;
     use parking_lot::Mutex;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn heartbeat_packet_client_reserves_room_for_peer_encryption() {
         let cipher = Cipher::new_key([7; 32]).expect("cipher");
-        let peer_crypto = PeerCryptoManager::new(1);
+        let peer_crypto = PeerSessionManager::new(1);
         let dest = Ipv4Addr::new(10, 0, 0, 2);
         peer_crypto.replace_current_cipher_with_generation(dest, cipher.clone(), 0);
         let mut packet = super::heartbeat_packet_client(
