@@ -304,6 +304,13 @@ impl SdlRuntime {
             cipher_model,
             generation,
         );
+        // Immediately probe so the peer knows we have the new cipher
+        if let Err(err) = self.send_peer_session_probe(peer_ip) {
+            log::debug!(
+                "send peer session probe after cipher install failed for {}: {:?}",
+                peer_ip, err
+            );
+        }
         Ok(())
     }
 

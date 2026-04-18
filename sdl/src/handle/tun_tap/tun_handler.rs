@@ -1,5 +1,4 @@
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
 use sdl_packet::icmp::icmp::IcmpPacket;
 use sdl_packet::icmp::Kind;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
@@ -12,14 +11,13 @@ use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol;
-use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
+
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;
@@ -41,10 +39,7 @@ pub fn start(
     data_channel: DataChannel,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> io::Result<()> {
@@ -56,10 +51,7 @@ pub fn start(
                 &data_channel,
                 device,
                 current_device,
-                gateway_sessions,
                 ip_route,
-                peer_state,
-                peer_crypto,
                 compressor,
                 device_stop,
             ) {
@@ -67,62 +59,6 @@ pub fn start(
             }
         })?;
 
-    Ok(())
-}
-
-fn broadcast(
-    channel: &DataChannel,
-    gateway_sessions: &GatewaySessions,
-    net_packet: &NetPacket<&mut [u8]>,
-    current_device: &CurrentDeviceInfo,
-    peer_state: &Mutex<crate::handle::PeerState>,
-    peer_crypto: &PeerCryptoManager,
-) -> anyhow::Result<()> {
-    let list: Vec<Ipv4Addr> = peer_state
-        .lock()
-        .devices
-        .values()
-        .filter(|info| info.status.is_online())
-        .map(|info| info.virtual_ip)
-        .collect();
-    if list.is_empty() {
-        return Ok(());
-    }
-    if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
-        //未分配 VIP 时不转发
-        return Ok(());
-    }
-    for peer_ip in list {
-        let mut peer_buf = vec![0u8; net_packet.data_len() + ENCRYPTION_RESERVED];
-        peer_buf[..net_packet.data_len()].copy_from_slice(net_packet.buffer());
-        let mut peer_packet = NetPacket::new_encrypt(peer_buf)?;
-        peer_packet.set_destination(peer_ip);
-        if let Err(err) = peer_crypto.encrypt_ipv4(&peer_ip, &mut peer_packet) {
-            log::debug!(
-                "skip broadcast without peer session cipher for {}: {:?}",
-                peer_ip,
-                err
-            );
-            continue;
-        }
-
-        if let Some(route) = channel.direct_route(&peer_ip) {
-            if let Err(err) = channel.send_p2p_route(&peer_packet, route) {
-                if channel.allows_gateway_relay() {
-                    log::debug!(
-                        "p2p broadcast send failed for {}, fallback relay: {:?}",
-                        peer_ip,
-                        err
-                    );
-                    gateway_sessions.send_relay(&peer_packet)?;
-                } else {
-                    return Err(err.into());
-                }
-            }
-        } else if channel.allows_gateway_relay() {
-            gateway_sessions.send_relay(&peer_packet)?;
-        }
-    }
     Ok(())
 }
 
@@ -137,10 +73,7 @@ pub(crate) fn handle(
     extend: &mut [u8],
     device_writer: &SyncDevice,
     current_device: CurrentDeviceInfo,
-    gateway_sessions: &GatewaySessions,
     ip_route: &ExternalRoute,
-    peer_state: &Mutex<crate::handle::PeerState>,
-    peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
@@ -211,7 +144,7 @@ pub(crate) fn handle(
                 }),
             );
         }
-        gateway_sessions.send_relay(&net_packet)?;
+        data_channel.send_relay(&net_packet)?;
         return Ok(());
     }
     if !Ipv4Addr::is_multicast(&dest_ip)
@@ -251,36 +184,10 @@ pub(crate) fn handle(
         net_packet
     };
     if is_broadcast {
-        // 广播 发送到直连目标
-        broadcast(
-            data_channel,
-            gateway_sessions,
-            &net_packet,
-            &current_device,
-            peer_state,
-            peer_crypto,
-        )?;
+        data_channel.broadcast_to_peers(&net_packet, &current_device)?;
         return Ok(());
     }
 
-    peer_crypto.encrypt_ipv4(&dest_ip, &mut net_packet)?;
-    if let Some(route) = data_channel.direct_route(&dest_ip) {
-        if let Err(err) = data_channel.send_p2p_route(&net_packet, route) {
-            if data_channel.allows_gateway_relay() {
-                log::debug!("p2p send failed for {}, fallback relay: {:?}", dest_ip, err);
-                gateway_sessions.send_relay(&net_packet)?;
-            } else {
-                return Err(err.into());
-            }
-        }
-    } else if data_channel.allows_gateway_relay() {
-        gateway_sessions.send_relay(&net_packet)?;
-    } else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("peer route not found: {}", dest_ip),
-        )
-        .into());
-    }
+    data_channel.encrypt_and_send_to_peer(&mut net_packet, &dest_ip)?;
     Ok(())
 }

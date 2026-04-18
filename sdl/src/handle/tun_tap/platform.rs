@@ -1,13 +1,11 @@
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::BUFFER_SIZE;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
 use std::sync::Arc;
 use tun_rs::InterruptEvent;
 use tun_rs::SyncDevice;
@@ -17,10 +15,7 @@ pub(crate) fn start_simple(
     data_channel: &DataChannel,
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> anyhow::Result<()> {
@@ -50,10 +45,7 @@ pub(crate) fn start_simple(
         device,
         &event,
         current_device,
-        gateway_sessions,
         ip_route,
-        peer_state,
-        peer_crypto,
         compressor,
     ) {
         log::error!("{:?}", e);
@@ -70,10 +62,7 @@ fn start_simple0(
     device: Arc<SyncDevice>,
     event: &InterruptEvent,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
@@ -97,10 +86,7 @@ fn start_simple0(
             &mut extend,
             &device,
             current_device.load(),
-            &gateway_sessions,
             &ip_route,
-            &peer_state,
-            &peer_crypto,
             &compressor,
         ) {
             Ok(_) => {}

@@ -927,7 +927,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             negotiated_generation,
                             "responder",
                         )?;
-                        let _ = self.runtime.send_peer_session_probe(source);
                     } else {
                         // Auth side received a non-auth Hello. The non-auth peer's gateway
                         // channel is now confirmed active, but our own authoritative Hello may
@@ -1027,7 +1026,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 negotiated_generation,
                                 "initiator",
                             )?;
-                            let _ = self.runtime.send_peer_session_probe(source);
                             if !self
                                 .runtime
                                 .route_manager

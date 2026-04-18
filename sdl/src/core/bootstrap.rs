@@ -228,10 +228,7 @@ impl Sdl {
                     stop_manager.clone(),
                     data_channel.clone(),
                     current_device.clone(),
-                    gateway_sessions.clone(),
                     external_route.clone(),
-                    peer_state.clone(),
-                    peer_crypto.clone(),
                     config.compressor,
                     device.clone().into_device_adapter(),
                 )

@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 use tun_rs::SyncDevice;
@@ -56,10 +55,7 @@ struct TunDeviceHelperInner {
     stop_manager: StopManager,
     data_channel: DataChannel,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
     ip_route: ExternalRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 }
 
@@ -68,10 +64,7 @@ impl TunDeviceHelper {
         stop_manager: StopManager,
         data_channel: DataChannel,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        gateway_sessions: GatewaySessions,
         ip_route: ExternalRoute,
-        peer_state: Arc<Mutex<crate::handle::PeerState>>,
-        peer_crypto: Arc<PeerCryptoManager>,
         compressor: Compressor,
         device_adapter: DeviceAdapter,
     ) -> Self {
@@ -79,10 +72,7 @@ impl TunDeviceHelper {
             stop_manager,
             data_channel,
             current_device,
-            gateway_sessions,
             ip_route,
-            peer_state,
-            peer_crypto,
             compressor,
         };
         Self {
@@ -114,12 +104,10 @@ impl TunDeviceHelper {
             inner.data_channel,
             device,
             inner.current_device,
-            inner.gateway_sessions,
             inner.ip_route,
-            inner.peer_state,
-            inner.peer_crypto,
             inner.compressor,
             device_stop,
         )
     }
 }
+
