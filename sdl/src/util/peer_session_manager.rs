@@ -769,7 +769,7 @@ impl PeerSessionManager {
 #[cfg(test)]
 mod tests {
     use super::{PeerSessionManager, PeerSessionPhase, PeerSessionTransport};
-    use crate::cipher::CipherModel;
+    use crate::cipher::{Cipher, CipherModel};
     use crate::data_plane::route::{Route, RouteOrigin};
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::peer_discovery_packet::DiscoverySessionId;
@@ -977,6 +977,53 @@ mod tests {
     }
 
     #[test]
+    fn select_transport_allows_relay_after_soft_reset() {
+        // After a soft reset (rename / status change) cipher_ready is cleared but
+        // crypto.current is preserved.  The session must still allow relay routing
+        // so that data-plane traffic is not dropped during the recovery window.
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let manager = PeerSessionManager::new(1);
+        let discovery = session(7, 1, 9);
+        manager.begin_recovery(peer, discovery);
+        // install_session_cipher_complete populates crypto.current, matching real runtime flow.
+        let cipher = Cipher::new_session_key(CipherModel::AesGcm, [0u8; 32]).unwrap();
+        manager.install_session_cipher_complete(peer, discovery, cipher, CipherModel::AesGcm, 2);
+        manager.mark_probe_sent(peer, discovery);
+        manager.mark_probe_succeeded(peer);
+
+        // Reach Ready state.
+        let state = manager.state(&peer).unwrap();
+        assert!(state.is_ready());
+
+        // Simulate a soft reset (e.g., peer renamed).
+        let peers: HashSet<Ipv4Addr> = std::iter::once(peer).collect();
+        manager.clear_runtime_state_for(&peers);
+
+        // cipher_ready should now be false; crypto.current is still populated.
+        let state = manager.state(&peer).unwrap();
+        assert!(!state.cipher_ready);
+        assert!(!state.is_ready());
+
+        // Relay and All modes must still be allowed so traffic is not silently dropped.
+        let relay =
+            manager.preferred_transport(&peer, UseChannelType::Relay, None, false);
+        assert_eq!(relay, Some(PeerSessionTransport::Relay));
+
+        let all =
+            manager.preferred_transport(&peer, UseChannelType::All, None, false);
+        assert_eq!(all, Some(PeerSessionTransport::Relay));
+
+        // P2p-only mode should still block (no relay fallback available).
+        let p2p = manager.preferred_transport(
+            &peer,
+            UseChannelType::P2p,
+            Some(direct_route()),
+            false,
+        );
+        assert_eq!(p2p, None);
+    }
+
+    #[test]
     fn observed_transport_updates_ready_session_preference() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerSessionManager::new(1);
@@ -1080,6 +1127,16 @@ fn select_transport(
         // is only used once the probe confirms is_ready(). P2p-only mode
         // still blocks because it has no relay fallback to fall back to.
         Some(state) if state.cipher_ready => match use_channel_type {
+            UseChannelType::Relay | UseChannelType::All => Some(PeerSessionTransport::Relay),
+            UseChannelType::P2p => None,
+        },
+        // After a soft reset (e.g., rename or status change), cipher_ready is cleared
+        // but crypto.current is preserved.  Without this arm the session falls into
+        // `_ => None`, silently dropping all relay traffic for the entire recovery
+        // window (tens of seconds) until a new session handshake completes.
+        // Allow relay using the existing cipher; P2p-only still blocks because it
+        // has no relay fallback.
+        Some(state) if state.crypto.current.is_some() => match use_channel_type {
             UseChannelType::Relay | UseChannelType::All => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => None,
         },
