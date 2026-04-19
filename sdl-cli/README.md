@@ -144,27 +144,6 @@ sdl suspend
 
 任务并行度(必须为正整数),默认值为1,该值表示处理网卡读写的任务数,组网设备数较多、处理延迟较大时可适当调大此值
 
-### --model `<model>`
-
-加密模式，可选值
-aes_gcm/aes_cbc/aes_ecb/sm4_cbc/chacha20_poly1305/chacha20/xor，默认使用aes_gcm，通常情况aes_gcm和chacha20_poly1305安全性高。
-各种加密模式的安全性和速度都不相同，请按需选取
-
-特别说明：xor只是对数据进行简单异或，仅仅避免了明文传输，安全性很差，同时对性能影响也极小；
-
-| 密码位数   | model             | 加密算法              |  
-|--------|-------------------|-------------------|
-| `< 8`  | aes_gcm           | AES128-GCM        |
-| `>= 8` | aes_gcm           | AES256-GCM        |
-| `< 8`  | aes_cbc           | AES128-CBC        |
-| `>= 8` | aes_cbc           | AES256-CBC        |
-| `< 8`  | aes_ecb           | AES128-ECB        |
-| `>= 8` | aes_ecb           | AES256-ECB        |
-| `> 0`  | sm4_cbc           | SM4-CBC           |
-| `> 0`  | chacha20_poly1305 | ChaCha20-Poly1305 |
-| `> 0`  | chacha20          | ChaCha20          |
-| `> 0`  | xor               | 简单异或混淆            |
-
 ### --punch `<punch>`
 
 取值ipv4/ipv6，选择只使用ipv4打洞或者只使用ipv6打洞，默认两者都会使用

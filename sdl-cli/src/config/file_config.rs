@@ -109,14 +109,7 @@ impl FileConfig {
         let cipher_model = if let Some(v) = self.cipher_model.clone() {
             CipherModel::from_str(&v).map_err(|e| anyhow!("{}", e))?
         } else {
-            #[cfg(not(feature = "aes_gcm"))]
-            {
-                CipherModel::None
-            }
-            #[cfg(feature = "aes_gcm")]
-            {
-                CipherModel::AesGcm
-            }
+            CipherModel::default_runtime()?
         };
 
         let punch_model = PunchModel::from_str(&self.punch_model).map_err(|e| anyhow!("{}", e))?;
@@ -275,6 +268,18 @@ server_address: https://control.middlescale.net/control
         assert!(err.to_string().contains(
             "p2p_route_idle_timeout_sec must be greater than p2p_heartbeat_interval_sec"
         ));
+    }
+
+    #[test]
+    fn into_runtime_config_rejects_cipher_model_none() {
+        let mut file_conf = FileConfig::default();
+        file_conf.cipher_model = Some("none".to_string());
+
+        let err = file_conf
+            .into_runtime_config()
+            .expect_err("cipher_model=none should be rejected");
+
+        assert!(err.to_string().contains("not match 'none'"));
     }
 
     #[test]

@@ -1,8 +1,6 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use anyhow::anyhow;
-
 #[cfg(feature = "aes_cbc")]
 use crate::cipher::aes_cbc::AesCbcCipher;
 #[cfg(feature = "aes_ecb")]
@@ -33,7 +31,6 @@ pub enum CipherModel {
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc,
     Xor,
-    None,
 }
 
 impl Display for CipherModel {
@@ -52,21 +49,31 @@ impl Display for CipherModel {
             #[cfg(feature = "sm4_cbc")]
             CipherModel::Sm4Cbc => "sm4_cbc".to_string(),
             CipherModel::Xor => "xor".to_string(),
-            CipherModel::None => "none".to_string(),
         };
         write!(f, "{}", str)
     }
 }
 
 impl CipherModel {
-    pub fn is_runtime_supported(self) -> bool {
+    pub fn default_runtime() -> anyhow::Result<Self> {
         #[cfg(feature = "aes_gcm")]
         {
-            matches!(self, CipherModel::AesGcm | CipherModel::None)
+            Ok(CipherModel::AesGcm)
         }
         #[cfg(not(feature = "aes_gcm"))]
         {
-            matches!(self, CipherModel::None)
+            Err(anyhow::anyhow!("runtime cipher aes_gcm support is required"))
+        }
+    }
+
+    pub fn is_runtime_supported(self) -> bool {
+        #[cfg(feature = "aes_gcm")]
+        {
+            matches!(self, CipherModel::AesGcm)
+        }
+        #[cfg(not(feature = "aes_gcm"))]
+        {
+            false
         }
     }
 }
@@ -89,7 +96,6 @@ impl FromStr for CipherModel {
             #[cfg(feature = "sm4_cbc")]
             "sm4_cbc" => Ok(CipherModel::Sm4Cbc),
             "xor" => Ok(CipherModel::Xor),
-            "none" => Ok(CipherModel::None),
             _ => {
                 let mut enums = String::new();
                 #[cfg(feature = "aes_gcm")]
@@ -102,7 +108,7 @@ impl FromStr for CipherModel {
                 enums.push_str("/aes_ecb");
                 #[cfg(feature = "sm4_cbc")]
                 enums.push_str("/sm4_cbc");
-                enums.push_str("/xor/none");
+                enums.push_str("/xor");
                 Err(format!("not match '{}', enum:{}", s, &enums[1..]))
             }
         }
@@ -124,7 +130,6 @@ pub enum Cipher {
     #[cfg(feature = "sm4_cbc")]
     Sm4Cbc(Sm4CbcCipher),
     Xor(XORCipher),
-    None,
 }
 
 impl Cipher {
@@ -155,12 +160,6 @@ impl Cipher {
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.decrypt_ipv4(net_packet),
             Cipher::Xor(xor) => xor.decrypt_ipv4(net_packet),
-            Cipher::None => {
-                if net_packet.is_encrypt() {
-                    return Err(anyhow!("not key"));
-                }
-                Ok(())
-            }
         }
     }
     pub fn encrypt_ipv4<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -181,7 +180,6 @@ impl Cipher {
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => sm4_cbc.encrypt_ipv4(net_packet),
             Cipher::Xor(xor) => xor.encrypt_ipv4(net_packet),
-            Cipher::None => Ok(()),
         }
     }
     pub fn key(&self) -> Option<&[u8]> {
@@ -199,7 +197,6 @@ impl Cipher {
             #[cfg(feature = "sm4_cbc")]
             Cipher::Sm4Cbc(sm4_cbc) => Some(sm4_cbc.key()),
             Cipher::Xor(xor) => Some(xor.key()),
-            Cipher::None => None,
         }
     }
 }

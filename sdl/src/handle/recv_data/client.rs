@@ -49,9 +49,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        if self.runtime.config.cipher_model == crate::cipher::CipherModel::None {
-            return Ok(());
-        }
         self.runtime
             .peer_crypto
             .send_cipher(peer_ip)?

@@ -3,7 +3,6 @@ use crate::config;
 use anyhow::anyhow;
 use console::style;
 use getopts::{Matches, Options};
-use sdl::cipher::CipherModel;
 use sdl::compression::Compressor;
 use sdl::core::Config;
 use sdl::data_plane::use_channel_type::UseChannelType;
@@ -147,13 +146,6 @@ fn override_service_file_config(
     if let Some(virtual_ip) = matches.opt_str("ip") {
         file_conf.ip = Some(parse_virtual_ip(&virtual_ip)?.to_string());
     }
-    if let Some(model) = matches.opt_str("model") {
-        file_conf.cipher_model = Some(
-            CipherModel::from_str(&model)
-                .map_err(|e| anyhow!("'--model ' invalid,{}", e))?
-                .to_string(),
-        );
-    }
     if let Some(punch_model) = matches.opt_str("punch") {
         let punch_model = PunchModel::from_str(&punch_model).map_err(|e| anyhow!("{}", e))?;
         file_conf.punch_model = punch_model_to_str(punch_model).to_string();
@@ -243,7 +235,6 @@ pub fn parse_args_config_from(
     opts.optopt("", "ip", "指定虚拟ip", "<ip>");
     opts.optflag("", "relay", "仅使用服务器转发");
     opts.optopt("", "par", "任务并行度(必须为正整数)", "<parallel>");
-    opts.optopt("", "model", "加密模式", "<model>");
     opts.optopt("", "punch", "取值ipv4/ipv6", "<punch>");
     opts.optopt("", "ports", "监听的端口", "<port,port>");
     opts.optflag("", "latency-first", "优先延迟");
@@ -300,7 +291,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("-u <mtu>", ("自定义mtu(默认为1420)", "Customize MTU (default is 1420)")),
         ("-f <conf_file>", ("读取配置文件中的配置", "Read configuration from file")),
         ("--ip <ip>", ("指定虚拟ip,指定的ip不能和其他设备重复,必须有效并且在服务端所属网段下,默认情况由服务端分配", "Specify virtual IP, must be unique and valid within server subnet, by default allocated by server")),
-        ("--model <model>", ("加密模式(默认aes_gcm),仅支持 aes_gcm/none", "Encryption mode (default aes_gcm), only aes_gcm/none are supported")),
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-udp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-udp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听两个随机端口,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to two random ports, using many ports increases network load")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
@@ -389,23 +379,6 @@ fn print_usage(program: &str, _opts: Options) {
     println!(
         "  --ip <ip>           {}",
         get_description("--ip <ip>", &language)
-    );
-    let mut enums = String::new();
-    #[cfg(feature = "aes_gcm")]
-    enums.push_str("/aes_gcm");
-    #[cfg(feature = "chacha20_poly1305")]
-    enums.push_str("/chacha20_poly1305/chacha20");
-    #[cfg(feature = "aes_cbc")]
-    enums.push_str("/aes_cbc");
-    #[cfg(feature = "aes_ecb")]
-    enums.push_str("/aes_ecb");
-    #[cfg(feature = "sm4_cbc")]
-    enums.push_str("/sm4_cbc");
-    enums.push_str("/xor");
-    println!(
-        "  --model <model>     {}{}",
-        get_description("--model <model>", &language),
-        &enums[1..]
     );
     println!(
         "  --punch <punch>     {}",
@@ -592,6 +565,18 @@ ports: [30001]
         );
         assert_eq!(config.ports, Some(vec![41642]));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_args_service_rejects_removed_model_flag() {
+        let err = parse_args_config_from(vec![
+            "sdl-service".to_string(),
+            "--model".to_string(),
+            "aes_gcm".to_string(),
+        ])
+        .expect_err("--model should be rejected");
+
+        assert!(err.to_string().contains("Unrecognized option: 'model'"));
     }
 }
 

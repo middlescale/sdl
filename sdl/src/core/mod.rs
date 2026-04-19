@@ -88,10 +88,7 @@ impl Config {
             vec![],
             None,
             ip,
-            #[cfg(feature = "aes_gcm")]
-            CipherModel::AesGcm,
-            #[cfg(not(feature = "aes_gcm"))]
-            CipherModel::None,
+            CipherModel::default_runtime()?,
             PunchModel::All,
             ports,
             false,
@@ -159,7 +156,7 @@ impl Config {
         }
         if !cipher_model.is_runtime_supported() {
             return Err(anyhow!(
-                "unsupported runtime cipher model '{}', only aes_gcm or none are allowed",
+                "unsupported runtime cipher model '{}', only aes_gcm is allowed",
                 cipher_model
             ));
         }

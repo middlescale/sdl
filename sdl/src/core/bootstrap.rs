@@ -150,7 +150,7 @@ impl Sdl {
             stop_manager.clone(),
             current_device.clone(),
             peer_crypto.clone(),
-            config.cipher_model != crate::cipher::CipherModel::None,
+            true,
             std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
             std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
         )?;
@@ -307,7 +307,7 @@ impl Sdl {
         spawn_punch_workers(
             current_device.clone(),
             peer_crypto.clone(),
-            config.cipher_model != crate::cipher::CipherModel::None,
+            true,
             punch_coordinator.clone(),
             punch.clone(),
         );
