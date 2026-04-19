@@ -588,7 +588,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .map_err(|e| io::Error::other(format!("DeviceRenameResponse {:?}", e)))?;
                 let result = if response.ok {
                     if response.pending_approval {
-                        Ok(crate::core::RenameRequestOutcome::PendingApproval)
+                        Ok(crate::core::RenameRequestOutcome::RestartRequired(
+                            response.applied_name.clone(),
+                        ))
                     } else {
                         Ok(crate::core::RenameRequestOutcome::Applied(
                             response.applied_name.clone(),
@@ -597,7 +599,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 } else {
                     Err(response.reason.clone())
                 };
-                if !self.runtime.complete_rename_request(response.request_id, result) {
+                if !self
+                    .runtime
+                    .complete_rename_request(response.request_id, result)
+                {
                     if response.ok
                         && !response.pending_approval
                         && !response.applied_name.is_empty()
@@ -1092,11 +1097,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     return Ok(());
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
-                let from_control_or_gateway = self.runtime.control_session.is_control_addr(route_key.addr)
-                    || self
-                        .runtime
-                        .gateway_sessions
-                        .is_gateway_addr(route_key.addr);
+                let from_control_or_gateway =
+                    self.runtime.control_session.is_control_addr(route_key.addr)
+                        || self
+                            .runtime
+                            .gateway_sessions
+                            .is_gateway_addr(route_key.addr);
                 let learned_metric = if from_control_or_gateway {
                     metric.max(2)
                 } else {

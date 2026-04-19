@@ -58,7 +58,7 @@ sdl suspend
 - `sdl-service ...`：按参数或配置文件启动 daemon
 - `sdl resume`：恢复本地收发服务；优先恢复已有 runtime
 - `sdl suspend`：挂起本地收发服务，但保留内存中的 runtime 状态
-- `sdl rename <name>`：修改当前节点显示名；成功后会同步到 control，并写回本地保存配置
+- `sdl rename <name>`：修改当前节点显示名；成功后会同步到 control，并写回本地保存配置，需重启 `sdl-service` 后对外生效
 - `sdl list/info/route`：查询当前本地服务状态
 - `sdl auth ...`：向本地 `sdl-service` 提交设备认证；`--group` 不传时默认使用 `default.ms.net`；认证完成后会把状态写回本地状态文件
 - control 服务器地址由 `sdl-service ... -s <server>` 决定

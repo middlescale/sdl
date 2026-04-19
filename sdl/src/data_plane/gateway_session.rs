@@ -22,7 +22,6 @@ use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
 use crate::util::{DebugWatch, StopManager};
 
-
 #[derive(Clone, Default)]
 struct GatewaySessionState {
     ticket: Vec<u8>,
@@ -434,7 +433,9 @@ impl GatewaySessions {
     where
         F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
     {
-        let _ = self.runtime.set((stop_manager.clone(), Arc::new(on_packet)));
+        let _ = self
+            .runtime
+            .set((stop_manager.clone(), Arc::new(on_packet)));
         let (stop_manager, on_packet) = self.runtime.get().unwrap();
         for session in self.sessions.lock().values() {
             session.start(stop_manager, on_packet)?;

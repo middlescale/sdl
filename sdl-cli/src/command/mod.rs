@@ -255,7 +255,9 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let current_device = vnt.current_device();
     let gateway_summary = vnt.gateway_session_summary();
     let nat_info = vnt.nat_info();
-    let name = vnt.name().to_string();
+    let name = config.name.clone();
+    let runtime_name = vnt.name().to_string();
+    let restart_required = runtime_name != name;
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
@@ -326,6 +328,8 @@ pub fn command_info(vnt: &Sdl) -> Info {
         .collect();
     Info {
         name,
+        runtime_name,
+        restart_required,
         device_id: config.device_id.clone(),
         virtual_ip,
         virtual_gateway,

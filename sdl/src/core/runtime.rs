@@ -76,7 +76,7 @@ pub struct PendingRenameRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RenameRequestOutcome {
     Applied(String),
-    PendingApproval,
+    RestartRequired(String),
 }
 
 #[derive(Clone)]

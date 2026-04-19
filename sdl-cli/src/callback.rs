@@ -30,7 +30,14 @@ impl SdlCallback for VntHandler {
     }
 
     fn device_renamed(&self, new_name: String) {
-        println!("{}", style(format!("device renamed to {}", new_name)).green());
+        println!(
+            "{}",
+            style(format!(
+                "device rename saved as {}; restart the client to apply",
+                new_name
+            ))
+            .green()
+        );
     }
 
     fn error(&self, info: ErrorInfo) {

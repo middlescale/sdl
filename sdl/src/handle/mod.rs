@@ -124,11 +124,7 @@ pub struct CurrentDeviceInfo {
 }
 
 impl CurrentDeviceInfo {
-    pub fn new(
-        virtual_ip: Ipv4Addr,
-        virtual_netmask: Ipv4Addr,
-        virtual_gateway: Ipv4Addr,
-    ) -> Self {
+    pub fn new(virtual_ip: Ipv4Addr, virtual_netmask: Ipv4Addr, virtual_gateway: Ipv4Addr) -> Self {
         let broadcast_ip = (!u32::from_be_bytes(virtual_netmask.octets()))
             | u32::from_be_bytes(virtual_gateway.octets());
         let broadcast_ip = Ipv4Addr::from(broadcast_ip);
