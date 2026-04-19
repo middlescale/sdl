@@ -1,4 +1,4 @@
-use fnv::FnvHashMap;
+use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::time::Instant;
@@ -14,6 +14,7 @@ type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
 
 pub struct RouteTable {
     pub(crate) route_table: RwLock<RouteMap>,
+    direct_route_keys: RwLock<FnvHashSet<RouteKey>>,
     pub(crate) latency_first: bool,
     pub(crate) use_channel_type: AtomicCell<UseChannelType>,
 }
@@ -22,6 +23,10 @@ impl RouteTable {
     pub(crate) fn new(use_channel_type: UseChannelType, latency_first: bool) -> Self {
         Self {
             route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
+            direct_route_keys: RwLock::new(FnvHashSet::with_capacity_and_hasher(
+                64,
+                Default::default(),
+            )),
             use_channel_type: AtomicCell::new(use_channel_type),
             latency_first,
         }
@@ -42,6 +47,7 @@ impl RouteTable {
             });
         }
         route_table.retain(|_, routes| !routes.is_empty());
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
     }
 
     pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -97,6 +103,7 @@ impl RouteTable {
             list.sort_by_key(|(k, _)| k.rt);
             list.push((route, AtomicCell::new(Instant::now())));
         }
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
     }
 
     pub fn get_routes(&self, vip: &Ipv4Addr) -> Option<Vec<Route>> {
@@ -130,6 +137,10 @@ impl RouteTable {
             }
         }
         None
+    }
+
+    pub fn has_direct_route_key(&self, route_key: &RouteKey) -> bool {
+        self.direct_route_keys.read().contains(route_key)
     }
 
     pub fn no_need_punch(&self, vip: &Ipv4Addr) -> bool {
@@ -186,6 +197,7 @@ impl RouteTable {
                 write_guard.remove(vip);
             }
         }
+        Self::rebuild_direct_route_keys(&write_guard, &mut self.direct_route_keys.write());
     }
 
     pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
@@ -200,13 +212,29 @@ impl RouteTable {
     }
 
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
-        self.route_table.write().remove(vip);
+        let mut route_table = self.route_table.write();
+        route_table.remove(vip);
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
     }
 
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
-        self.route_table
-            .write()
-            .retain(|vip, _| valid_peers.contains(vip));
+        let mut route_table = self.route_table.write();
+        route_table.retain(|vip, _| valid_peers.contains(vip));
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+    }
+
+    fn rebuild_direct_route_keys(
+        route_table: &RouteMap,
+        direct_route_keys: &mut FnvHashSet<RouteKey>,
+    ) {
+        direct_route_keys.clear();
+        for routes in route_table.values() {
+            for (route, _) in routes {
+                if route.is_p2p() {
+                    direct_route_keys.insert(route.route_key());
+                }
+            }
+        }
     }
 }
 
@@ -266,5 +294,31 @@ mod tests {
 
         assert!(table.get_first_route(&vip1).is_none());
         assert!(table.get_first_route(&vip2).is_some());
+    }
+
+    #[test]
+    fn direct_route_key_index_tracks_route_lifecycle() {
+        let table = RouteTable::new(UseChannelType::All, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 6);
+        let direct = route_key(1006);
+        let relay = RouteKey::new(
+            ConnectProtocol::TCP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 2006)),
+        );
+
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+        table.add_route(vip, Route::from_default_rt(relay, 2));
+        assert!(table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_route_key(&relay));
+
+        table.set_use_channel_type(UseChannelType::Relay);
+        assert!(!table.has_direct_route_key(&direct));
+
+        table.set_use_channel_type(UseChannelType::All);
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+        assert!(table.has_direct_route_key(&direct));
+
+        table.remove_route(&vip, direct);
+        assert!(!table.has_direct_route_key(&direct));
     }
 }

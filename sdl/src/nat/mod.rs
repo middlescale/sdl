@@ -359,6 +359,12 @@ impl NatTest {
             Ok(false)
         }
     }
+    pub fn has_pending_stun_server_addr(&self, source_addr: SocketAddr) -> bool {
+        let now = Instant::now();
+        let mut pending = self.pending_stun_requests.lock();
+        pending.retain(|item| item.expires_at > now);
+        pending.iter().any(|item| item.server_addr == source_addr)
+    }
     fn track_pending_stun_request(&self, transaction_id: u128, server_addr: SocketAddr) {
         let now = Instant::now();
         let mut pending = self.pending_stun_requests.lock();

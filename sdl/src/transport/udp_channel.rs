@@ -1,3 +1,4 @@
+use fnv::FnvHashMap;
 use mio::net::UdpSocket as MioUdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
@@ -6,6 +7,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::core::Config;
 use crate::data_plane::route::RouteKey;
@@ -16,12 +18,25 @@ use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
 const NOTIFY: Token = Token(0);
+const UNKNOWN_UDP_GLOBAL_BURST: usize = 4096;
+const UNKNOWN_UDP_GLOBAL_REFILL_PER_SEC: usize = 2048;
+const UNKNOWN_UDP_PER_SOURCE_BURST: usize = 128;
+const UNKNOWN_UDP_PER_SOURCE_REFILL_PER_SEC: usize = 64;
+const UNKNOWN_UDP_SOURCE_TRACK_LIMIT: usize = 4096;
+const UNKNOWN_UDP_SOURCE_IDLE_TTL: Duration = Duration::from_secs(30);
+const UNKNOWN_UDP_SOURCE_CLEANUP_INTERVAL: Duration = Duration::from_secs(1);
 static SHORT_UDP_INGRESS_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 static SHORT_UDP_INGRESS_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
     OnceLock::new();
 static INVALID_UDP_INGRESS_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 static INVALID_UDP_INGRESS_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
     OnceLock::new();
+static GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER:
+    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
+static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER:
+    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
 
 fn log_sampled_udp_ingress_drop(
     counter: &AtomicU64,
@@ -36,6 +51,93 @@ fn log_sampled_udp_ingress_drop(
         let sampled = counter.swap(0, Ordering::Relaxed);
         let total = sampled.max(count);
         log::debug!("{}", message(total));
+    }
+}
+
+struct SourceRateLimitState {
+    limiter: crate::util::limit::RateLimiter,
+    last_seen: Instant,
+}
+
+struct UnknownUdpIngressLimiter {
+    global: crate::util::limit::RateLimiter,
+    per_source_capacity: usize,
+    per_source_refill_rate: usize,
+    per_source: FnvHashMap<IpAddr, SourceRateLimitState>,
+    last_cleanup_at: Instant,
+}
+
+enum UnknownUdpLimitDecision {
+    Allow,
+    GlobalLimited,
+    PerSourceLimited,
+}
+
+impl UnknownUdpIngressLimiter {
+    fn new(
+        global_capacity: usize,
+        global_refill_rate: usize,
+        per_source_capacity: usize,
+        per_source_refill_rate: usize,
+    ) -> Self {
+        Self {
+            global: crate::util::limit::RateLimiter::new(global_capacity, global_refill_rate),
+            per_source_capacity,
+            per_source_refill_rate,
+            per_source: FnvHashMap::with_capacity_and_hasher(64, Default::default()),
+            last_cleanup_at: Instant::now(),
+        }
+    }
+
+    fn check(&mut self, source_ip: IpAddr) -> UnknownUdpLimitDecision {
+        self.maybe_cleanup_expired();
+        if !self.global.try_acquire() {
+            return UnknownUdpLimitDecision::GlobalLimited;
+        }
+        let now = Instant::now();
+        if !self.per_source.contains_key(&source_ip)
+            && self.per_source.len() >= UNKNOWN_UDP_SOURCE_TRACK_LIMIT
+        {
+            self.evict_one();
+        }
+        let entry = self
+            .per_source
+            .entry(source_ip)
+            .or_insert_with(|| SourceRateLimitState {
+                limiter: crate::util::limit::RateLimiter::new(
+                    self.per_source_capacity,
+                    self.per_source_refill_rate,
+                ),
+                last_seen: now,
+            });
+        entry.last_seen = now;
+        if entry.limiter.try_acquire() {
+            UnknownUdpLimitDecision::Allow
+        } else {
+            UnknownUdpLimitDecision::PerSourceLimited
+        }
+    }
+
+    fn maybe_cleanup_expired(&mut self) {
+        if self.last_cleanup_at.elapsed() < UNKNOWN_UDP_SOURCE_CLEANUP_INTERVAL {
+            return;
+        }
+        self.last_cleanup_at = Instant::now();
+        let now = Instant::now();
+        self.per_source.retain(|_, state| {
+            now.saturating_duration_since(state.last_seen) < UNKNOWN_UDP_SOURCE_IDLE_TTL
+        });
+    }
+
+    fn evict_one(&mut self) {
+        if let Some(oldest_ip) = self
+            .per_source
+            .iter()
+            .min_by_key(|(_, state)| state.last_seen)
+            .map(|(ip, _)| *ip)
+        {
+            self.per_source.remove(&oldest_ip);
+        }
     }
 }
 
@@ -140,13 +242,19 @@ impl UdpChannel {
         self.send_to(buf, route_key.addr)
     }
 
-    pub fn start<H>(&self, stop_manager: StopManager, recv_handler: H) -> anyhow::Result<()>
+    pub fn start<H, K>(
+        &self,
+        stop_manager: StopManager,
+        recv_handler: H,
+        known_source: K,
+    ) -> anyhow::Result<()>
     where
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     {
         let channel = self.clone();
         self.driver
-            .start_named(stop_manager, "mainUdp", recv_handler, move |len| {
+            .start_named(stop_manager, "mainUdp", recv_handler, known_source, move |len| {
                 channel.record_down_traffic(len);
             })
     }
@@ -204,15 +312,17 @@ impl UdpSocketDriver {
         Ok(())
     }
 
-    pub(crate) fn start_named<H, D>(
+    pub(crate) fn start_named<H, K, D>(
         &self,
         stop_manager: StopManager,
         worker_name: &str,
         recv_handler: H,
+        known_source: K,
         down_traffic_hook: D,
     ) -> anyhow::Result<()>
     where
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
         D: Fn(usize) + Clone + Send + Sync + 'static,
     {
         listen(
@@ -220,6 +330,7 @@ impl UdpSocketDriver {
             stop_manager,
             worker_name,
             recv_handler,
+            known_source,
             down_traffic_hook,
         )
     }
@@ -249,15 +360,17 @@ fn bind_ipv4_udp(
     Ok(socket.into())
 }
 
-fn listen<H, D>(
+fn listen<H, K, D>(
     driver: UdpSocketDriver,
     stop_manager: StopManager,
     worker_name: &str,
     recv_handler: H,
+    known_source: K,
     down_traffic_hook: D,
 ) -> anyhow::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
@@ -270,7 +383,7 @@ where
         }
     })?;
     thread::Builder::new().name(worker_name).spawn(move || {
-        if let Err(e) = listen_loop(driver, poll, recv_handler, down_traffic_hook) {
+        if let Err(e) = listen_loop(driver, poll, recv_handler, known_source, down_traffic_hook) {
             log::error!("{:?}", e);
         }
         drop(waker);
@@ -279,14 +392,16 @@ where
     Ok(())
 }
 
-fn listen_loop<H, D>(
+fn listen_loop<H, K, D>(
     driver: UdpSocketDriver,
     mut poll: Poll,
     recv_handler: H,
+    known_source: K,
     down_traffic_hook: D,
 ) -> io::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
@@ -298,6 +413,12 @@ where
 
     let mut events = Events::with_capacity(2);
     let mut extend = [0; BUFFER_SIZE];
+    let mut unknown_limiter = UnknownUdpIngressLimiter::new(
+        UNKNOWN_UDP_GLOBAL_BURST,
+        UNKNOWN_UDP_GLOBAL_REFILL_PER_SEC,
+        UNKNOWN_UDP_PER_SOURCE_BURST,
+        UNKNOWN_UDP_PER_SOURCE_REFILL_PER_SEC,
+    );
     loop {
         if let Err(e) = poll.poll(&mut events, None) {
             crate::ignore_io_interrupted(e)?;
@@ -315,9 +436,40 @@ where
             loop {
                 match udp.recv_from(&mut buf) {
                     Ok((len, addr)) => {
+                        let addr = normalize_recv_addr(addr);
+                        if !known_source(addr) {
+                            match unknown_limiter.check(addr.ip()) {
+                                UnknownUdpLimitDecision::Allow => {}
+                                UnknownUdpLimitDecision::GlobalLimited => {
+                                    log_sampled_udp_ingress_drop(
+                                        &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
+                                        &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
+                                        |count| {
+                                            format!(
+                                                "dropping unknown udp ingress by global rate limit (sample addr={}, count={})",
+                                                addr, count
+                                            )
+                                        },
+                                    );
+                                    continue;
+                                }
+                                UnknownUdpLimitDecision::PerSourceLimited => {
+                                    log_sampled_udp_ingress_drop(
+                                        &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
+                                        &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
+                                        |count| {
+                                            format!(
+                                                "dropping unknown udp ingress by per-source rate limit (sample addr={}, count={})",
+                                                addr, count
+                                            )
+                                        },
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
                         let buf = &mut buf[..len];
                         if !should_accept_udp_ingress_frame(buf) {
-                            let addr = normalize_recv_addr(addr);
                             if len < HEAD_LEN {
                                 log_sampled_udp_ingress_drop(
                                     &SHORT_UDP_INGRESS_DROP_COUNT,
@@ -348,7 +500,7 @@ where
                         recv_handler(
                             buf,
                             &mut extend,
-                            RouteKey::new(ConnectProtocol::UDP, normalize_recv_addr(addr)),
+                            RouteKey::new(ConnectProtocol::UDP, addr),
                         )
                     }
                     Err(e) => {
@@ -394,12 +546,13 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 mod tests {
     use super::{
         looks_like_sdl_udp_packet, normalize_recv_addr, normalize_send_addr,
-        should_accept_udp_ingress_frame, UdpChannel, UdpSocketDriver,
+        should_accept_udp_ingress_frame, UnknownUdpIngressLimiter, UnknownUdpLimitDecision,
+        UdpChannel, UdpSocketDriver,
     };
     use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
-    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -551,5 +704,34 @@ mod tests {
         buf[3] = 0x01;
 
         assert!(!looks_like_sdl_udp_packet(&buf));
+    }
+
+    #[test]
+    fn unknown_udp_limiter_enforces_global_budget() {
+        let mut limiter = UnknownUdpIngressLimiter::new(1, 0, 10, 10);
+
+        assert!(matches!(
+            limiter.check(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1))),
+            UnknownUdpLimitDecision::Allow
+        ));
+        assert!(matches!(
+            limiter.check(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2))),
+            UnknownUdpLimitDecision::GlobalLimited
+        ));
+    }
+
+    #[test]
+    fn unknown_udp_limiter_enforces_per_source_budget() {
+        let mut limiter = UnknownUdpIngressLimiter::new(10, 10, 1, 0);
+        let source = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+
+        assert!(matches!(
+            limiter.check(source),
+            UnknownUdpLimitDecision::Allow
+        ));
+        assert!(matches!(
+            limiter.check(source),
+            UnknownUdpLimitDecision::PerSourceLimited
+        ));
     }
 }

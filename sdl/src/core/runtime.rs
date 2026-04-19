@@ -16,6 +16,7 @@ use crate::cipher::CipherModel;
 use crate::control::ControlSession;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route::RouteKey;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::external_route::{AllowExternalRoute, ExternalRoute};
@@ -23,6 +24,7 @@ use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::NatInfo;
 use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
+use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::create_device;
@@ -125,6 +127,15 @@ impl SdlRuntime {
 
     pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerDeviceInfo> {
         self.peer_state.lock().devices.get(ip).cloned()
+    }
+
+    pub fn is_known_udp_source(&self, addr: std::net::SocketAddr) -> bool {
+        self.control_session.is_control_addr(addr)
+            || self.gateway_sessions.is_gateway_addr(addr)
+            || self.nat_test.has_pending_stun_server_addr(addr)
+            || self
+                .route_manager
+                .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
     }
 
     pub fn replace_dns_profile(&self, profile: Option<DnsProfile>) -> bool {

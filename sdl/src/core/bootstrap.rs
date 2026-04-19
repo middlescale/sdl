@@ -295,6 +295,9 @@ impl Sdl {
         udp_channel.start(stop_manager.clone(), {
             let handler = handler.clone();
             move |buf, extend, route_key| handler.handle(buf, extend, route_key)
+        }, {
+            let runtime = runtime.clone();
+            move |addr| runtime.is_known_udp_source(addr)
         })?;
         // 打洞逻辑
         let punch = Punch::new(

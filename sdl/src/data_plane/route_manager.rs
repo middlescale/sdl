@@ -120,6 +120,10 @@ impl RouteManager {
         self.route_table.get_one_p2p_ip(route_key)
     }
 
+    pub fn has_direct_route_key(&self, route_key: &RouteKey) -> bool {
+        self.route_table.has_direct_route_key(route_key)
+    }
+
     pub fn direct_path_count(&self, vip: &Ipv4Addr) -> usize {
         self.route_table.p2p_num(vip)
     }

@@ -115,6 +115,7 @@ impl GatewayUdpChannel {
                 drop(crypto_guard);
                 on_packet(packet.payload, RouteKey::new(ConnectProtocol::UDP, from));
             },
+            |_| true,
             |_| {},
         )
     }
