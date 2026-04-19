@@ -116,6 +116,7 @@ impl GatewayUdpChannel {
                 on_packet(packet.payload, RouteKey::new(ConnectProtocol::UDP, from));
             },
             |_| true,
+            |_| true,
             |_| {},
         )
     }

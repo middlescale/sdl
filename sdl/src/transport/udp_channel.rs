@@ -253,10 +253,16 @@ impl UdpChannel {
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     {
         let channel = self.clone();
-        self.driver
-            .start_named(stop_manager, "mainUdp", recv_handler, known_source, move |len| {
+        self.driver.start_named(
+            stop_manager,
+            "mainUdp",
+            recv_handler,
+            known_source,
+            should_accept_udp_ingress_frame,
+            move |len| {
                 channel.record_down_traffic(len);
-            })
+            },
+        )
     }
 
     fn record_up_traffic(&self, len: usize) {
@@ -312,17 +318,19 @@ impl UdpSocketDriver {
         Ok(())
     }
 
-    pub(crate) fn start_named<H, K, D>(
+    pub(crate) fn start_named<H, K, A, D>(
         &self,
         stop_manager: StopManager,
         worker_name: &str,
         recv_handler: H,
         known_source: K,
+        accept_frame: A,
         down_traffic_hook: D,
     ) -> anyhow::Result<()>
     where
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
+        A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
         D: Fn(usize) + Clone + Send + Sync + 'static,
     {
         listen(
@@ -331,6 +339,7 @@ impl UdpSocketDriver {
             worker_name,
             recv_handler,
             known_source,
+            accept_frame,
             down_traffic_hook,
         )
     }
@@ -360,17 +369,19 @@ fn bind_ipv4_udp(
     Ok(socket.into())
 }
 
-fn listen<H, K, D>(
+fn listen<H, K, A, D>(
     driver: UdpSocketDriver,
     stop_manager: StopManager,
     worker_name: &str,
     recv_handler: H,
     known_source: K,
+    accept_frame: A,
     down_traffic_hook: D,
 ) -> anyhow::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
+    A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
@@ -383,7 +394,14 @@ where
         }
     })?;
     thread::Builder::new().name(worker_name).spawn(move || {
-        if let Err(e) = listen_loop(driver, poll, recv_handler, known_source, down_traffic_hook) {
+        if let Err(e) = listen_loop(
+            driver,
+            poll,
+            recv_handler,
+            known_source,
+            accept_frame,
+            down_traffic_hook,
+        ) {
             log::error!("{:?}", e);
         }
         drop(waker);
@@ -392,16 +410,18 @@ where
     Ok(())
 }
 
-fn listen_loop<H, K, D>(
+fn listen_loop<H, K, A, D>(
     driver: UdpSocketDriver,
     mut poll: Poll,
     recv_handler: H,
     known_source: K,
+    accept_frame: A,
     down_traffic_hook: D,
 ) -> io::Result<()>
 where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
+    A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
@@ -469,7 +489,7 @@ where
                             }
                         }
                         let buf = &mut buf[..len];
-                        if !should_accept_udp_ingress_frame(buf) {
+                        if !accept_frame(buf) {
                             if len < HEAD_LEN {
                                 log_sampled_udp_ingress_drop(
                                     &SHORT_UDP_INGRESS_DROP_COUNT,
