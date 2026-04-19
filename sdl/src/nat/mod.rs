@@ -23,6 +23,12 @@ mod stun;
 
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 
+struct PendingStunRequest {
+    transaction_id: u128,
+    server_addr: SocketAddr,
+    expires_at: Instant,
+}
+
 pub fn local_ipv4_() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
     socket.connect("8.8.8.8:80")?;
@@ -120,6 +126,7 @@ pub struct NatTest {
     udp_channel: UdpChannel,
     info: Arc<Mutex<NatInfo>>,
     time: Arc<AtomicCell<Instant>>,
+    pending_stun_requests: Arc<Mutex<Vec<PendingStunRequest>>>,
     udp_ports: Vec<u16>,
     #[cfg(feature = "upnp")]
     upnp: UPnP,
@@ -167,6 +174,7 @@ impl NatTest {
                     .checked_sub(Duration::from_secs(100))
                     .unwrap_or(instant),
             )),
+            pending_stun_requests: Arc::new(Mutex::new(Vec::with_capacity(4))),
             udp_ports,
             #[cfg(feature = "upnp")]
             upnp,
@@ -222,7 +230,8 @@ impl NatTest {
         }
     }
     pub fn request_public_addr(&self) -> anyhow::Result<()> {
-        let (data, addr) = self.send_data()?;
+        let (data, addr, transaction_id) = self.send_data()?;
+        self.track_pending_stun_request(transaction_id, addr);
         self.udp_channel.send_to(&data, addr)?;
         Ok(())
     }
@@ -319,7 +328,7 @@ impl NatTest {
             self.upnp.reset(local_ipv4)
         }
     }
-    pub fn send_data(&self) -> anyhow::Result<(Vec<u8>, SocketAddr)> {
+    pub fn send_data(&self) -> anyhow::Result<(Vec<u8>, SocketAddr, u128)> {
         let len = self.stun_server.len();
         let stun_server = if len == 1 {
             &self.stun_server[0]
@@ -331,11 +340,15 @@ impl NatTest {
             .to_socket_addrs()?
             .next()
             .with_context(|| format!("stun error {:?}", stun_server))?;
-        Ok((stun::send_stun_request(), addr))
+        let (data, transaction_id) = stun::send_stun_request();
+        Ok((data, addr, transaction_id))
     }
     pub fn recv_data(&self, source_addr: SocketAddr, buf: &[u8]) -> anyhow::Result<bool> {
-        if buf[0] == 0x01 && buf[1] == 0x01 {
-            if let Some(addr) = stun::recv_stun_response(buf) {
+        if stun::looks_like_stun_response(buf) {
+            if let Some((transaction_id, addr)) = stun::recv_stun_response(buf) {
+                if !self.take_pending_stun_request(transaction_id, source_addr) {
+                    return Ok(true);
+                }
                 if let Err(e) = self.recv_data_(source_addr, addr) {
                     log::warn!("{:?}", e);
                 }
@@ -343,6 +356,33 @@ impl NatTest {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+    fn track_pending_stun_request(&self, transaction_id: u128, server_addr: SocketAddr) {
+        let now = Instant::now();
+        let mut pending = self.pending_stun_requests.lock();
+        pending.retain(|item| item.expires_at > now);
+        pending.push(PendingStunRequest {
+            transaction_id,
+            server_addr,
+            expires_at: now + Duration::from_secs(5),
+        });
+        if pending.len() > 8 {
+            let drop_count = pending.len() - 8;
+            pending.drain(..drop_count);
+        }
+    }
+    fn take_pending_stun_request(&self, transaction_id: u128, source_addr: SocketAddr) -> bool {
+        let now = Instant::now();
+        let mut pending = self.pending_stun_requests.lock();
+        pending.retain(|item| item.expires_at > now);
+        if let Some(index) = pending.iter().position(|item| {
+            item.transaction_id == transaction_id && item.server_addr == source_addr
+        }) {
+            pending.swap_remove(index);
+            true
+        } else {
+            false
         }
     }
     fn recv_data_(&self, source_addr: SocketAddr, addr: SocketAddr) -> anyhow::Result<()> {

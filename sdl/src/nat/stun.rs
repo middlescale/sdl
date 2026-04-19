@@ -186,34 +186,42 @@ fn stun_addr(addr: stun_format::SocketAddr) -> SocketAddr {
 }
 
 const TAG: u128 = 1827549368 << 64;
+const STUN_MAGIC_COOKIE: [u8; 4] = [0x21, 0x12, 0xA4, 0x42];
 
-pub fn send_stun_request() -> Vec<u8> {
+pub fn send_stun_request() -> (Vec<u8>, u128) {
     let mut buf = [0u8; 28];
     let mut msg = stun_format::MsgBuilder::from(buf.as_mut_slice());
     msg.typ(stun_format::MsgType::BindingRequest);
     let id = rand::thread_rng().next_u64() as u128;
-    msg.tid(id | TAG);
+    let tid = id | TAG;
+    msg.tid(tid);
     msg.add_attr(Attr::ChangeRequest {
         change_ip: false,
         change_port: false,
     });
-    msg.as_bytes().to_vec()
+    (msg.as_bytes().to_vec(), tid)
 }
 
-pub fn recv_stun_response(buf: &[u8]) -> Option<SocketAddr> {
+pub fn looks_like_stun_response(buf: &[u8]) -> bool {
+    buf.len() >= 20 && buf[0] == 0x01 && buf[1] == 0x01 && buf[4..8] == STUN_MAGIC_COOKIE
+}
+
+pub fn recv_stun_response(buf: &[u8]) -> Option<(u128, SocketAddr)> {
+    if !looks_like_stun_response(buf) {
+        return None;
+    }
     let msg = stun_format::Msg::from(buf);
-    if let Some(tid) = msg.tid() {
-        if tid & TAG != TAG {
-            return None;
-        }
+    let tid = msg.tid()?;
+    if tid & TAG != TAG {
+        return None;
     }
     for x in msg.attrs_iter() {
         match x {
             Attr::MappedAddress(addr) => {
-                return Some(stun_addr(addr));
+                return Some((tid, stun_addr(addr)));
             }
             Attr::XorMappedAddress(addr) => {
-                return Some(stun_addr(addr));
+                return Some((tid, stun_addr(addr)));
             }
             _ => {}
         }
