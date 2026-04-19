@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use parking_lot::RwLock;
 
 /// Typed error returned when an incoming packet's generation does not match any
-/// installed cipher slot.  This is expected and transient during peer recovery
+/// installed cipher slot. This is expected and transient during peer recovery
 /// (e.g. after a restart or key rotation) and should be handled as a silent
 /// packet drop rather than a hard error.
 #[derive(Debug)]
@@ -33,31 +33,36 @@ use crate::cipher::Cipher;
 use crate::cipher::CipherModel;
 use crate::data_plane::route::Route;
 use crate::data_plane::use_channel_type::UseChannelType;
-use crate::protocol::NetPacket;
 use crate::protocol::peer_discovery_packet::DiscoverySessionId;
+use crate::protocol::NetPacket;
 
 const PEER_SESSION_CIPHER_GRACE_WINDOW: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
-struct PeerCipherSlot {
+struct ActiveCipher {
     cipher: Cipher,
     generation: u8,
+    model: CipherModel,
 }
 
-#[derive(Clone, Default)]
-struct PeerCryptoState {
-    current: Option<PeerCipherSlot>,
-    previous: Option<PeerCipherSlot>,
-    next: Option<PeerCipherSlot>,
-    grace_until: Option<Instant>,
+#[derive(Clone)]
+struct RetiringCipher {
+    cipher: Cipher,
+    generation: u8,
+    grace_until: Instant,
 }
 
-impl PeerCryptoState {
+impl RetiringCipher {
     fn grace_active(&self) -> bool {
-        self.grace_until
-            .map(|deadline| Instant::now() <= deadline)
-            .unwrap_or(false)
+        Instant::now() <= self.grace_until
     }
+}
+
+#[derive(Clone)]
+struct PreservedCipher {
+    cipher: Cipher,
+    generation: u8,
+    model: CipherModel,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -66,13 +71,233 @@ pub enum PeerSessionTransport {
     Relay,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum PeerSessionPhase {
-    Recovering,
-    DiscoveryReady,
-    CipherReady,
-    ProbeSent,
-    Ready,
+#[derive(Clone)]
+enum PeerSessionEntry {
+    Discovering {
+        session: DiscoverySessionId,
+        negotiated_generation: Option<u8>,
+        pending_relay_ready: Option<u8>,
+        preserved: Option<PreservedCipher>,
+    },
+    Active {
+        session: DiscoverySessionId,
+        cipher: ActiveCipher,
+        retiring: Option<RetiringCipher>,
+        relay_ready: bool,
+        direct_confirmed: bool,
+        probe_sent: bool,
+        preferred_transport: PeerSessionTransport,
+    },
+}
+
+impl PeerSessionEntry {
+    fn discovering(
+        session: DiscoverySessionId,
+        negotiated_generation: Option<u8>,
+        pending_relay_ready: Option<u8>,
+        preserved: Option<PreservedCipher>,
+    ) -> Self {
+        Self::Discovering {
+            session,
+            negotiated_generation,
+            pending_relay_ready,
+            preserved,
+        }
+    }
+
+    fn active(
+        session: DiscoverySessionId,
+        cipher: ActiveCipher,
+        retiring: Option<RetiringCipher>,
+        relay_ready: bool,
+        direct_confirmed: bool,
+        probe_sent: bool,
+        preferred_transport: PeerSessionTransport,
+    ) -> Self {
+        Self::Active {
+            session,
+            cipher,
+            retiring,
+            relay_ready,
+            direct_confirmed,
+            probe_sent,
+            preferred_transport,
+        }
+    }
+
+    fn session(&self) -> DiscoverySessionId {
+        match self {
+            PeerSessionEntry::Discovering { session, .. }
+            | PeerSessionEntry::Active { session, .. } => *session,
+        }
+    }
+
+    fn cipher_ready(&self) -> bool {
+        matches!(self, PeerSessionEntry::Active { .. })
+    }
+
+    fn is_ready(&self) -> bool {
+        match self {
+            PeerSessionEntry::Discovering { .. } => false,
+            PeerSessionEntry::Active {
+                relay_ready,
+                direct_confirmed,
+                ..
+            } => *relay_ready || *direct_confirmed,
+        }
+    }
+
+    fn has_recovery_cipher(&self) -> bool {
+        self.recovery_generation().is_some()
+    }
+
+    fn has_preserved_cipher(&self) -> bool {
+        matches!(
+            self,
+            PeerSessionEntry::Discovering {
+                preserved: Some(_),
+                ..
+            }
+        )
+    }
+
+    fn negotiated_generation(&self) -> Option<u8> {
+        match self {
+            PeerSessionEntry::Discovering {
+                negotiated_generation,
+                ..
+            } => *negotiated_generation,
+            PeerSessionEntry::Active { cipher, .. } => Some(cipher.generation),
+        }
+    }
+
+    fn cipher_model(&self) -> Option<CipherModel> {
+        match self {
+            PeerSessionEntry::Discovering { preserved, .. } => preserved.as_ref().map(|p| p.model),
+            PeerSessionEntry::Active { cipher, .. } => Some(cipher.model),
+        }
+    }
+
+    fn active_cipher(&self) -> Option<&Cipher> {
+        match self {
+            PeerSessionEntry::Discovering { .. } => None,
+            PeerSessionEntry::Active { cipher, .. } => Some(&cipher.cipher),
+        }
+    }
+
+    fn active_generation(&self) -> Option<u8> {
+        match self {
+            PeerSessionEntry::Discovering { .. } => None,
+            PeerSessionEntry::Active { cipher, .. } => Some(cipher.generation),
+        }
+    }
+
+    fn recovery_cipher(&self) -> Option<&Cipher> {
+        match self {
+            PeerSessionEntry::Discovering { preserved, .. } => {
+                preserved.as_ref().map(|p| &p.cipher)
+            }
+            PeerSessionEntry::Active { cipher, .. } => Some(&cipher.cipher),
+        }
+    }
+
+    fn recovery_generation(&self) -> Option<u8> {
+        match self {
+            PeerSessionEntry::Discovering { preserved, .. } => {
+                preserved.as_ref().map(|p| p.generation)
+            }
+            PeerSessionEntry::Active { cipher, .. } => Some(cipher.generation),
+        }
+    }
+
+    fn retiring_cipher(&self) -> Option<&Cipher> {
+        match self {
+            PeerSessionEntry::Active {
+                retiring: Some(retiring),
+                ..
+            } => Some(&retiring.cipher),
+            _ => None,
+        }
+    }
+
+    fn retiring_generation(&self) -> Option<u8> {
+        match self {
+            PeerSessionEntry::Active {
+                retiring: Some(retiring),
+                ..
+            } => Some(retiring.generation),
+            _ => None,
+        }
+    }
+
+    fn grace_active(&self) -> bool {
+        match self {
+            PeerSessionEntry::Active {
+                retiring: Some(retiring),
+                ..
+            } => retiring.grace_active(),
+            _ => false,
+        }
+    }
+
+    fn as_preserved(&self) -> Option<PreservedCipher> {
+        match self {
+            PeerSessionEntry::Discovering { preserved, .. } => preserved.clone(),
+            PeerSessionEntry::Active { cipher, .. } => Some(PreservedCipher {
+                cipher: cipher.cipher.clone(),
+                generation: cipher.generation,
+                model: cipher.model,
+            }),
+        }
+    }
+
+    fn clear_crypto(&mut self) {
+        let session = self.session();
+        *self = PeerSessionEntry::discovering(session, None, None, None);
+    }
+
+    fn reset_runtime_state(&mut self) {
+        let preserved = self.as_preserved();
+        *self =
+            PeerSessionEntry::discovering(DiscoverySessionId::new(0, 0, 0), None, None, preserved);
+    }
+
+    fn to_state(&self) -> PeerSessionState {
+        match self {
+            PeerSessionEntry::Discovering {
+                session,
+                negotiated_generation,
+                ..
+            } => PeerSessionState {
+                discovery_session: *session,
+                negotiated_generation: *negotiated_generation,
+                cipher_model: self.cipher_model(),
+                cipher_ready: false,
+                direct_path_ready: false,
+                relay_path_ready: false,
+                probe_sent: false,
+                preferred_transport: PeerSessionTransport::Relay,
+            },
+            PeerSessionEntry::Active {
+                session,
+                cipher,
+                relay_ready,
+                direct_confirmed,
+                probe_sent,
+                preferred_transport,
+                ..
+            } => PeerSessionState {
+                discovery_session: *session,
+                negotiated_generation: Some(cipher.generation),
+                cipher_model: Some(cipher.model),
+                cipher_ready: true,
+                direct_path_ready: *direct_confirmed,
+                relay_path_ready: *relay_ready,
+                probe_sent: *probe_sent,
+                preferred_transport: *preferred_transport,
+            },
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -80,119 +305,21 @@ pub struct PeerSessionState {
     pub discovery_session: DiscoverySessionId,
     pub negotiated_generation: Option<u8>,
     pub cipher_model: Option<CipherModel>,
-    pub phase: PeerSessionPhase,
     pub cipher_ready: bool,
     pub direct_path_ready: bool,
     pub relay_path_ready: bool,
     pub probe_sent: bool,
-    pub probe_succeeded: bool,
-    pub pending_relay_ready: Option<u8>,
     pub preferred_transport: PeerSessionTransport,
-    crypto: PeerCryptoState,
 }
 
 impl PeerSessionState {
-    fn new(discovery_session: DiscoverySessionId) -> Self {
-        Self {
-            discovery_session,
-            negotiated_generation: None,
-            cipher_model: None,
-            phase: PeerSessionPhase::Recovering,
-            cipher_ready: false,
-            direct_path_ready: false,
-            relay_path_ready: false,
-            probe_sent: false,
-            probe_succeeded: false,
-            pending_relay_ready: None,
-            preferred_transport: PeerSessionTransport::Relay,
-            crypto: PeerCryptoState::default(),
-        }
-    }
-
-    fn set_discovery_ready(&mut self) {
-        if self.phase == PeerSessionPhase::Recovering {
-            self.phase = PeerSessionPhase::DiscoveryReady;
-        }
-    }
-
-    fn set_cipher_ready(&mut self) {
-        self.cipher_ready = true;
-        if self.phase != PeerSessionPhase::Ready {
-            self.phase = PeerSessionPhase::CipherReady;
-        }
-        // flush any buffered relay-ready signal
-        if let Some(gen) = self.pending_relay_ready {
-            if self.negotiated_generation == Some(gen & 0x03) {
-                self.pending_relay_ready = None;
-                self.relay_path_ready = true;
-                if !self.direct_path_ready {
-                    self.preferred_transport = PeerSessionTransport::Relay;
-                }
-                self.phase = PeerSessionPhase::Ready;
-            }
-        }
-    }
-
-    fn set_probe_sent(&mut self) {
-        self.probe_sent = true;
-        if self.phase != PeerSessionPhase::Ready {
-            self.phase = PeerSessionPhase::ProbeSent;
-        }
-    }
-
-    fn set_probe_succeeded(&mut self) {
-        self.probe_succeeded = true;
-        if !self.direct_path_ready {
-            self.preferred_transport = PeerSessionTransport::Relay;
-        }
-        self.phase = PeerSessionPhase::Ready;
-    }
-
-    fn set_relay_path_ready(&mut self, generation: u8) {
-        if !self.cipher_ready || self.negotiated_generation != Some(generation & 0x03) {
-            self.pending_relay_ready = Some(generation);
-            return;
-        }
-        self.pending_relay_ready = None;
-        self.relay_path_ready = true;
-        if !self.direct_path_ready {
-            self.preferred_transport = PeerSessionTransport::Relay;
-        }
-        self.phase = PeerSessionPhase::Ready;
-    }
-
-    fn set_direct_path_ready(&mut self) {
-        self.direct_path_ready = true;
-        self.preferred_transport = PeerSessionTransport::Direct;
-    }
-
-    fn set_direct_data_confirmed(&mut self) {
-        self.direct_path_ready = true;
-        self.probe_succeeded = true;
-        self.preferred_transport = PeerSessionTransport::Direct;
-        self.phase = PeerSessionPhase::Ready;
-    }
-
     pub fn is_ready(&self) -> bool {
-        self.phase == PeerSessionPhase::Ready
-    }
-
-    fn reset_runtime_state_preserving_crypto(&mut self) {
-        self.discovery_session = DiscoverySessionId::new(0, 0, 0);
-        self.negotiated_generation = None;
-        self.phase = PeerSessionPhase::Recovering;
-        self.cipher_ready = false;
-        self.direct_path_ready = false;
-        self.relay_path_ready = false;
-        self.probe_sent = false;
-        self.probe_succeeded = false;
-        self.pending_relay_ready = None;
-        self.preferred_transport = PeerSessionTransport::Relay;
+        self.cipher_ready && (self.relay_path_ready || self.direct_path_ready)
     }
 }
 
 pub struct PeerSessionManager {
-    inner: RwLock<HashMap<Ipv4Addr, PeerSessionState>>,
+    inner: RwLock<HashMap<Ipv4Addr, PeerSessionEntry>>,
 }
 
 impl PeerSessionManager {
@@ -204,22 +331,27 @@ impl PeerSessionManager {
 
     pub fn begin_recovery(&self, peer_ip: Ipv4Addr, discovery_session: DiscoverySessionId) {
         let mut guard = self.inner.write();
-        let mut state = PeerSessionState::new(discovery_session);
-        if let Some(existing) = guard.get(&peer_ip) {
-            state.crypto = existing.crypto.clone();
-        }
-        guard.insert(peer_ip, state);
+        let preserved = guard.get(&peer_ip).and_then(PeerSessionEntry::as_preserved);
+        guard.insert(
+            peer_ip,
+            PeerSessionEntry::discovering(discovery_session, None, None, preserved),
+        );
     }
 
-    pub fn allows_attempt(&self, peer_ip: &Ipv4Addr, discovery_session: DiscoverySessionId) -> bool {
+    pub fn allows_attempt(
+        &self,
+        peer_ip: &Ipv4Addr,
+        discovery_session: DiscoverySessionId,
+    ) -> bool {
         let guard = self.inner.read();
         let Some(state) = guard.get(peer_ip) else {
             return true;
         };
-        if state.discovery_session.session_id() == 0 && state.discovery_session.attempt() == 0 {
+        let current = state.session();
+        if current.session_id() == 0 && current.attempt() == 0 {
             return true;
         }
-        state.discovery_session.same_attempt(&discovery_session)
+        current.same_attempt(&discovery_session)
     }
 
     pub fn matches_current_session(
@@ -233,22 +365,18 @@ impl PeerSessionManager {
             return false;
         };
         if require_txid {
-            state.discovery_session.same_transaction(&discovery_session)
+            state.session().same_transaction(&discovery_session)
         } else {
-            state.discovery_session.same_attempt(&discovery_session)
+            state.session().same_attempt(&discovery_session)
         }
     }
 
     pub fn mark_discovery_ready(&self, peer_ip: Ipv4Addr, discovery_session: DiscoverySessionId) {
-        self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.set_discovery_ready();
-        });
+        let _ = (peer_ip, discovery_session);
     }
 
     pub fn mark_cipher_ready(&self, peer_ip: Ipv4Addr, discovery_session: DiscoverySessionId) {
-        self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.set_cipher_ready();
-        });
+        self.install_cipher(peer_ip, discovery_session, CipherModel::AesGcm, 0);
     }
 
     pub fn install_cipher(
@@ -258,11 +386,15 @@ impl PeerSessionManager {
         cipher_model: CipherModel,
         generation: u8,
     ) {
-        self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.negotiated_generation = Some(generation & 0x03);
-            state.cipher_model = Some(cipher_model);
-            state.set_cipher_ready();
-        });
+        let cipher =
+            Cipher::new_session_key(cipher_model, [0u8; 32]).expect("dummy peer session cipher");
+        self.install_session_cipher_complete(
+            peer_ip,
+            discovery_session,
+            cipher,
+            cipher_model,
+            generation,
+        );
     }
 
     pub fn install_session_cipher_complete(
@@ -277,26 +409,56 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return;
         };
-        if !state.discovery_session.same_attempt(&discovery_session) {
+        if !state.session().same_attempt(&discovery_session) {
             return;
         }
-        // install crypto slot
-        let next_slot = PeerCipherSlot {
+        let generation = generation & 0x03;
+        let new_cipher = ActiveCipher {
             cipher,
-            generation: generation & 0x03,
+            generation,
+            model: cipher_model,
         };
-        if state.crypto.current.is_none() {
-            state.crypto.current = Some(next_slot);
-            state.crypto.next = None;
-            state.crypto.previous = None;
-            state.crypto.grace_until = None;
-        } else {
-            state.crypto.next = Some(next_slot);
-        }
-        // update session metadata
-        state.negotiated_generation = Some(generation & 0x03);
-        state.cipher_model = Some(cipher_model);
-        state.set_cipher_ready();
+        let session = state.session();
+        let (retiring, relay_ready, direct_confirmed, probe_sent, preferred_transport) = match state
+        {
+            PeerSessionEntry::Discovering {
+                pending_relay_ready,
+                ..
+            } => (
+                None,
+                pending_relay_ready.map(|candidate| candidate & 0x03) == Some(generation),
+                false,
+                false,
+                PeerSessionTransport::Relay,
+            ),
+            PeerSessionEntry::Active {
+                cipher,
+                relay_ready,
+                direct_confirmed,
+                probe_sent,
+                preferred_transport,
+                ..
+            } => (
+                Some(RetiringCipher {
+                    cipher: cipher.cipher.clone(),
+                    generation: cipher.generation,
+                    grace_until: Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW,
+                }),
+                *relay_ready,
+                *direct_confirmed,
+                *probe_sent,
+                *preferred_transport,
+            ),
+        };
+        *state = PeerSessionEntry::active(
+            session,
+            new_cipher,
+            retiring,
+            relay_ready,
+            direct_confirmed,
+            probe_sent,
+            preferred_transport,
+        );
     }
 
     pub fn set_negotiated_generation(
@@ -306,7 +468,13 @@ impl PeerSessionManager {
         generation: u8,
     ) {
         self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.negotiated_generation = Some(generation & 0x03);
+            if let PeerSessionEntry::Discovering {
+                negotiated_generation,
+                ..
+            } = state
+            {
+                *negotiated_generation = Some(generation & 0x03);
+            }
         });
     }
 
@@ -316,7 +484,13 @@ impl PeerSessionManager {
         discovery_session: DiscoverySessionId,
     ) -> bool {
         self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.set_direct_path_ready();
+            if let PeerSessionEntry::Active {
+                preferred_transport,
+                ..
+            } = state
+            {
+                *preferred_transport = PeerSessionTransport::Direct;
+            }
             state.is_ready()
         })
         .unwrap_or(false)
@@ -324,7 +498,9 @@ impl PeerSessionManager {
 
     pub fn mark_probe_sent(&self, peer_ip: Ipv4Addr, discovery_session: DiscoverySessionId) {
         self.with_matching_session(peer_ip, discovery_session, |state| {
-            state.set_probe_sent();
+            if let PeerSessionEntry::Active { probe_sent, .. } = state {
+                *probe_sent = true;
+            }
         });
     }
 
@@ -333,11 +509,24 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return false;
         };
-        if !state.cipher_ready || !state.probe_sent {
+        let PeerSessionEntry::Active {
+            relay_ready,
+            direct_confirmed,
+            probe_sent,
+            preferred_transport,
+            ..
+        } = state
+        else {
+            return false;
+        };
+        if !*probe_sent {
             return false;
         }
-        state.set_probe_succeeded();
-        state.is_ready()
+        *relay_ready = true;
+        if !*direct_confirmed {
+            *preferred_transport = PeerSessionTransport::Relay;
+        }
+        true
     }
 
     pub fn mark_relay_path_ready(&self, peer_ip: Ipv4Addr, generation: u8) -> bool {
@@ -345,8 +534,32 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return false;
         };
-        state.set_relay_path_ready(generation);
-        state.is_ready()
+        let generation = generation & 0x03;
+        match state {
+            PeerSessionEntry::Discovering {
+                pending_relay_ready,
+                ..
+            } => {
+                *pending_relay_ready = Some(generation);
+                false
+            }
+            PeerSessionEntry::Active {
+                cipher,
+                relay_ready,
+                direct_confirmed,
+                preferred_transport,
+                ..
+            } => {
+                if cipher.generation != generation {
+                    return false;
+                }
+                *relay_ready = true;
+                if !*direct_confirmed {
+                    *preferred_transport = PeerSessionTransport::Relay;
+                }
+                true
+            }
+        }
     }
 
     pub fn mark_direct_data_confirmed(&self, peer_ip: Ipv4Addr, generation: u8) -> bool {
@@ -354,37 +567,50 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return false;
         };
-        if !state.cipher_ready || state.negotiated_generation != Some(generation & 0x03) {
+        let PeerSessionEntry::Active {
+            cipher,
+            direct_confirmed,
+            preferred_transport,
+            ..
+        } = state
+        else {
+            return false;
+        };
+        if cipher.generation != (generation & 0x03) {
             return false;
         }
-        state.set_direct_data_confirmed();
-        state.is_ready()
+        *direct_confirmed = true;
+        *preferred_transport = PeerSessionTransport::Direct;
+        true
     }
 
     pub fn state(&self, peer_ip: &Ipv4Addr) -> Option<PeerSessionState> {
-        self.inner.read().get(peer_ip).cloned()
+        self.inner
+            .read()
+            .get(peer_ip)
+            .map(PeerSessionEntry::to_state)
     }
 
     pub fn negotiated_generation(&self, peer_ip: &Ipv4Addr) -> Option<u8> {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.negotiated_generation)
+            .and_then(PeerSessionEntry::negotiated_generation)
     }
 
     pub fn cipher_model(&self, peer_ip: &Ipv4Addr) -> Option<CipherModel> {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.cipher_model)
+            .and_then(PeerSessionEntry::cipher_model)
     }
 
     pub fn current_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.crypto.current.as_ref())
-            .map(|slot| slot.cipher.clone())
+            .and_then(PeerSessionEntry::active_cipher)
+            .cloned()
             .ok_or_else(|| anyhow!("missing peer session cipher for {}", peer_ip))
     }
 
@@ -392,26 +618,16 @@ impl PeerSessionManager {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.crypto.previous.as_ref())
-            .map(|slot| slot.cipher.clone())
+            .and_then(PeerSessionEntry::retiring_cipher)
+            .cloned()
             .ok_or_else(|| anyhow!("missing previous peer session cipher for {}", peer_ip))
-    }
-
-    pub fn next_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
-        self.inner
-            .read()
-            .get(peer_ip)
-            .and_then(|state| state.crypto.next.as_ref())
-            .map(|slot| slot.cipher.clone())
-            .ok_or_else(|| anyhow!("missing next peer session cipher for {}", peer_ip))
     }
 
     pub fn current_generation(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<u8> {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.crypto.current.as_ref())
-            .map(|slot| slot.generation)
+            .and_then(PeerSessionEntry::active_generation)
             .ok_or_else(|| anyhow!("missing peer session generation for {}", peer_ip))
     }
 
@@ -419,18 +635,8 @@ impl PeerSessionManager {
         self.inner
             .read()
             .get(peer_ip)
-            .and_then(|state| state.crypto.previous.as_ref())
-            .map(|slot| slot.generation)
+            .and_then(PeerSessionEntry::retiring_generation)
             .ok_or_else(|| anyhow!("missing previous peer session generation for {}", peer_ip))
-    }
-
-    pub fn next_generation(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<u8> {
-        self.inner
-            .read()
-            .get(peer_ip)
-            .and_then(|state| state.crypto.next.as_ref())
-            .map(|slot| slot.generation)
-            .ok_or_else(|| anyhow!("missing next peer session generation for {}", peer_ip))
     }
 
     pub fn next_available_generation(&self, peer_ip: &Ipv4Addr) -> u8 {
@@ -438,12 +644,10 @@ impl PeerSessionManager {
         let Some(state) = guard.get(peer_ip) else {
             return 0;
         };
-        let current = state.crypto.current.as_ref().map(|slot| slot.generation);
-        let previous = state.crypto.previous.as_ref().map(|slot| slot.generation);
-        let next = state.crypto.next.as_ref().map(|slot| slot.generation);
-        for candidate in 0..=3 {
-            let candidate = candidate as u8;
-            if Some(candidate) != current && Some(candidate) != previous && Some(candidate) != next {
+        let current = state.recovery_generation();
+        let previous = state.retiring_generation();
+        for candidate in 0..=3u8 {
+            if Some(candidate) != current && Some(candidate) != previous {
                 return candidate;
             }
         }
@@ -472,27 +676,25 @@ impl PeerSessionManager {
         Ok(())
     }
 
-    pub fn encrypt_ipv4_with_next<B: AsRef<[u8]> + AsMut<[u8]>>(
-        &self,
-        peer_ip: &Ipv4Addr,
-        net_packet: &mut NetPacket<B>,
-    ) -> anyhow::Result<()> {
-        let generation = self.next_generation(peer_ip)?;
-        net_packet.set_peer_generation(generation);
-        self.next_cipher(peer_ip)?.encrypt_ipv4(net_packet)?;
-        Ok(())
-    }
-
     pub fn encrypt_recovery_ipv4<B: AsRef<[u8]> + AsMut<[u8]>>(
         &self,
         peer_ip: &Ipv4Addr,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        if self.has_pending_next(peer_ip) {
-            self.encrypt_ipv4_with_next(peer_ip, net_packet)
-        } else {
-            self.encrypt_ipv4(peer_ip, net_packet)
-        }
+        let (cipher, generation) = self
+            .inner
+            .read()
+            .get(peer_ip)
+            .and_then(|state| {
+                state
+                    .recovery_cipher()
+                    .cloned()
+                    .zip(state.recovery_generation())
+            })
+            .ok_or_else(|| anyhow!("missing recovery peer session cipher for {}", peer_ip))?;
+        net_packet.set_peer_generation(generation);
+        cipher.encrypt_ipv4(net_packet)?;
+        Ok(())
     }
 
     pub fn decrypt_ipv4<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -501,54 +703,49 @@ impl PeerSessionManager {
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
         let packet_generation = net_packet.peer_generation();
-        let (current, previous, next, grace_active) = {
+        let (current, previous, grace_active) = {
             let guard = self.inner.read();
             let Some(state) = guard.get(peer_ip) else {
                 return Err(GenerationMismatchError::new(format!(
-                    "peer session generation mismatch for {}: packet={}, current=None, previous=None, next=None, grace_active=false",
-                    peer_ip,
-                    packet_generation
+                    "peer session generation mismatch for {}: packet={}, current=None, previous=None, grace_active=false",
+                    peer_ip, packet_generation
                 ))
                 .into());
             };
             (
-                state.crypto.current.clone(),
-                state.crypto.previous.clone(),
-                state.crypto.next.clone(),
-                state.crypto.grace_active(),
+                state
+                    .active_cipher()
+                    .cloned()
+                    .zip(state.active_generation()),
+                state
+                    .retiring_cipher()
+                    .cloned()
+                    .zip(state.retiring_generation()),
+                state.grace_active(),
             )
         };
-        if current.as_ref().map(|slot| slot.generation) == Some(packet_generation) {
+        if current.as_ref().map(|(_, generation)| *generation) == Some(packet_generation) {
             return current
                 .expect("checked current presence")
-                .cipher
+                .0
                 .decrypt_ipv4(net_packet)
                 .map_err(Into::into);
         }
-        if grace_active && previous.as_ref().map(|slot| slot.generation) == Some(packet_generation)
+        if grace_active
+            && previous.as_ref().map(|(_, generation)| *generation) == Some(packet_generation)
         {
             return previous
                 .expect("checked previous presence")
-                .cipher
+                .0
                 .decrypt_ipv4(net_packet)
                 .map_err(Into::into);
         }
-        if next.as_ref().map(|slot| slot.generation) == Some(packet_generation) {
-            next.clone()
-                .expect("checked next presence")
-                .cipher
-                .decrypt_ipv4(net_packet)
-                .map_err(anyhow::Error::from)?;
-            self.promote_next(peer_ip);
-            return Ok(());
-        }
         Err(GenerationMismatchError::new(format!(
-            "peer session generation mismatch for {}: packet={}, current={:?}, previous={:?}, next={:?}, grace_active={}",
+            "peer session generation mismatch for {}: packet={}, current={:?}, previous={:?}, grace_active={}",
             peer_ip,
             packet_generation,
-            current.as_ref().map(|slot| slot.generation),
-            previous.as_ref().map(|slot| slot.generation),
-            next.as_ref().map(|slot| slot.generation),
+            current.as_ref().map(|(_, generation)| *generation),
+            previous.as_ref().map(|(_, generation)| *generation),
             grace_active
         ))
         .into())
@@ -561,21 +758,33 @@ impl PeerSessionManager {
         generation: u8,
     ) {
         let mut guard = self.inner.write();
-        let state = guard
-            .entry(peer_ip)
-            .or_insert_with(|| PeerSessionState::new(DiscoverySessionId::new(0, 0, 0)));
-        let next_slot = PeerCipherSlot {
+        let state = guard.entry(peer_ip).or_insert_with(|| {
+            PeerSessionEntry::discovering(DiscoverySessionId::new(0, 0, 0), None, None, None)
+        });
+        let session = state.session();
+        let retiring = state
+            .active_cipher()
+            .cloned()
+            .zip(state.active_generation())
+            .map(|(cipher, generation)| RetiringCipher {
+                cipher,
+                generation,
+                grace_until: Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW,
+            });
+        let cipher = ActiveCipher {
             cipher,
             generation: generation & 0x03,
+            model: CipherModel::AesGcm,
         };
-        if state.crypto.current.is_none() {
-            state.crypto.current = Some(next_slot);
-            state.crypto.next = None;
-            state.crypto.previous = None;
-            state.crypto.grace_until = None;
-        } else {
-            state.crypto.next = Some(next_slot);
-        }
+        *state = PeerSessionEntry::active(
+            session,
+            cipher,
+            retiring,
+            true,
+            false,
+            false,
+            PeerSessionTransport::Relay,
+        );
     }
 
     pub fn replace_current_cipher_with_generation(
@@ -585,7 +794,6 @@ impl PeerSessionManager {
         generation: u8,
     ) {
         self.install_pending_cipher_with_generation(peer_ip, cipher, generation);
-        self.promote_next(&peer_ip);
     }
 
     pub fn clear_previous_ciphers_for(&self, peers: &HashSet<Ipv4Addr>) {
@@ -597,22 +805,14 @@ impl PeerSessionManager {
             let Some(state) = guard.get_mut(peer_ip) else {
                 continue;
             };
-            state.crypto.previous = None;
-            state.crypto.grace_until = None;
+            if let PeerSessionEntry::Active { retiring, .. } = state {
+                *retiring = None;
+            }
         }
     }
 
     pub fn clear_pending_ciphers_for(&self, peers: &HashSet<Ipv4Addr>) {
-        if peers.is_empty() {
-            return;
-        }
-        let mut guard = self.inner.write();
-        for peer_ip in peers {
-            let Some(state) = guard.get_mut(peer_ip) else {
-                continue;
-            };
-            state.crypto.next = None;
-        }
+        let _ = peers;
     }
 
     pub fn clear_crypto_for(&self, peers: &HashSet<Ipv4Addr>) {
@@ -624,23 +824,20 @@ impl PeerSessionManager {
             let Some(state) = guard.get_mut(peer_ip) else {
                 continue;
             };
-            state.crypto = PeerCryptoState::default();
+            state.clear_crypto();
         }
     }
 
     pub fn has_pending_next(&self, peer_ip: &Ipv4Addr) -> bool {
-        self.inner
-            .read()
-            .get(peer_ip)
-            .and_then(|state| state.crypto.next.as_ref())
-            .is_some()
+        let _ = peer_ip;
+        false
     }
 
     pub fn is_grace_active_for(&self, peer_ip: &Ipv4Addr) -> bool {
         self.inner
             .read()
             .get(peer_ip)
-            .map(|state| state.crypto.grace_active())
+            .map(PeerSessionEntry::grace_active)
             .unwrap_or(false)
     }
 
@@ -648,20 +845,20 @@ impl PeerSessionManager {
         self.inner
             .read()
             .values()
-            .any(|state| state.crypto.grace_active())
+            .any(PeerSessionEntry::grace_active)
     }
 
     pub fn debug_counts(&self) -> (usize, usize, bool) {
         let guard = self.inner.read();
         let current = guard
             .values()
-            .filter(|state| state.crypto.current.is_some())
+            .filter(|state| state.has_recovery_cipher())
             .count();
         let previous = guard
             .values()
-            .filter(|state| state.crypto.previous.is_some())
+            .filter(|state| state.retiring_generation().is_some())
             .count();
-        let grace_active = guard.values().any(|state| state.crypto.grace_active());
+        let grace_active = guard.values().any(PeerSessionEntry::grace_active);
         (current, previous, grace_active)
     }
 
@@ -670,8 +867,8 @@ impl PeerSessionManager {
             .read()
             .iter()
             .filter_map(|(peer_ip, state)| {
-                if state.cipher_ready && !state.is_ready() {
-                    Some((*peer_ip, state.discovery_session))
+                if state.cipher_ready() && !state.is_ready() {
+                    Some((*peer_ip, state.session()))
                 } else {
                     None
                 }
@@ -684,8 +881,16 @@ impl PeerSessionManager {
         let Some(state) = guard.get_mut(&peer_ip) else {
             return;
         };
-        if state.is_ready() || transport == PeerSessionTransport::Relay {
-            state.preferred_transport = transport;
+        if let PeerSessionEntry::Active {
+            relay_ready,
+            direct_confirmed,
+            preferred_transport,
+            ..
+        } = state
+        {
+            if *relay_ready || *direct_confirmed || transport == PeerSessionTransport::Relay {
+                *preferred_transport = transport;
+            }
         }
     }
 
@@ -696,8 +901,13 @@ impl PeerSessionManager {
         direct_route: Option<Route>,
         allow_recovering: bool,
     ) -> Option<PeerSessionTransport> {
-        let state = self.state(peer_ip);
-        select_transport(use_channel_type, direct_route, state, allow_recovering)
+        let guard = self.inner.read();
+        select_transport(
+            use_channel_type,
+            direct_route,
+            guard.get(peer_ip),
+            allow_recovering,
+        )
     }
 
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
@@ -708,7 +918,7 @@ impl PeerSessionManager {
 
     pub fn clear_all_crypto(&self) {
         for state in self.inner.write().values_mut() {
-            state.crypto = PeerCryptoState::default();
+            state.clear_crypto();
         }
     }
 
@@ -719,7 +929,7 @@ impl PeerSessionManager {
         let mut inner = self.inner.write();
         for peer in peers {
             if let Some(state) = inner.get_mut(peer) {
-                state.reset_runtime_state_preserving_crypto();
+                state.reset_runtime_state();
             }
         }
     }
@@ -737,42 +947,28 @@ impl PeerSessionManager {
         &self,
         peer_ip: Ipv4Addr,
         discovery_session: DiscoverySessionId,
-        f: impl FnOnce(&mut PeerSessionState) -> R,
+        f: impl FnOnce(&mut PeerSessionEntry) -> R,
     ) -> Option<R> {
         let mut guard = self.inner.write();
         let Some(state) = guard.get_mut(&peer_ip) else {
             return None;
         };
-        if !state.discovery_session.same_transaction(&discovery_session) {
+        if !state.session().same_transaction(&discovery_session) {
             return None;
         }
         Some(f(state))
-    }
-
-    fn promote_next(&self, peer_ip: &Ipv4Addr) {
-        let mut guard = self.inner.write();
-        let Some(state) = guard.get_mut(peer_ip) else {
-            return;
-        };
-        let Some(next) = state.crypto.next.take() else {
-            return;
-        };
-        state.crypto.previous = state.crypto.current.replace(next);
-        if state.crypto.previous.is_some() {
-            state.crypto.grace_until = Some(Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW);
-        } else {
-            state.crypto.grace_until = None;
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PeerSessionManager, PeerSessionPhase, PeerSessionTransport};
+    use super::{PeerSessionManager, PeerSessionTransport};
     use crate::cipher::{Cipher, CipherModel};
     use crate::data_plane::route::{Route, RouteOrigin};
     use crate::data_plane::use_channel_type::UseChannelType;
+    use crate::protocol::body::ENCRYPTION_RESERVED;
     use crate::protocol::peer_discovery_packet::DiscoverySessionId;
+    use crate::protocol::NetPacket;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashSet;
     use std::net::Ipv4Addr;
@@ -793,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn matching_session_advances_phase() {
+    fn matching_session_prefers_direct_without_marking_ready() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerSessionManager::new(1);
         let discovery = session(7, 1, 9);
@@ -804,10 +1000,10 @@ mod tests {
         manager.mark_direct_path_ready(peer, discovery);
 
         let state = manager.state(&peer).unwrap();
-        assert_eq!(state.phase, PeerSessionPhase::CipherReady);
         assert!(state.cipher_ready);
-        assert!(state.direct_path_ready);
+        assert!(!state.direct_path_ready);
         assert!(!state.is_ready());
+        assert_eq!(state.preferred_transport, PeerSessionTransport::Direct);
     }
 
     #[test]
@@ -822,7 +1018,6 @@ mod tests {
         manager.mark_cipher_ready(peer, old_discovery);
 
         let state = manager.state(&peer).unwrap();
-        assert_eq!(state.phase, PeerSessionPhase::Recovering);
         assert_eq!(state.discovery_session, new_discovery);
         assert!(!state.cipher_ready);
     }
@@ -866,9 +1061,8 @@ mod tests {
         manager.mark_probe_succeeded(peer);
 
         let state = manager.state(&peer).unwrap();
-        assert_eq!(state.phase, PeerSessionPhase::Ready);
         assert!(state.probe_sent);
-        assert!(state.probe_succeeded);
+        assert!(state.relay_path_ready);
         assert!(state.is_ready());
         assert_eq!(state.preferred_transport, PeerSessionTransport::Relay);
     }
@@ -884,10 +1078,24 @@ mod tests {
         manager.mark_relay_path_ready(peer, 2);
 
         let state = manager.state(&peer).unwrap();
-        assert_eq!(state.phase, PeerSessionPhase::Ready);
         assert!(state.relay_path_ready);
         assert!(state.is_ready());
         assert_eq!(state.preferred_transport, PeerSessionTransport::Relay);
+    }
+
+    #[test]
+    fn relay_path_ready_buffers_until_cipher_install() {
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let manager = PeerSessionManager::new(1);
+        let discovery = session(7, 1, 9);
+
+        manager.begin_recovery(peer, discovery);
+        assert!(!manager.mark_relay_path_ready(peer, 2));
+        manager.install_cipher(peer, discovery, CipherModel::AesGcm, 2);
+
+        let state = manager.state(&peer).unwrap();
+        assert!(state.relay_path_ready);
+        assert!(state.is_ready());
     }
 
     #[test]
@@ -903,7 +1111,6 @@ mod tests {
         assert_eq!(state.negotiated_generation, Some(2));
         assert_eq!(state.cipher_model, Some(CipherModel::AesGcm));
         assert!(state.cipher_ready);
-        assert_eq!(state.phase, PeerSessionPhase::CipherReady);
         assert_eq!(manager.cipher_model(&peer), Some(CipherModel::AesGcm));
     }
 
@@ -957,7 +1164,6 @@ mod tests {
         manager.begin_recovery(peer, discovery);
         manager.mark_cipher_ready(peer, discovery);
 
-        // All mode: relay is used as fallback even before probe confirms is_ready().
         let transport = manager.preferred_transport(&peer, UseChannelType::All, None, false);
         assert_eq!(transport, Some(PeerSessionTransport::Relay));
     }
@@ -970,57 +1176,67 @@ mod tests {
         manager.begin_recovery(peer, discovery);
         manager.mark_cipher_ready(peer, discovery);
 
-        // P2p-only mode: still blocks until is_ready() because there is no relay fallback.
         let transport =
             manager.preferred_transport(&peer, UseChannelType::P2p, Some(direct_route()), false);
         assert_eq!(transport, None);
     }
 
     #[test]
-    fn select_transport_allows_relay_after_soft_reset() {
-        // After a soft reset (rename / status change) cipher_ready is cleared but
-        // crypto.current is preserved.  The session must still allow relay routing
-        // so that data-plane traffic is not dropped during the recovery window.
+    fn select_transport_blocks_normal_data_after_soft_reset() {
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         let manager = PeerSessionManager::new(1);
         let discovery = session(7, 1, 9);
         manager.begin_recovery(peer, discovery);
-        // install_session_cipher_complete populates crypto.current, matching real runtime flow.
         let cipher = Cipher::new_session_key(CipherModel::AesGcm, [0u8; 32]).unwrap();
         manager.install_session_cipher_complete(peer, discovery, cipher, CipherModel::AesGcm, 2);
         manager.mark_probe_sent(peer, discovery);
         manager.mark_probe_succeeded(peer);
 
-        // Reach Ready state.
         let state = manager.state(&peer).unwrap();
         assert!(state.is_ready());
 
-        // Simulate a soft reset (e.g., peer renamed).
         let peers: HashSet<Ipv4Addr> = std::iter::once(peer).collect();
         manager.clear_runtime_state_for(&peers);
 
-        // cipher_ready should now be false; crypto.current is still populated.
         let state = manager.state(&peer).unwrap();
         assert!(!state.cipher_ready);
         assert!(!state.is_ready());
 
-        // Relay and All modes must still be allowed so traffic is not silently dropped.
-        let relay =
-            manager.preferred_transport(&peer, UseChannelType::Relay, None, false);
-        assert_eq!(relay, Some(PeerSessionTransport::Relay));
+        let relay = manager.preferred_transport(&peer, UseChannelType::Relay, None, false);
+        assert_eq!(relay, None);
 
-        let all =
-            manager.preferred_transport(&peer, UseChannelType::All, None, false);
-        assert_eq!(all, Some(PeerSessionTransport::Relay));
+        let all = manager.preferred_transport(&peer, UseChannelType::All, None, false);
+        assert_eq!(all, None);
 
-        // P2p-only mode should still block (no relay fallback available).
-        let p2p = manager.preferred_transport(
-            &peer,
-            UseChannelType::P2p,
-            Some(direct_route()),
-            false,
-        );
+        let p2p =
+            manager.preferred_transport(&peer, UseChannelType::P2p, Some(direct_route()), false);
         assert_eq!(p2p, None);
+
+        let recovery_relay = manager.preferred_transport(&peer, UseChannelType::Relay, None, true);
+        assert_eq!(recovery_relay, Some(PeerSessionTransport::Relay));
+
+        let recovery_all = manager.preferred_transport(&peer, UseChannelType::All, None, true);
+        assert_eq!(recovery_all, Some(PeerSessionTransport::Relay));
+    }
+
+    #[test]
+    fn soft_reset_preserves_cipher_only_for_recovery_probe() {
+        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let manager = PeerSessionManager::new(1);
+        let discovery = session(7, 1, 9);
+        let mut normal_packet =
+            NetPacket::new_encrypt(vec![0u8; 13 + ENCRYPTION_RESERVED]).unwrap();
+        let mut recovery_packet =
+            NetPacket::new_encrypt(vec![0u8; 13 + ENCRYPTION_RESERVED]).unwrap();
+
+        manager.begin_recovery(peer, discovery);
+        manager.install_cipher(peer, discovery, CipherModel::AesGcm, 2);
+        manager.clear_runtime_state_for(&HashSet::from([peer]));
+
+        assert!(manager.encrypt_ipv4(&peer, &mut normal_packet).is_err());
+        assert!(manager
+            .encrypt_recovery_ipv4(&peer, &mut recovery_packet)
+            .is_ok());
     }
 
     #[test]
@@ -1051,8 +1267,8 @@ mod tests {
 
         assert!(manager.mark_direct_data_confirmed(peer, 2));
         let state = manager.state(&peer).unwrap();
+        assert!(state.direct_path_ready);
         assert!(state.is_ready());
-        assert_eq!(state.phase, PeerSessionPhase::Ready);
         assert_eq!(state.preferred_transport, PeerSessionTransport::Direct);
     }
 
@@ -1068,7 +1284,7 @@ mod tests {
         assert!(!manager.mark_relay_path_ready(peer, 1));
         let state = manager.state(&peer).unwrap();
         assert!(!state.relay_path_ready);
-        assert_eq!(state.phase, PeerSessionPhase::CipherReady);
+        assert!(!state.is_ready());
     }
 
     #[test]
@@ -1082,33 +1298,42 @@ mod tests {
 
         assert!(!manager.mark_probe_succeeded(peer));
         let state = manager.state(&peer).unwrap();
-        assert!(!state.probe_succeeded);
-        assert_eq!(state.phase, PeerSessionPhase::CipherReady);
+        assert!(!state.relay_path_ready);
+        assert!(!state.is_ready());
     }
 }
 
 fn select_transport(
     use_channel_type: UseChannelType,
     direct_route: Option<Route>,
-    state: Option<PeerSessionState>,
+    state: Option<&PeerSessionEntry>,
     allow_recovering: bool,
 ) -> Option<PeerSessionTransport> {
     let direct_available = direct_route.is_some();
     match state {
-        Some(state) if state.is_ready() => match use_channel_type {
-            UseChannelType::Relay => Some(PeerSessionTransport::Relay),
-            UseChannelType::P2p => direct_available.then_some(PeerSessionTransport::Direct),
-            UseChannelType::All => {
-                if state.preferred_transport == PeerSessionTransport::Direct && direct_available {
-                    Some(PeerSessionTransport::Direct)
-                } else if !direct_available {
-                    Some(PeerSessionTransport::Relay)
-                } else {
-                    Some(state.preferred_transport)
+        Some(state) if state.is_ready() => {
+            let preferred_transport = match state {
+                PeerSessionEntry::Active {
+                    preferred_transport,
+                    ..
+                } => *preferred_transport,
+                PeerSessionEntry::Discovering { .. } => PeerSessionTransport::Relay,
+            };
+            match use_channel_type {
+                UseChannelType::Relay => Some(PeerSessionTransport::Relay),
+                UseChannelType::P2p => direct_available.then_some(PeerSessionTransport::Direct),
+                UseChannelType::All => {
+                    if preferred_transport == PeerSessionTransport::Direct && direct_available {
+                        Some(PeerSessionTransport::Direct)
+                    } else if !direct_available {
+                        Some(PeerSessionTransport::Relay)
+                    } else {
+                        Some(preferred_transport)
+                    }
                 }
             }
-        },
-        Some(state) if allow_recovering && state.cipher_ready => match use_channel_type {
+        }
+        Some(state) if allow_recovering && state.cipher_ready() => match use_channel_type {
             UseChannelType::Relay => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => direct_available.then_some(PeerSessionTransport::Direct),
             UseChannelType::All => {
@@ -1119,27 +1344,15 @@ fn select_transport(
                 }
             }
         },
-        // Cipher installed but probe not yet confirmed: allow relay sends.
-        // The cipher was established via a valid discovery handshake, so it is
-        // safe to use. Blocking here creates a window where the route table
-        // already shows gateway-relay but data packets are silently dropped.
-        // For All mode, use relay as a conservative fallback; the direct path
-        // is only used once the probe confirms is_ready(). P2p-only mode
-        // still blocks because it has no relay fallback to fall back to.
-        Some(state) if state.cipher_ready => match use_channel_type {
+        Some(state) if state.cipher_ready() => match use_channel_type {
             UseChannelType::Relay | UseChannelType::All => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => None,
         },
-        // After a soft reset (e.g., rename or status change), cipher_ready is cleared
-        // but crypto.current is preserved.  Without this arm the session falls into
-        // `_ => None`, silently dropping all relay traffic for the entire recovery
-        // window (tens of seconds) until a new session handshake completes.
-        // Allow relay using the existing cipher; P2p-only still blocks because it
-        // has no relay fallback.
-        Some(state) if state.crypto.current.is_some() => match use_channel_type {
+        Some(state) if allow_recovering && state.has_preserved_cipher() => match use_channel_type {
             UseChannelType::Relay | UseChannelType::All => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => None,
         },
+        Some(_) => None,
         None => match use_channel_type {
             UseChannelType::Relay => Some(PeerSessionTransport::Relay),
             UseChannelType::P2p => direct_available.then_some(PeerSessionTransport::Direct),
@@ -1147,7 +1360,6 @@ fn select_transport(
                 .then_some(PeerSessionTransport::Direct)
                 .or(Some(PeerSessionTransport::Relay)),
         },
-        _ => None,
     }
 }
 
