@@ -36,12 +36,29 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     fn decrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
         &self,
         peer_ip: &Ipv4Addr,
+        route_key: RouteKey,
         net_packet: &mut NetPacket<B>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         if !net_packet.is_encrypt() {
-            return Ok(());
+            log::debug!(
+                "drop unencrypted peer packet from {} via {:?}",
+                peer_ip,
+                route_key
+            );
+            return Ok(false);
         }
-        self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet)
+        match self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet) {
+            Ok(()) => Ok(true),
+            Err(err) => {
+                log::debug!(
+                    "drop peer packet with invalid cipher from {} via {:?}: {:?}",
+                    peer_ip,
+                    route_key,
+                    err
+                );
+                Ok(false)
+            }
+        }
     }
 
     fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -94,7 +111,9 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        self.decrypt_by_route(&source, &mut net_packet)?;
+        if !self.decrypt_by_route(&source, route_key, &mut net_packet)? {
+            return Ok(());
+        }
         self.runtime.route_manager().touch_path(&source, &route_key);
         //处理扩展
         let net_packet = if net_packet.is_extension() {
