@@ -135,7 +135,11 @@ impl Sdl {
         let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
         let punch_coordinator = PunchCoordinator::new();
         let debug_watch = DebugWatch::default();
-        let gateway_sessions = GatewaySessions::new(current_device.clone(), debug_watch.clone());
+        let gateway_sessions = GatewaySessions::new(
+            current_device.clone(),
+            debug_watch.clone(),
+            data_plane_stats.clone(),
+        );
         let peer_crypto = Arc::new(PeerCryptoManager::new(16));
         let peer_probe_tracker = Arc::new(crate::util::PeerProbeTracker::new(16));
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
@@ -295,13 +299,17 @@ impl Sdl {
         }
 
         //初始化网络数据通道
-        udp_channel.start(stop_manager.clone(), {
-            let handler = handler.clone();
-            move |buf, extend, route_key| handler.handle(buf, extend, route_key)
-        }, {
-            let runtime = runtime.clone();
-            move |addr| runtime.is_known_udp_source(addr)
-        })?;
+        udp_channel.start(
+            stop_manager.clone(),
+            {
+                let handler = handler.clone();
+                move |buf, extend, route_key| handler.handle(buf, extend, route_key)
+            },
+            {
+                let runtime = runtime.clone();
+                move |addr| runtime.is_known_udp_source(addr)
+            },
+        )?;
         // 打洞逻辑
         let punch = Punch::new(
             udp_channel.clone(),
@@ -484,6 +492,44 @@ impl Sdl {
     }
     pub fn down_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
         self.runtime.data_plane_stats.down_traffic_history()
+    }
+    pub fn up_stream_by_peer(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
+        self.runtime.data_plane_stats.up_peer_traffic_all()
+    }
+    pub fn down_stream_by_peer(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
+        self.runtime.data_plane_stats.down_peer_traffic_all()
+    }
+    pub fn up_stream_by_transport(&self) -> Option<(u64, HashMap<std::net::IpAddr, u64>)> {
+        self.runtime.data_plane_stats.up_transport_traffic_all()
+    }
+    pub fn down_stream_by_transport(&self) -> Option<(u64, HashMap<std::net::IpAddr, u64>)> {
+        self.runtime.data_plane_stats.down_transport_traffic_all()
+    }
+    pub fn logical_up_stream(&self) -> u64 {
+        self.runtime.data_plane_stats.logical_up_total()
+    }
+    pub fn logical_down_stream(&self) -> u64 {
+        self.runtime.data_plane_stats.logical_down_total()
+    }
+    pub fn gateway_up_stream(&self) -> u64 {
+        self.runtime.data_plane_stats.gateway_up_total()
+    }
+    pub fn gateway_down_stream(&self) -> u64 {
+        self.runtime.data_plane_stats.gateway_down_total()
+    }
+    pub fn transport_up_stream(&self) -> u64 {
+        self.runtime
+            .data_plane_stats
+            .up_transport_traffic_all()
+            .map(|(total, _)| total)
+            .unwrap_or(0)
+    }
+    pub fn transport_down_stream(&self) -> u64 {
+        self.runtime
+            .data_plane_stats
+            .down_transport_traffic_all()
+            .map(|(total, _)| total)
+            .unwrap_or(0)
     }
     pub fn suspend(&self) -> anyhow::Result<()> {
         #[cfg(feature = "integrated_tun")]

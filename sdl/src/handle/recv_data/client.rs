@@ -114,18 +114,28 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         packet: &NetPacket<B>,
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
+        let packet_len = packet.buffer().as_ref().len();
+        let destination = packet.destination();
+        self.runtime.data_plane_stats.record_logical_up(packet_len);
         if self
             .runtime
             .gateway_sessions
             .is_gateway_addr(route_key.addr)
         {
             self.runtime.gateway_sessions.send_relay(packet)?;
+            self.runtime.data_plane_stats.record_gateway_up(packet_len);
         } else if route_key.protocol().is_udp() {
             self.runtime
                 .udp_channel
                 .send_by_key(packet.buffer(), route_key)?;
         } else {
             return Err(anyhow!("unsupported reply route {:?}", route_key));
+        }
+        let gateway_vip = self.runtime.current_device.load().virtual_gateway;
+        if destination != gateway_vip {
+            self.runtime
+                .data_plane_stats
+                .record_peer_up(destination, packet_len);
         }
         Ok(())
     }
@@ -155,6 +165,24 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         }
         if !self.decrypt_by_route(&source, route_key, &mut net_packet)? {
             return Ok(());
+        }
+        let packet_len = net_packet.buffer().as_ref().len();
+        self.runtime
+            .data_plane_stats
+            .record_logical_down(packet_len);
+        if source != current_device.virtual_gateway {
+            self.runtime
+                .data_plane_stats
+                .record_peer_down(source, packet_len);
+        }
+        if self
+            .runtime
+            .gateway_sessions
+            .is_gateway_addr(route_key.addr)
+        {
+            self.runtime
+                .data_plane_stats
+                .record_gateway_down(packet_len);
         }
         if self
             .runtime

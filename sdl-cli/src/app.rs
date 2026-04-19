@@ -1,4 +1,4 @@
-use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
 use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{write_saved_config, FileConfig};
@@ -294,19 +294,11 @@ impl CommandHandler for ServiceCommandHandler {
         }
     }
 
-    fn chart_a(&self) -> io::Result<ChartA> {
+    fn traffic(&self) -> io::Result<TrafficSummary> {
         match self.0.current_runtime() {
-            Ok(vnt) => Ok(crate::command::command_chart_a(vnt.as_ref())),
-            Err(_) => Ok(ChartA::default()),
+            Ok(vnt) => Ok(crate::command::command_traffic(vnt.as_ref())),
+            Err(_) => Ok(TrafficSummary::default()),
         }
-    }
-
-    fn chart_b(&self, input: Option<&str>) -> io::Result<ChartB> {
-        let vnt = self.0.current_runtime()?;
-        let input = input
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| vnt.current_device().virtual_gateway.to_string());
-        Ok(crate::command::command_chart_b(vnt.as_ref(), &input))
     }
 
     fn resume_runtime(&self) -> io::Result<String> {

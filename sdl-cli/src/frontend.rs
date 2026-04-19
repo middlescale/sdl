@@ -5,11 +5,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn print_usage() {
-    println!("sdl <resume|list|info|route|suspend|rename|auth|channel-change|version> [options]");
+    println!(
+        "sdl <resume|list|info|route|traffic|suspend|rename|auth|channel-change|version> [options]"
+    );
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl info [--json]");
     println!("  sdl route [--json]");
+    println!("  sdl traffic [--json]");
     println!("  sdl suspend [--json]                  # 挂起本地收发服务");
     println!("  sdl rename [--json] <name>            # 修改当前节点显示名");
     println!("  sdl auth [--json] --userId/-u <user-id> [--group/-g default.ms.net] <ticket>");
@@ -30,6 +33,7 @@ pub fn run() -> i32 {
         "list" => handle_list(&args[2..]),
         "info" => handle_info(&args[2..]),
         "route" => handle_route(&args[2..]),
+        "traffic" => handle_traffic(&args[2..]),
         "suspend" => handle_suspend(&args[2..]),
         "rename" => handle_rename(&args[2..]),
         "auth" => handle_auth(&args[2..]),
@@ -250,6 +254,32 @@ fn handle_route(args: &[String]) -> i32 {
             }
             Err(e) => {
                 eprintln!("route error: {}", e);
+                1
+            }
+        }
+    }
+}
+
+fn handle_traffic(args: &[String]) -> i32 {
+    if has_json_flag(args) {
+        match CommandClient::new().and_then(|mut client| client.traffic()) {
+            Ok(traffic) => {
+                println!("{}", serde_json::to_string_pretty(&traffic).unwrap());
+                0
+            }
+            Err(e) => {
+                eprintln!("traffic error: {}", e);
+                1
+            }
+        }
+    } else {
+        match CommandClient::new().and_then(|mut client| client.traffic()) {
+            Ok(traffic) => {
+                console_out::console_traffic(traffic);
+                0
+            }
+            Err(e) => {
+                eprintln!("traffic error: {}", e);
                 1
             }
         }

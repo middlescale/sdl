@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -54,20 +53,28 @@ pub struct DeviceItem {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ChartA {
-    pub disable_stats: bool,
+pub struct PeerTrafficItem {
+    pub name: String,
+    pub virtual_ip: String,
+    pub status: String,
     pub up_total: u64,
     pub down_total: u64,
-    pub up_map: HashMap<usize, u64>,
-    pub down_map: HashMap<usize, u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ChartB {
-    pub disable_stats: bool,
-    pub channel: Option<usize>,
+pub struct TransportTrafficItem {
+    pub remote_ip: String,
     pub up_total: u64,
-    pub up_list: Vec<usize>,
     pub down_total: u64,
-    pub down_list: Vec<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct TrafficSummary {
+    pub disable_stats: bool,
+    pub peer_up_total: u64,
+    pub peer_down_total: u64,
+    pub peer_items: Vec<PeerTrafficItem>,
+    pub transport_up_total: u64,
+    pub transport_down_total: u64,
+    pub transport_items: Vec<TransportTrafficItem>,
 }

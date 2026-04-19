@@ -3,10 +3,12 @@ use sdl::data_plane::gateway_session::GatewaySessionSummary;
 use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
-use std::collections::HashSet;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::collections::{BTreeSet, HashMap};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::entity::{
+    DeviceItem, Info, PeerTrafficItem, RouteItem, TrafficSummary, TransportTrafficItem,
+};
 
 pub mod client;
 pub mod entity;
@@ -354,103 +356,105 @@ pub fn command_info(vnt: &Sdl) -> Info {
     }
 }
 
-pub fn command_chart_a(vnt: &Sdl) -> ChartA {
+pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
     let disable_stats = !vnt.config().enable_traffic;
     if disable_stats {
-        let chart = ChartA {
+        return TrafficSummary {
             disable_stats: true,
             ..Default::default()
         };
-        return chart;
     }
-    let (up_total, up_map) = vnt.up_stream_all().unwrap_or_default();
-    let (down_total, down_map) = vnt.down_stream_all().unwrap_or_default();
-    ChartA {
+    let gateway_vip = vnt.current_device().virtual_gateway;
+    let gateway_summary = vnt.gateway_session_summary();
+    let devices = vnt.device_list();
+    let device_names: HashMap<Ipv4Addr, String> = devices
+        .iter()
+        .map(|device| (device.virtual_ip, device.name.clone()))
+        .collect();
+    let device_statuses: HashMap<Ipv4Addr, String> = devices
+        .iter()
+        .map(|device| (device.virtual_ip, format!("{:?}", device.status)))
+        .collect();
+    let peer_up_total = vnt.logical_up_stream();
+    let peer_down_total = vnt.logical_down_stream();
+    let (_, up_map) = vnt.up_stream_by_peer().unwrap_or_default();
+    let (_, down_map) = vnt.down_stream_by_peer().unwrap_or_default();
+    let mut vips = BTreeSet::new();
+    vips.extend(
+        device_names
+            .keys()
+            .copied()
+            .filter(|vip| *vip != gateway_vip),
+    );
+    vips.extend(up_map.keys().copied());
+    vips.extend(down_map.keys().copied());
+    let mut peer_items: Vec<PeerTrafficItem> = vips
+        .into_iter()
+        .map(|vip| PeerTrafficItem {
+            name: device_names.get(&vip).cloned().unwrap_or_default(),
+            virtual_ip: vip.to_string(),
+            status: device_statuses
+                .get(&vip)
+                .cloned()
+                .unwrap_or_else(|| "Unknown".to_string()),
+            up_total: up_map.get(&vip).copied().unwrap_or_default(),
+            down_total: down_map.get(&vip).copied().unwrap_or_default(),
+        })
+        .collect();
+    if !gateway_vip.is_unspecified() || gateway_summary.configured {
+        peer_items.push(PeerTrafficItem {
+            name: "gateways".to_string(),
+            virtual_ip: gateway_vip.to_string(),
+            status: if !gateway_summary.configured {
+                "not-configured".to_string()
+            } else if gateway_summary.authenticated {
+                "connected".to_string()
+            } else {
+                "disconnected".to_string()
+            },
+            up_total: vnt.gateway_up_stream(),
+            down_total: vnt.gateway_down_stream(),
+        });
+    }
+    let transport_up_total = vnt.transport_up_stream();
+    let transport_down_total = vnt.transport_down_stream();
+    let (_, transport_up_map) = vnt.up_stream_by_transport().unwrap_or_default();
+    let (_, transport_down_map) = vnt.down_stream_by_transport().unwrap_or_default();
+    let mut transport_ips = BTreeSet::<IpAddr>::new();
+    transport_ips.extend(transport_up_map.keys().copied());
+    transport_ips.extend(transport_down_map.keys().copied());
+    let transport_items = transport_ips
+        .into_iter()
+        .map(|remote_ip| TransportTrafficItem {
+            remote_ip: remote_ip.to_string(),
+            up_total: transport_up_map
+                .get(&remote_ip)
+                .copied()
+                .unwrap_or_default(),
+            down_total: transport_down_map
+                .get(&remote_ip)
+                .copied()
+                .unwrap_or_default(),
+        })
+        .collect();
+    TrafficSummary {
         disable_stats,
-        up_total,
-        down_total,
-        up_map,
-        down_map,
+        peer_up_total,
+        peer_down_total,
+        peer_items,
+        transport_up_total,
+        transport_down_total,
+        transport_items,
     }
-}
-
-pub fn command_chart_b(vnt: &Sdl, input_str: &str) -> ChartB {
-    let disable_stats = !vnt.config().enable_traffic;
-    if disable_stats {
-        let chart = ChartB {
-            disable_stats: true,
-            ..Default::default()
-        };
-        return chart;
-    }
-    let (_, up_map) = vnt.up_stream_history().unwrap_or_default();
-    let (_, down_map) = vnt.down_stream_history().unwrap_or_default();
-    let up_keys: HashSet<_> = up_map.keys().cloned().collect();
-    let down_keys: HashSet<_> = down_map.keys().cloned().collect();
-    let mut keys: Vec<usize> = up_keys.union(&down_keys).cloned().collect();
-    keys.sort();
-    if let Some(channel) = find_matching_channel(input_str, &keys) {
-        let (up_total, up_list) = up_map.get(&channel).cloned().unwrap_or_default();
-        let (down_total, down_list) = down_map.get(&channel).cloned().unwrap_or_default();
-        ChartB {
-            disable_stats,
-            channel: Some(channel),
-            up_total,
-            up_list,
-            down_total,
-            down_list,
-        }
-    } else {
-        ChartB::default()
-    }
-}
-
-fn match_from_end(input_str: &str, ip: &str) -> bool {
-    let mut input_chars = input_str.chars().rev();
-    let mut ip_chars = ip.chars().rev();
-
-    while let (Some(ic), Some(pc)) = (input_chars.next(), ip_chars.next()) {
-        if ic != pc {
-            return false;
-        }
-    }
-
-    input_chars.next().is_none() // Ensure all input characters matched
-}
-
-fn find_matching_channel(input_str: &str, channels: &[usize]) -> Option<usize> {
-    for &channel in channels {
-        let channel_str = channel.to_string();
-        if match_from_end(input_str, &channel_str) {
-            return Some(channel);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        control_route_metric_rt, display_destination, find_matching_channel, match_from_end,
-        route_name, RouteItem, CONTROL_DESTINATION,
+        control_route_metric_rt, display_destination, route_name, RouteItem, CONTROL_DESTINATION,
     };
     use std::collections::HashMap;
     use std::net::Ipv4Addr;
-
-    #[test]
-    fn match_from_end_requires_full_suffix_match() {
-        assert!(match_from_end("12", "ch-12"));
-        assert!(!match_from_end("13", "ch-12"));
-        assert!(!match_from_end("123", "12"));
-    }
-
-    #[test]
-    fn find_matching_channel_matches_from_suffix() {
-        let channels = [0, 1, 12, 21];
-        assert_eq!(find_matching_channel("12", &channels), Some(12));
-        assert_eq!(find_matching_channel("1", &channels), Some(1));
-        assert_eq!(find_matching_channel("99", &channels), None);
-    }
 
     #[test]
     fn display_destination_relabels_control_vip() {

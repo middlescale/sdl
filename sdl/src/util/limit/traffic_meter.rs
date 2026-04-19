@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,47 @@ use std::time::{Duration, Instant};
 pub struct TrafficMeterMultiAddress {
     history_capacity: usize,
     inner: Arc<Mutex<(u64, HashMap<Ipv4Addr, TrafficMeter>)>>,
+}
+
+#[derive(Clone)]
+pub struct TrafficMeterMultiIpAddr {
+    history_capacity: usize,
+    inner: Arc<Mutex<(u64, HashMap<IpAddr, TrafficMeter>)>>,
+}
+
+impl Default for TrafficMeterMultiIpAddr {
+    fn default() -> Self {
+        TrafficMeterMultiIpAddr::new(100)
+    }
+}
+
+impl TrafficMeterMultiIpAddr {
+    pub fn new(history_capacity: usize) -> Self {
+        let inner = Arc::new(Mutex::new((0, HashMap::new())));
+        Self {
+            inner,
+            history_capacity,
+        }
+    }
+    pub fn add_traffic(&self, ip: IpAddr, amount: usize) {
+        let mut guard = self.inner.lock();
+        guard.0 += amount as u64;
+        guard
+            .1
+            .entry(ip)
+            .or_insert(TrafficMeter::new(self.history_capacity))
+            .add_traffic(amount)
+    }
+    pub fn total(&self) -> u64 {
+        self.inner.lock().0
+    }
+    pub fn get_all(&self) -> (u64, HashMap<IpAddr, u64>) {
+        let guard = self.inner.lock();
+        (
+            guard.0,
+            guard.1.iter().map(|(ip, t)| (*ip, t.total())).collect(),
+        )
+    }
 }
 
 impl Default for TrafficMeterMultiAddress {

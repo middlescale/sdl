@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use std::io;
 
-use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
 use crate::command::ipc;
 
 pub struct CommandClient;
@@ -25,16 +25,8 @@ impl CommandClient {
     pub fn info(&mut self) -> io::Result<Info> {
         self.send_cmd(b"info")
     }
-    pub fn chart_a(&mut self) -> io::Result<ChartA> {
-        self.send_cmd(b"chart_a")
-    }
-    pub fn chart_b(&mut self, input: &str) -> io::Result<ChartB> {
-        let cmd = if input.is_empty() {
-            "chart_b".to_string()
-        } else {
-            format!("chart_b:{}", input)
-        };
-        self.send_cmd(cmd.as_bytes())
+    pub fn traffic(&mut self) -> io::Result<TrafficSummary> {
+        self.send_cmd(b"traffic")
     }
     pub fn channel_change(&mut self, input: &str) -> io::Result<String> {
         let cmd = format!("channel_change:{}", input.trim());

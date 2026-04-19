@@ -13,6 +13,7 @@ use protobuf::Message;
 use rand::RngCore;
 
 use crate::data_plane::route::RouteKey;
+use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::{now_time, CurrentDeviceInfo};
 use crate::proto::message::{
     GatewayAccessGrant, GatewayChannelKind, GatewayConnectAck, GatewayConnectHello,
@@ -47,6 +48,7 @@ pub struct GatewaySession {
     channel: GatewayTransport,
     started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
+    stats: DataPlaneStats,
 }
 
 #[derive(Clone)]
@@ -56,13 +58,14 @@ enum GatewayTransport {
 }
 
 impl GatewaySession {
-    fn new_quic(endpoint: SocketAddr, debug_watch: DebugWatch) -> Self {
+    fn new_quic(endpoint: SocketAddr, debug_watch: DebugWatch, stats: DataPlaneStats) -> Self {
         Self {
             endpoint,
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
             channel: GatewayTransport::Quic(QuicChannel::new(endpoint, endpoint.ip().to_string())),
             started: Arc::new(AtomicCell::new(false)),
             debug_watch,
+            stats,
         }
     }
 
@@ -70,6 +73,7 @@ impl GatewaySession {
         endpoint: SocketAddr,
         grant: &GatewayAccessGrant,
         debug_watch: DebugWatch,
+        stats: DataPlaneStats,
     ) -> anyhow::Result<Self> {
         let gateway_udp_public_key: [u8; 32] =
             grant
@@ -88,6 +92,7 @@ impl GatewaySession {
             )?),
             started: Arc::new(AtomicCell::new(false)),
             debug_watch,
+            stats,
         })
     }
 
@@ -96,20 +101,28 @@ impl GatewaySession {
             return Ok(());
         }
         let worker_name = format!("gateway-{}", sanitize_worker_name(self.endpoint));
+        let endpoint = self.endpoint;
+        let stats = self.stats.clone();
         let on_packet = on_packet.clone();
         match &self.channel {
             GatewayTransport::Quic(channel) => {
                 let on_packet = on_packet.clone();
+                let stats = stats.clone();
                 channel.start_named(
                     stop_manager.clone(),
                     &worker_name,
-                    move |packet, route_key| {
+                    move |packet: Vec<u8>, route_key| {
+                        stats.record_transport_down(endpoint.ip(), packet.len());
                         on_packet(packet, route_key);
                     },
                 )?
             }
             GatewayTransport::Udp(channel) => {
-                channel.start_named(stop_manager.clone(), &worker_name, on_packet)?
+                let callback: PacketCallback = Arc::new(move |packet: Vec<u8>, route_key| {
+                    stats.record_transport_down(endpoint.ip(), packet.len());
+                    on_packet(packet, route_key);
+                });
+                channel.start_named(stop_manager.clone(), &worker_name, callback)?
             }
         }
         Ok(())
@@ -256,6 +269,8 @@ impl GatewaySession {
             self.state.lock().authenticated = false;
             return Err(e);
         }
+        self.stats
+            .record_transport_up(self.endpoint.ip(), packet.buffer().as_ref().len());
         Ok(())
     }
 
@@ -413,12 +428,14 @@ pub struct GatewaySessions {
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     worker_started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
+    stats: DataPlaneStats,
 }
 
 impl GatewaySessions {
     pub fn new(
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         debug_watch: DebugWatch,
+        stats: DataPlaneStats,
     ) -> Self {
         Self {
             current_device,
@@ -426,6 +443,7 @@ impl GatewaySessions {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             worker_started: Arc::new(AtomicCell::new(false)),
             debug_watch,
+            stats,
         }
     }
 
@@ -556,7 +574,12 @@ impl GatewaySessions {
             } else {
                 let created = match kind {
                     GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
-                        match GatewaySession::new_udp(endpoint, grant, self.debug_watch.clone()) {
+                        match GatewaySession::new_udp(
+                            endpoint,
+                            grant,
+                            self.debug_watch.clone(),
+                            self.stats.clone(),
+                        ) {
                             Ok(session) => session,
                             Err(e) => {
                                 log::warn!(
@@ -568,7 +591,11 @@ impl GatewaySessions {
                             }
                         }
                     }
-                    _ => GatewaySession::new_quic(endpoint, self.debug_watch.clone()),
+                    _ => GatewaySession::new_quic(
+                        endpoint,
+                        self.debug_watch.clone(),
+                        self.stats.clone(),
+                    ),
                 };
                 guard.insert(endpoint, created.clone());
                 created
@@ -677,6 +704,7 @@ impl Default for GatewaySessions {
         Self::new(
             Arc::new(AtomicCell::new(CurrentDeviceInfo::new0())),
             DebugWatch::default(),
+            DataPlaneStats::new(true),
         )
     }
 }

@@ -119,12 +119,21 @@ fn broadcast(
                         err
                     );
                     gateway_sessions.send_relay(&peer_packet)?;
+                    channel.record_logical_up_traffic(peer_packet.buffer().len());
+                    channel.record_gateway_up_traffic(peer_packet.buffer().len());
+                    channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
                 } else {
                     return Err(err.into());
                 }
+            } else {
+                channel.record_logical_up_traffic(peer_packet.buffer().len());
+                channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
             }
         } else if channel.allows_gateway_relay() {
             gateway_sessions.send_relay(&peer_packet)?;
+            channel.record_logical_up_traffic(peer_packet.buffer().len());
+            channel.record_gateway_up_traffic(peer_packet.buffer().len());
+            channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
         }
     }
     Ok(())
@@ -216,6 +225,8 @@ pub(crate) fn handle(
             );
         }
         gateway_sessions.send_relay(&net_packet)?;
+        data_channel.record_logical_up_traffic(net_packet.buffer().len());
+        data_channel.record_gateway_up_traffic(net_packet.buffer().len());
         return Ok(());
     }
     if !Ipv4Addr::is_multicast(&dest_ip)
@@ -274,12 +285,21 @@ pub(crate) fn handle(
             if data_channel.allows_gateway_relay() {
                 log::debug!("p2p send failed for {}, fallback relay: {:?}", dest_ip, err);
                 gateway_sessions.send_relay(&net_packet)?;
+                data_channel.record_logical_up_traffic(net_packet.buffer().len());
+                data_channel.record_gateway_up_traffic(net_packet.buffer().len());
+                data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
             } else {
                 return Err(err.into());
             }
+        } else {
+            data_channel.record_logical_up_traffic(net_packet.buffer().len());
+            data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
         }
     } else if data_channel.allows_gateway_relay() {
         gateway_sessions.send_relay(&net_packet)?;
+        data_channel.record_logical_up_traffic(net_packet.buffer().len());
+        data_channel.record_gateway_up_traffic(net_packet.buffer().len());
+        data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
     } else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,

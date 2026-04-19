@@ -3,9 +3,9 @@ use mio::net::UdpSocket as MioUdpSocket;
 use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,7 @@ use crate::core::Config;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::nat::looks_like_stun_response;
-use crate::protocol::{BUFFER_SIZE, MAX_TTL, Protocol, Version, HEAD_LEN};
+use crate::protocol::{Protocol, Version, BUFFER_SIZE, HEAD_LEN, MAX_TTL};
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
@@ -32,11 +32,13 @@ static INVALID_UDP_INGRESS_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 static INVALID_UDP_INGRESS_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
     OnceLock::new();
 static GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-static GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER:
-    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
+static GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER: OnceLock<
+    crate::util::limit::ConcurrentRateLimiter,
+> = OnceLock::new();
 static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER:
-    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
+static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER: OnceLock<
+    crate::util::limit::ConcurrentRateLimiter,
+> = OnceLock::new();
 
 fn log_sampled_udp_ingress_drop(
     counter: &AtomicU64,
@@ -229,6 +231,7 @@ impl UdpChannel {
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
         self.driver.send_to(buf, addr)?;
         self.record_up_traffic(buf.len());
+        self.stats.record_transport_up(addr.ip(), buf.len());
         Ok(())
     }
 
@@ -259,8 +262,9 @@ impl UdpChannel {
             recv_handler,
             known_source,
             should_accept_udp_ingress_frame,
-            move |len| {
+            move |len, addr| {
                 channel.record_down_traffic(len);
+                channel.stats.record_transport_down(addr.ip(), len);
             },
         )
     }
@@ -331,7 +335,7 @@ impl UdpSocketDriver {
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
         A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
-        D: Fn(usize) + Clone + Send + Sync + 'static,
+        D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
     {
         listen(
             self.clone(),
@@ -382,7 +386,7 @@ where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
-    D: Fn(usize) + Clone + Send + Sync + 'static,
+    D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
 {
     let poll = Poll::new()?;
     let waker = Arc::new(Waker::new(poll.registry(), NOTIFY)?);
@@ -422,7 +426,7 @@ where
     H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
-    D: Fn(usize) + Clone + Send + Sync + 'static,
+    D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
 {
     let mut buf = [0; BUFFER_SIZE];
     let udp_socket = driver.socket.try_clone()?;
@@ -516,12 +520,8 @@ where
                             }
                             continue;
                         }
-                        down_traffic_hook(len);
-                        recv_handler(
-                            buf,
-                            &mut extend,
-                            RouteKey::new(ConnectProtocol::UDP, addr),
-                        )
+                        down_traffic_hook(len, addr);
+                        recv_handler(buf, &mut extend, RouteKey::new(ConnectProtocol::UDP, addr))
                     }
                     Err(e) => {
                         if e.kind() == io::ErrorKind::WouldBlock {
@@ -566,8 +566,8 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 mod tests {
     use super::{
         looks_like_sdl_udp_packet, normalize_recv_addr, normalize_send_addr,
-        should_accept_udp_ingress_frame, UnknownUdpIngressLimiter, UnknownUdpLimitDecision,
-        UdpChannel, UdpSocketDriver,
+        should_accept_udp_ingress_frame, UdpChannel, UdpSocketDriver, UnknownUdpIngressLimiter,
+        UnknownUdpLimitDecision,
     };
     use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
@@ -679,8 +679,7 @@ mod tests {
     #[test]
     fn accept_udp_ingress_frame_accepts_stun_response_shape() {
         let buf = [
-            0x01, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-            11,
+            0x01, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
         ];
 
         assert!(should_accept_udp_ingress_frame(&buf));

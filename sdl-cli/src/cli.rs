@@ -311,8 +311,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--all", ("后台运行时,查看其他设备完整信息", "View complete information of other devices when running in background")),
         ("--info", ("后台运行时,查看当前设备信息", "View information of current device when running in background")),
         ("--route", ("后台运行时,查看数据转发路径", "View data forwarding path when running in background")),
-        ("--chart_a", ("后台运行时,查看所有IP的流量统计", "View traffic statistics of all IPs when running in background")),
-        ("--chart_b <IP>", ("后台运行时,查看单个IP的历史流量", "View historical traffic of a single IP when running in background")),
         ("--stop", ("停止后台运行", "Stop running in background"))
         // ... 其他选项
     ]
@@ -477,14 +475,6 @@ fn print_usage(program: &str, _opts: Options) {
         println!(
             "  --route             {}",
             yellow(get_description("--route", &language).to_string())
-        );
-        println!(
-            "  --chart_a           {}",
-            yellow(get_description("--chart_a", &language).to_string())
-        );
-        println!(
-            "  --chart_b <IP>      {}",
-            yellow(get_description("--chart_b <IP>", &language).to_string())
         );
         println!(
             "  --stop              {}",

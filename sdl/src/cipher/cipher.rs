@@ -62,7 +62,9 @@ impl CipherModel {
         }
         #[cfg(not(feature = "aes_gcm"))]
         {
-            Err(anyhow::anyhow!("runtime cipher aes_gcm support is required"))
+            Err(anyhow::anyhow!(
+                "runtime cipher aes_gcm support is required"
+            ))
         }
     }
 

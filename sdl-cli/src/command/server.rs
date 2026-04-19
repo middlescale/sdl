@@ -1,4 +1,4 @@
-use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
 use crate::command::ipc;
 use interprocess::local_socket::traits::ListenerExt;
 use sdl::data_plane::use_channel_type::UseChannelType;
@@ -26,8 +26,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn route(&self) -> io::Result<Vec<RouteItem>>;
     fn list(&self) -> io::Result<Vec<DeviceItem>>;
     fn info(&self) -> io::Result<Info>;
-    fn chart_a(&self) -> io::Result<ChartA>;
-    fn chart_b(&self, input: Option<&str>) -> io::Result<ChartB>;
+    fn traffic(&self) -> io::Result<TrafficSummary>;
     fn resume_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String>;
@@ -88,21 +87,14 @@ where
             "info" => {
                 serde_yaml::to_string(&handler.info()?).unwrap_or_else(|e| format!("error {:?}", e))
             }
-            "chart_a" => serde_yaml::to_string(&handler.chart_a()?)
+            "traffic" => serde_yaml::to_string(&handler.traffic()?)
                 .unwrap_or_else(|e| format!("error {:?}", e)),
             "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
                 .unwrap_or_else(|e| format!("error {:?}", e)),
             "suspend" => serde_yaml::to_string(&handler.suspend_runtime()?)
                 .unwrap_or_else(|e| format!("error {:?}", e)),
             _ => {
-                if let Some(ip) = cmd.strip_prefix("chart_b") {
-                    let chart = if ip.is_empty() {
-                        handler.chart_b(None)?
-                    } else {
-                        handler.chart_b(Some(&ip[1..]))?
-                    };
-                    serde_yaml::to_string(&chart).unwrap_or_else(|e| format!("error {:?}", e))
-                } else if let Some(value) = cmd.strip_prefix("channel_change:") {
+                if let Some(value) = cmd.strip_prefix("channel_change:") {
                     match UseChannelType::from_str(value.trim()) {
                         Ok(use_channel_type) => {
                             serde_yaml::to_string(&handler.channel_change(use_channel_type)?)
@@ -151,11 +143,8 @@ mod tests {
         fn info(&self) -> io::Result<Info> {
             Err(io::Error::other("unused"))
         }
-        fn chart_a(&self) -> io::Result<ChartA> {
-            Err(io::Error::other("unused"))
-        }
-        fn chart_b(&self, _input: Option<&str>) -> io::Result<ChartB> {
-            Err(io::Error::other("unused"))
+        fn traffic(&self) -> io::Result<TrafficSummary> {
+            Ok(TrafficSummary::default())
         }
         fn resume_runtime(&self) -> io::Result<String> {
             Ok("ok".to_string())
@@ -217,10 +206,7 @@ mod tests {
         fn info(&self) -> io::Result<Info> {
             Err(io::Error::other("unused"))
         }
-        fn chart_a(&self) -> io::Result<ChartA> {
-            Err(io::Error::other("unused"))
-        }
-        fn chart_b(&self, _input: Option<&str>) -> io::Result<ChartB> {
+        fn traffic(&self) -> io::Result<TrafficSummary> {
             Err(io::Error::other("unused"))
         }
         fn resume_runtime(&self) -> io::Result<String> {

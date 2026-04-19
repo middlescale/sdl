@@ -105,6 +105,42 @@ impl DataChannel {
         }
     }
 
+    pub fn record_peer_up_traffic(&self, vip: Ipv4Addr, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_peer_up(vip, len);
+        }
+    }
+
+    pub fn record_peer_down_traffic(&self, vip: Ipv4Addr, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_peer_down(vip, len);
+        }
+    }
+
+    pub fn record_logical_up_traffic(&self, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_logical_up(len);
+        }
+    }
+
+    pub fn record_logical_down_traffic(&self, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_logical_down(len);
+        }
+    }
+
+    pub fn record_gateway_up_traffic(&self, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_gateway_up(len);
+        }
+    }
+
+    pub fn record_gateway_down_traffic(&self, len: usize) {
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.data_plane_stats.record_gateway_down(len);
+        }
+    }
+
     fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {
         select_data_path(
             runtime.route_manager().use_channel_type(),

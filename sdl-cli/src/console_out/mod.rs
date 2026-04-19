@@ -1,8 +1,7 @@
 use console::{style, Style};
-use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
-use crate::command::entity::{ChartA, ChartB, DeviceItem, Info, RouteItem};
+use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
 
 pub mod table;
 
@@ -144,7 +143,11 @@ fn convert(num: u64) -> String {
     if remaining_bytes > 0 {
         s.push_str(&format!("{} bytes", remaining_bytes));
     }
-    s
+    if s.is_empty() {
+        "0 bytes".to_string()
+    } else {
+        s
+    }
 }
 
 pub fn console_route_table(mut list: Vec<RouteItem>) {
@@ -290,119 +293,67 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
     table::println_table(out_list)
 }
 
-pub fn console_chart_a(chart_a: ChartA) {
-    if chart_a.disable_stats {
-        println!("Traffic statistics not enabled");
+pub fn console_traffic(mut summary: TrafficSummary) {
+    if summary.disable_stats {
+        println!("Traffic stats disabled");
         return;
     }
+    if summary.peer_items.is_empty() && summary.transport_items.is_empty() {
+        println!("No traffic data");
+        return;
+    }
+    summary
+        .peer_items
+        .sort_by(|a, b| a.virtual_ip.cmp(&b.virtual_ip));
+    println!("Peer traffic");
+    let mut peer_list = Vec::with_capacity(summary.peer_items.len() + 2);
+    peer_list.push(vec![
+        ("Name".to_string(), Style::new()),
+        ("Virtual Ip".to_string(), Style::new()),
+        ("Status".to_string(), Style::new()),
+        ("Up".to_string(), Style::new()),
+        ("Down".to_string(), Style::new()),
+    ]);
+    for item in summary.peer_items {
+        peer_list.push(vec![
+            (item.name, Style::new().green()),
+            (item.virtual_ip, Style::new().green()),
+            (item.status, Style::new().green()),
+            (convert(item.up_total), Style::new().green()),
+            (convert(item.down_total), Style::new().green()),
+        ]);
+    }
+    peer_list.push(vec![
+        ("total".to_string(), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
+        (convert(summary.peer_up_total), Style::new().yellow()),
+        (convert(summary.peer_down_total), Style::new().yellow()),
+    ]);
+    table::println_table(peer_list);
+
     println!();
-    println!("-----------------------------------------------------------------");
-    println!(
-        "Upload total = {}",
-        style(convert(chart_a.up_total)).green()
-    );
-    println!(
-        "Download total = {}",
-        style(convert(chart_a.down_total)).green()
-    );
-    println!("-----------------------------------------------------------------");
-    let up_keys: HashSet<_> = chart_a.up_map.keys().cloned().collect();
-    let down_keys: HashSet<_> = chart_a.down_map.keys().cloned().collect();
-    let mut keys: Vec<usize> = up_keys.union(&down_keys).cloned().collect();
-    // 排序
-    keys.sort();
-
-    // 找到最大的值，用于缩放条形图长度
-    let up_max_value = *chart_a.up_map.values().max().unwrap_or(&0);
-    let down_max_value = *chart_a.down_map.values().max().unwrap_or(&0);
-    let max_value = up_max_value.max(down_max_value);
-    let max_value = max_value.max(1);
-    let max_height = 50;
-    // 打印条形图
-    for key in &keys {
-        if let Some(&value) = chart_a.up_map.get(key) {
-            let bar = "█".repeat(((value as f64 / max_value as f64) * max_height as f64) as usize);
-            println!(
-                "{:<10} | {} upload {}",
-                format!("ch-{}", key),
-                bar,
-                style(convert(value)).green()
-            );
-        }
-        if let Some(&value) = chart_a.down_map.get(key) {
-            let bar = "█".repeat(((value as f64 / max_value as f64) * max_height as f64) as usize);
-            println!(
-                "{:<10} | {} download {}",
-                format!("ch-{}", key),
-                bar,
-                style(convert(value)).green()
-            );
-        }
-        println!("-");
+    println!("Transport traffic");
+    summary
+        .transport_items
+        .sort_by(|a, b| a.remote_ip.cmp(&b.remote_ip));
+    let mut transport_list = Vec::with_capacity(summary.transport_items.len() + 2);
+    transport_list.push(vec![
+        ("Remote Ip".to_string(), Style::new()),
+        ("Up".to_string(), Style::new()),
+        ("Down".to_string(), Style::new()),
+    ]);
+    for item in summary.transport_items {
+        transport_list.push(vec![
+            (item.remote_ip, Style::new().green()),
+            (convert(item.up_total), Style::new().green()),
+            (convert(item.down_total), Style::new().green()),
+        ]);
     }
-}
-
-pub fn console_chart_b(chart_b: ChartB) {
-    if chart_b.disable_stats {
-        println!("Traffic statistics not enabled");
-        return;
-    }
-    let channel = if let Some(channel) = chart_b.channel {
-        channel
-    } else {
-        println!("Channel: None");
-        return;
-    };
-    println!("----------------------------  upload  ----------------------------");
-    println!("Channel: {}", channel);
-    println!("Upload total: {}", style(convert(chart_b.up_total)).green());
-    println!(
-        "Max: {}",
-        style(convert(
-            chart_b
-                .up_list
-                .iter()
-                .max()
-                .cloned()
-                .map_or(0, |v| v as u64)
-        ))
-        .green()
-    );
-    console_chart_b_list(chart_b.up_list);
-    println!("---------------------------- download ----------------------------");
-    println!("Channel: {}", channel);
-    println!(
-        "Download total: {}",
-        style(convert(chart_b.down_total)).green()
-    );
-    println!(
-        "Max: {}",
-        style(convert(
-            chart_b
-                .down_list
-                .iter()
-                .max()
-                .cloned()
-                .map_or(0, |v| v as u64)
-        ))
-        .green()
-    );
-    console_chart_b_list(chart_b.down_list);
-}
-fn console_chart_b_list(list: Vec<usize>) {
-    let max_value = *list.iter().max().unwrap_or(&0);
-    let max_value = max_value.max(1);
-    let max_height = max_value.min(20);
-    // 遍历从最大高度到0
-    for i in (0..=max_height).rev() {
-        for &value in &list {
-            let scaled_value = (value as f64 / max_value as f64 * max_height as f64) as usize;
-            if scaled_value >= i {
-                print!("█");
-            } else {
-                print!(" ");
-            }
-        }
-        println!();
-    }
+    transport_list.push(vec![
+        ("total".to_string(), Style::new().yellow()),
+        (convert(summary.transport_up_total), Style::new().yellow()),
+        (convert(summary.transport_down_total), Style::new().yellow()),
+    ]);
+    table::println_table(transport_list)
 }

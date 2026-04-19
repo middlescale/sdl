@@ -398,7 +398,13 @@ impl Punch {
                     };
                     let mut nums: Vec<u16> = (min_port..=max_port).collect();
                     nums.shuffle(&mut rand::thread_rng());
-                    self.punch_symmetric(id, &nums[..k], buf, &nat_info.public_ips, max_k1 as usize)?;
+                    self.punch_symmetric(
+                        id,
+                        &nums[..k],
+                        buf,
+                        &nat_info.public_ips,
+                        max_k1 as usize,
+                    )?;
                 }
                 let start = *self.port_index.entry(id).or_insert(0);
                 let mut end = start + max_k2;

@@ -117,7 +117,7 @@ impl GatewayUdpChannel {
             },
             |_| true,
             |_| true,
-            |_| {},
+            |_, _| {},
         )
     }
 
