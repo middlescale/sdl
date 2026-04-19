@@ -92,6 +92,7 @@ pub struct SdlRuntime {
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
+    pub peer_probe_tracker: Arc<crate::util::PeerProbeTracker>,
     pub debug_watch: DebugWatch,
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,

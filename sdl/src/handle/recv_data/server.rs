@@ -2,9 +2,9 @@ use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -36,8 +36,9 @@ use crate::{proto, DnsProfile, PeerClientInfo};
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 static UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-static UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER:
-    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
+static UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER: OnceLock<
+    crate::util::limit::ConcurrentRateLimiter,
+> = OnceLock::new();
 
 fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr: SocketAddr) {
     let count = UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1396,8 +1397,8 @@ mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         format_punch_endpoint, log_sampled_unauthorized_server_source_drop,
-        observed_udp_port_from_registration, punch_endpoint_from_route, selected_endpoint_for_result,
-        should_refresh_gateway_grant_after_registration,
+        observed_udp_port_from_registration, punch_endpoint_from_route,
+        selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
     };
     use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;

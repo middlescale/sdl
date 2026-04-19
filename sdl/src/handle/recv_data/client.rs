@@ -1,8 +1,8 @@
 use anyhow::anyhow;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use protobuf::Message;
 
@@ -156,7 +156,13 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         if !self.decrypt_by_route(&source, route_key, &mut net_packet)? {
             return Ok(());
         }
-        self.runtime.route_manager().touch_path(&source, &route_key);
+        if self
+            .runtime
+            .route_manager()
+            .has_direct_path(&source, &route_key)
+        {
+            self.runtime.route_manager().touch_path(&source, &route_key);
+        }
         //处理扩展
         let net_packet = if net_packet.is_extension() {
             //这样重用数组，减少一次数据拷贝
@@ -318,10 +324,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         let source = net_packet.source();
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PingPacket(_) => {
-                let route = Route::from_default_rt(route_key, metric);
-                self.runtime
-                    .route_manager()
-                    .add_path_if_absent(source, route);
                 net_packet.set_transport_protocol(control_packet::Protocol::Pong.into());
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
@@ -332,6 +334,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
                 if current_time < pong_packet.time() {
+                    return Ok(());
+                }
+                if !self.runtime.peer_probe_tracker.match_ping_response(
+                    source,
+                    route_key,
+                    pong_packet.epoch(),
+                ) {
                     return Ok(());
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
@@ -382,6 +391,13 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     .runtime
                     .nat_test
                     .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
+                {
+                    return Ok(());
+                }
+                if !self
+                    .runtime
+                    .peer_probe_tracker
+                    .match_punch_response(source, route_key.addr)
                 {
                     return Ok(());
                 }

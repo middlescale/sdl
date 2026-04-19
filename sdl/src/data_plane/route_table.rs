@@ -143,6 +143,18 @@ impl RouteTable {
         self.direct_route_keys.read().contains(route_key)
     }
 
+    pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
+        self.route_table
+            .read()
+            .get(vip)
+            .map(|routes| {
+                routes
+                    .iter()
+                    .any(|(route, _)| route.is_p2p() && &route.route_key() == route_key)
+            })
+            .unwrap_or(false)
+    }
+
     pub fn no_need_punch(&self, vip: &Ipv4Addr) -> bool {
         self.route_table
             .read()

@@ -15,7 +15,7 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::{PeerCryptoManager, PeerProbeTracker, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
@@ -25,6 +25,7 @@ const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
 pub struct RouteManager {
     route_table: Arc<RouteTable>,
     peer_crypto: Arc<PeerCryptoManager>,
+    peer_probe_tracker: Arc<PeerProbeTracker>,
     peer_encrypt: bool,
     sender: Option<RouteSender>,
     direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
@@ -54,6 +55,7 @@ impl RouteManager {
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         peer_crypto: Arc<PeerCryptoManager>,
+        peer_probe_tracker: Arc<PeerProbeTracker>,
         peer_encrypt: bool,
         heartbeat_interval: Duration,
         stale_direct_timeout: Duration,
@@ -61,6 +63,7 @@ impl RouteManager {
         let manager = Self {
             route_table,
             peer_crypto,
+            peer_probe_tracker,
             peer_encrypt,
             sender: Some(RouteSender { udp_channel }),
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
@@ -76,6 +79,7 @@ impl RouteManager {
         Self {
             route_table,
             peer_crypto: Arc::new(PeerCryptoManager::new(0)),
+            peer_probe_tracker: Arc::new(PeerProbeTracker::new(0)),
             peer_encrypt: true,
             sender: None,
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
@@ -106,6 +110,10 @@ impl RouteManager {
 
     pub fn add_path(&self, vip: Ipv4Addr, route: Route) {
         self.route_table.add_route(vip, route)
+    }
+
+    pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
+        self.route_table.has_direct_path(vip, route_key)
     }
 
     pub fn best_route(&self, vip: &Ipv4Addr) -> Option<Route> {
@@ -238,20 +246,24 @@ impl RouteManager {
             if current_device.is_gateway_vip(&dest_ip) {
                 continue;
             }
-            let net_packets = match self.heartbeat_packets_for_peer(src_ip, dest_ip) {
-                Ok(net_packets) if !net_packets.is_empty() => net_packets,
-                Ok(_) => continue,
-                Err(e) => {
-                    log::error!("heartbeat_packet err={:?}", e);
-                    continue;
-                }
-            };
             for route in &routes {
                 if !route.is_p2p() {
                     continue;
                 }
+                let route_key = route.route_key();
+                let epoch = self
+                    .peer_probe_tracker
+                    .record_ping_probe(dest_ip, route_key);
+                let net_packets = match self.heartbeat_packets_for_peer(src_ip, dest_ip, epoch) {
+                    Ok(net_packets) if !net_packets.is_empty() => net_packets,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        log::error!("heartbeat_packet err={:?}", e);
+                        continue;
+                    }
+                };
                 for net_packet in &net_packets {
-                    if let Err(e) = self.send_by_key(sender, net_packet, route.route_key()) {
+                    if let Err(e) = self.send_by_key(sender, net_packet, route_key) {
                         log::warn!("heartbeat err={:?}", e)
                     }
                 }
@@ -289,13 +301,19 @@ impl RouteManager {
         &self,
         src_ip: Ipv4Addr,
         dest_ip: Ipv4Addr,
+        epoch: u16,
     ) -> anyhow::Result<Vec<NetPacket<Vec<u8>>>> {
         if !self.peer_encrypt {
-            return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip)?]);
+            return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip, epoch)?]);
         }
         let mut packets = Vec::with_capacity(2);
         match self.peer_crypto.current_cipher(&dest_ip) {
-            Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+            Ok(cipher) => packets.push(heartbeat_packet_client(
+                Some(cipher),
+                src_ip,
+                dest_ip,
+                epoch,
+            )?),
             Err(err) if !self.peer_crypto.is_grace_active() => {
                 log::debug!(
                     "skip heartbeat without current peer session cipher for {}: {:?}",
@@ -314,7 +332,12 @@ impl RouteManager {
         }
         if self.peer_crypto.is_grace_active() {
             match self.peer_crypto.previous_cipher(&dest_ip) {
-                Ok(cipher) => packets.push(heartbeat_packet_client(Some(cipher), src_ip, dest_ip)?),
+                Ok(cipher) => packets.push(heartbeat_packet_client(
+                    Some(cipher),
+                    src_ip,
+                    dest_ip,
+                    epoch,
+                )?),
                 Err(err) if packets.is_empty() => {
                     log::debug!(
                         "skip heartbeat without grace cipher for {}: {:?}",
@@ -418,7 +441,11 @@ fn wait_for_stop(stop_manager: &StopManager, duration: Duration) -> bool {
     stop_manager.is_stopped()
 }
 
-fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<Vec<u8>>> {
+fn heartbeat_packet(
+    src: Ipv4Addr,
+    dest: Ipv4Addr,
+    epoch: u16,
+) -> anyhow::Result<NetPacket<Vec<u8>>> {
     let mut net_packet = NetPacket::new(vec![0u8; HEAD_LEN + 4])?;
     net_packet.set_default_version();
     net_packet.set_protocol(Protocol::Control);
@@ -428,6 +455,7 @@ fn heartbeat_packet(src: Ipv4Addr, dest: Ipv4Addr) -> anyhow::Result<NetPacket<V
     net_packet.set_destination(dest);
     let mut ping = PingPacket::new(net_packet.payload_mut())?;
     ping.set_time(crate::handle::now_time() as u16);
+    ping.set_epoch(epoch);
     Ok(net_packet)
 }
 
@@ -435,6 +463,7 @@ fn heartbeat_packet_client(
     cipher: Option<Cipher>,
     src: Ipv4Addr,
     dest: Ipv4Addr,
+    epoch: u16,
 ) -> anyhow::Result<NetPacket<Vec<u8>>> {
     let mut net_packet = if cipher.is_some() {
         let mut net_packet = NetPacket::new_encrypt(vec![0u8; HEAD_LEN + 4 + ENCRYPTION_RESERVED])?;
@@ -446,9 +475,10 @@ fn heartbeat_packet_client(
         net_packet.set_destination(dest);
         let mut ping = PingPacket::new(net_packet.payload_mut())?;
         ping.set_time(crate::handle::now_time() as u16);
+        ping.set_epoch(epoch);
         net_packet
     } else {
-        heartbeat_packet(src, dest)?
+        heartbeat_packet(src, dest, epoch)?
     };
     if let Some(cipher) = cipher {
         cipher.encrypt_ipv4(&mut net_packet)?;
@@ -487,6 +517,7 @@ mod tests {
             Some(cipher.clone()),
             Ipv4Addr::new(10, 0, 0, 1),
             Ipv4Addr::new(10, 0, 0, 2),
+            7,
         )
         .expect("heartbeat packet");
         assert!(packet.is_encrypt());
@@ -629,7 +660,7 @@ mod tests {
             )]));
 
         let packets = manager
-            .heartbeat_packets_for_peer(Ipv4Addr::new(10, 0, 0, 1), peer)
+            .heartbeat_packets_for_peer(Ipv4Addr::new(10, 0, 0, 1), peer, 9)
             .expect("heartbeat packets");
 
         assert_eq!(packets.len(), 2);
