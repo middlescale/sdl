@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use crate::core::SdlRuntime;
@@ -14,6 +16,27 @@ use crate::tun_tap_device::vnt_device::DeviceWrite;
 mod client;
 mod server;
 mod turn;
+
+static STALE_PACKET_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static STALE_PACKET_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+
+fn log_sampled_stale_drop(head: &[u8], route_addr: std::net::SocketAddr) {
+    let count = STALE_PACKET_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if STALE_PACKET_DROP_LOG_LIMITER
+        .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
+        .try_acquire()
+    {
+        let sampled = STALE_PACKET_DROP_COUNT.swap(0, Ordering::Relaxed);
+        let total = sampled.max(count);
+        log::warn!(
+            "dropping stale packets (sample head={:?}, addr={}, count={})",
+            head,
+            route_addr,
+            total
+        );
+    }
+}
 
 #[derive(Clone)]
 pub struct RecvDataHandler<Call, Device> {
@@ -77,7 +100,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
 
         let extend = NetPacket::unchecked(extend);
         if net_packet.ttl() == 0 || net_packet.origin_ttl() < net_packet.ttl() {
-            log::warn!("丢弃过时包:{:?} {}", net_packet.head(), route_key.addr);
+            log_sampled_stale_drop(net_packet.head(), route_key.addr);
             return Ok(());
         }
         let current_device = self.runtime.current_device.load();

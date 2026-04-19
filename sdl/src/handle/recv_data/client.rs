@@ -1,6 +1,8 @@
 use anyhow::anyhow;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use protobuf::Message;
 
@@ -21,6 +23,32 @@ use crate::protocol::{
     control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
 };
 use crate::tun_tap_device::vnt_device::DeviceWrite;
+
+static UNKNOWN_PEER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static UNKNOWN_PEER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+static UNENCRYPTED_PEER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static UNENCRYPTED_PEER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+static INVALID_CIPHER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static INVALID_CIPHER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+
+fn log_sampled_drop(
+    counter: &AtomicU64,
+    limiter: &'static OnceLock<crate::util::limit::ConcurrentRateLimiter>,
+    message: impl FnOnce(u64) -> String,
+) {
+    let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+    if limiter
+        .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
+        .try_acquire()
+    {
+        let sampled = counter.swap(0, Ordering::Relaxed);
+        let total = sampled.max(count);
+        log::debug!("{}", message(total));
+    }
+}
 /// 处理来源于客户端的包
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
@@ -40,21 +68,30 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<bool> {
         if !net_packet.is_encrypt() {
-            log::debug!(
-                "drop unencrypted peer packet from {} via {:?}",
-                peer_ip,
-                route_key
+            log_sampled_drop(
+                &UNENCRYPTED_PEER_DROP_COUNT,
+                &UNENCRYPTED_PEER_DROP_LOG_LIMITER,
+                |count| {
+                    format!(
+                        "dropping unencrypted peer packets (sample via {:?}, peer={}, count={})",
+                        route_key, peer_ip, count
+                    )
+                },
             );
             return Ok(false);
         }
         match self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet) {
             Ok(()) => Ok(true),
             Err(err) => {
-                log::debug!(
-                    "drop peer packet with invalid cipher from {} via {:?}: {:?}",
-                    peer_ip,
-                    route_key,
-                    err
+                log_sampled_drop(
+                    &INVALID_CIPHER_DROP_COUNT,
+                    &INVALID_CIPHER_DROP_LOG_LIMITER,
+                    |count| {
+                        format!(
+                            "dropping peer packets with invalid cipher (sample via {:?}, peer={}, err={:?}, count={})",
+                            route_key, peer_ip, err, count
+                        )
+                    },
                 );
                 Ok(false)
             }
@@ -104,10 +141,15 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
         if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
-            log::debug!(
-                "drop packet from unknown peer {} via {:?}",
-                source,
-                route_key
+            log_sampled_drop(
+                &UNKNOWN_PEER_DROP_COUNT,
+                &UNKNOWN_PEER_DROP_LOG_LIMITER,
+                |count| {
+                    format!(
+                        "dropping packets from unknown peer (sample via {:?}, peer={}, count={})",
+                        route_key, source, count
+                    )
+                },
             );
             return Ok(());
         }
