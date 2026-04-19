@@ -3,16 +3,67 @@ use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 use crate::core::Config;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::stats::DataPlaneStats;
-use crate::protocol::BUFFER_SIZE;
+use crate::nat::looks_like_stun_response;
+use crate::protocol::{BUFFER_SIZE, MAX_TTL, Protocol, Version, HEAD_LEN};
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
 const NOTIFY: Token = Token(0);
+static SHORT_UDP_INGRESS_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static SHORT_UDP_INGRESS_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+static INVALID_UDP_INGRESS_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static INVALID_UDP_INGRESS_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+
+fn log_sampled_udp_ingress_drop(
+    counter: &AtomicU64,
+    limiter: &'static OnceLock<crate::util::limit::ConcurrentRateLimiter>,
+    message: impl FnOnce(u64) -> String,
+) {
+    let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+    if limiter
+        .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
+        .try_acquire()
+    {
+        let sampled = counter.swap(0, Ordering::Relaxed);
+        let total = sampled.max(count);
+        log::debug!("{}", message(total));
+    }
+}
+
+fn looks_like_sdl_udp_packet(buf: &[u8]) -> bool {
+    if buf.len() < HEAD_LEN {
+        return false;
+    }
+    if !matches!(Version::from(buf[0] & 0x0F), Version::V2 | Version::V3) {
+        return false;
+    }
+    if !matches!(
+        Protocol::from(buf[1]),
+        Protocol::Service
+            | Protocol::Error
+            | Protocol::Control
+            | Protocol::IpTurn
+            | Protocol::OtherTurn
+    ) {
+        return false;
+    }
+    let ttl = buf[3] & MAX_TTL;
+    let origin_ttl = buf[3] >> 4;
+    ttl != 0 && origin_ttl >= ttl
+}
+
+fn should_accept_udp_ingress_frame(buf: &[u8]) -> bool {
+    looks_like_stun_response(buf) || looks_like_sdl_udp_packet(buf)
+}
 
 #[derive(Clone)]
 pub struct UdpChannel {
@@ -264,9 +315,38 @@ where
             loop {
                 match udp.recv_from(&mut buf) {
                     Ok((len, addr)) => {
+                        let buf = &mut buf[..len];
+                        if !should_accept_udp_ingress_frame(buf) {
+                            let addr = normalize_recv_addr(addr);
+                            if len < HEAD_LEN {
+                                log_sampled_udp_ingress_drop(
+                                    &SHORT_UDP_INGRESS_DROP_COUNT,
+                                    &SHORT_UDP_INGRESS_DROP_LOG_LIMITER,
+                                    |count| {
+                                        format!(
+                                            "dropping too-short udp ingress frames (sample addr={}, len={}, count={})",
+                                            addr, len, count
+                                        )
+                                    },
+                                );
+                            } else {
+                                let head = &buf[..HEAD_LEN];
+                                log_sampled_udp_ingress_drop(
+                                    &INVALID_UDP_INGRESS_DROP_COUNT,
+                                    &INVALID_UDP_INGRESS_DROP_LOG_LIMITER,
+                                    |count| {
+                                        format!(
+                                            "dropping invalid udp ingress frames (sample addr={}, head={:?}, count={})",
+                                            addr, head, count
+                                        )
+                                    },
+                                );
+                            }
+                            continue;
+                        }
                         down_traffic_hook(len);
                         recv_handler(
-                            &mut buf[..len],
+                            buf,
                             &mut extend,
                             RouteKey::new(ConnectProtocol::UDP, normalize_recv_addr(addr)),
                         )
@@ -312,7 +392,10 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_recv_addr, normalize_send_addr, UdpChannel, UdpSocketDriver};
+    use super::{
+        looks_like_sdl_udp_packet, normalize_recv_addr, normalize_send_addr,
+        should_accept_udp_ingress_frame, UdpChannel, UdpSocketDriver,
+    };
     use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -418,5 +501,55 @@ mod tests {
             channel.down_traffic_all(),
             Some((12, std::collections::HashMap::from([(0_usize, 12_u64)])))
         );
+    }
+
+    #[test]
+    fn accept_udp_ingress_frame_accepts_stun_response_shape() {
+        let buf = [
+            0x01, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            11,
+        ];
+
+        assert!(should_accept_udp_ingress_frame(&buf));
+    }
+
+    #[test]
+    fn looks_like_sdl_udp_packet_accepts_valid_head() {
+        let mut buf = [0_u8; 12];
+        buf[0] = 3;
+        buf[1] = 1;
+        buf[3] = 0x11;
+
+        assert!(looks_like_sdl_udp_packet(&buf));
+    }
+
+    #[test]
+    fn looks_like_sdl_udp_packet_rejects_unknown_version() {
+        let mut buf = [0_u8; 12];
+        buf[0] = 1;
+        buf[1] = 1;
+        buf[3] = 0x11;
+
+        assert!(!looks_like_sdl_udp_packet(&buf));
+    }
+
+    #[test]
+    fn looks_like_sdl_udp_packet_rejects_unknown_protocol() {
+        let mut buf = [0_u8; 12];
+        buf[0] = 3;
+        buf[1] = 99;
+        buf[3] = 0x11;
+
+        assert!(!looks_like_sdl_udp_packet(&buf));
+    }
+
+    #[test]
+    fn looks_like_sdl_udp_packet_rejects_invalid_ttl_shape() {
+        let mut buf = [0_u8; 12];
+        buf[0] = 3;
+        buf[1] = 1;
+        buf[3] = 0x01;
+
+        assert!(!looks_like_sdl_udp_packet(&buf));
     }
 }

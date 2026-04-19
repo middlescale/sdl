@@ -20,6 +20,7 @@ use crate::util::UPnP;
 pub mod punch;
 pub mod punch_workers;
 mod stun;
+pub(crate) use stun::looks_like_stun_response;
 
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 
