@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -33,6 +35,26 @@ use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::{proto, DnsProfile, PeerClientInfo};
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
+static UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER:
+    OnceLock<crate::util::limit::ConcurrentRateLimiter> = OnceLock::new();
+
+fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr: SocketAddr) {
+    let count = UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER
+        .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
+        .try_acquire()
+    {
+        let sampled = UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT.swap(0, Ordering::Relaxed);
+        let total = sampled.max(count);
+        log::debug!(
+            "dropping packets from unauthorized control/gateway source (sample route_key={:?}, control_addr={}, count={})",
+            route_key,
+            control_addr,
+            total
+        );
+    }
+}
 
 /// 处理来源于服务端的包
 #[derive(Clone)]
@@ -79,12 +101,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 .gateway_sessions
                 .is_gateway_addr(route_key.addr)
         {
-            // 拦截既不是控制端也不是已授权网关的数据
-            log::warn!(
-                "route_key={:?}, not from control server {} or gateway endpoint",
+            log_sampled_unauthorized_server_source_drop(
                 route_key,
-                self.runtime.control_session.server_addr()
+                self.runtime.control_session.server_addr(),
             );
+            return Ok(());
         }
         self.runtime
             .route_manager()
@@ -1374,8 +1395,9 @@ fn should_refresh_gateway_grant_after_registration(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        format_punch_endpoint, observed_udp_port_from_registration, punch_endpoint_from_route,
-        selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
+        format_punch_endpoint, log_sampled_unauthorized_server_source_drop,
+        observed_udp_port_from_registration, punch_endpoint_from_route, selected_endpoint_for_result,
+        should_refresh_gateway_grant_after_registration,
     };
     use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;
@@ -1522,5 +1544,16 @@ mod tests {
         assert!(!should_refresh_gateway_grant_after_registration(
             false, false
         ));
+    }
+
+    #[test]
+    fn unauthorized_server_source_drop_logger_is_callable() {
+        log_sampled_unauthorized_server_source_drop(
+            crate::data_plane::route::RouteKey::new(
+                ConnectProtocol::UDP,
+                "198.51.100.10:29901".parse().unwrap(),
+            ),
+            "203.0.113.10:4242".parse().unwrap(),
+        );
     }
 }
