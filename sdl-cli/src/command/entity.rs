@@ -29,6 +29,16 @@ pub struct Info {
     pub udp_listen_addr: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct GatewayItem {
+    pub gateway_id: String,
+    pub endpoint: String,
+    pub channel: String,
+    pub status: String,
+    pub rt_ms: String,
+    pub active: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RouteItem {
     pub name: String,

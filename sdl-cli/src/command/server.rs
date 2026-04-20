@@ -1,4 +1,4 @@
-use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
 use crate::command::ipc;
 use interprocess::local_socket::traits::ListenerExt;
 use sdl::data_plane::use_channel_type::UseChannelType;
@@ -26,6 +26,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn route(&self) -> io::Result<Vec<RouteItem>>;
     fn list(&self) -> io::Result<Vec<DeviceItem>>;
     fn info(&self) -> io::Result<Info>;
+    fn gateway(&self) -> io::Result<Vec<GatewayItem>>;
     fn traffic(&self) -> io::Result<TrafficSummary>;
     fn resume_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
@@ -87,6 +88,8 @@ where
             "info" => {
                 serde_yaml::to_string(&handler.info()?).unwrap_or_else(|e| format!("error {:?}", e))
             }
+            "gateway" => serde_yaml::to_string(&handler.gateway()?)
+                .unwrap_or_else(|e| format!("error {:?}", e)),
             "traffic" => serde_yaml::to_string(&handler.traffic()?)
                 .unwrap_or_else(|e| format!("error {:?}", e)),
             "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
@@ -142,6 +145,9 @@ mod tests {
         }
         fn info(&self) -> io::Result<Info> {
             Err(io::Error::other("unused"))
+        }
+        fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
+            Ok(Vec::new())
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {
             Ok(TrafficSummary::default())
@@ -204,6 +210,9 @@ mod tests {
             Err(io::Error::other("unused"))
         }
         fn info(&self) -> io::Result<Info> {
+            Err(io::Error::other("unused"))
+        }
+        fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
             Err(io::Error::other("unused"))
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {

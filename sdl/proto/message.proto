@@ -52,6 +52,7 @@ message RegistrationResponse {
     uint32 error_code = 10;
     string error_message = 11;
     DnsProfile dns_profile = 12;
+    repeated GatewayAccessGrant gateway_access_grants = 13;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
@@ -77,6 +78,7 @@ message GatewayAccessGrant {
     GatewayChannelKind default_gateway_channel = 10;
     bytes gateway_udp_public_key = 11;
     string gateway_udp_key_id = 12;
+    string gateway_id = 13;
 }
 message RefreshGatewayGrantRequest {
     fixed32 virtual_ip = 1;
@@ -89,6 +91,7 @@ message RefreshGatewayGrantResponse {
     bool has_update = 1;
     GatewayAccessGrant gateway_access_grant = 2;
     string reason = 3;
+    repeated GatewayAccessGrant gateway_access_grants = 4;
 }
 message GatewayTicketClaims {
     string ticket_id = 1;
@@ -240,6 +243,7 @@ message DeviceInfo {
 message DeviceList {
     uint32 epoch = 1;
     repeated DeviceInfo device_info_list = 2;
+    repeated GatewayAccessGrant gateway_access_grants = 3;
 }
 
 message PunchInfo {

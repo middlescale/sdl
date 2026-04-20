@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::command::entity::{
-    DeviceItem, Info, PeerTrafficItem, RouteItem, TrafficSummary, TransportTrafficItem,
+    DeviceItem, GatewayItem, Info, PeerTrafficItem, RouteItem, TrafficSummary, TransportTrafficItem,
 };
 
 pub mod client;
@@ -354,6 +354,38 @@ pub fn command_info(vnt: &Sdl) -> Info {
         out_ips,
         udp_listen_addr,
     }
+}
+
+pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
+    vnt.gateway_session_summaries()
+        .into_iter()
+        .enumerate()
+        .map(|(index, summary)| GatewayItem {
+            gateway_id: if summary.gateway_id.is_empty() {
+                format!("gateway-{}", index + 1)
+            } else {
+                summary.gateway_id
+            },
+            endpoint: summary
+                .endpoint
+                .map(|endpoint| endpoint.to_string())
+                .unwrap_or_default(),
+            channel: summary.channel_name,
+            status: if !summary.configured {
+                "not-configured".to_string()
+            } else if summary.authenticated {
+                if summary.reauth_required {
+                    "reauth-required".to_string()
+                } else {
+                    "connected".to_string()
+                }
+            } else {
+                "disconnected".to_string()
+            },
+            rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
+            active: summary.active,
+        })
+        .collect()
 }
 
 pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {

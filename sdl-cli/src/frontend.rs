@@ -6,11 +6,12 @@ use std::time::{Duration, Instant};
 
 fn print_usage() {
     println!(
-        "sdl <resume|list|info|route|traffic|suspend|rename|auth|channel-change|version> [options]"
+        "sdl <resume|list|info|gateway|route|traffic|suspend|rename|auth|channel-change|version> [options]"
     );
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl info [--json]");
+    println!("  sdl gateway [--json]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
     println!("  sdl suspend [--json]                  # 挂起本地收发服务");
@@ -32,6 +33,7 @@ pub fn run() -> i32 {
         "resume" => handle_resume(&args[2..]),
         "list" => handle_list(&args[2..]),
         "info" => handle_info(&args[2..]),
+        "gateway" => handle_gateway(&args[2..]),
         "route" => handle_route(&args[2..]),
         "traffic" => handle_traffic(&args[2..]),
         "suspend" => handle_suspend(&args[2..]),
@@ -228,6 +230,32 @@ fn handle_info(args: &[String]) -> i32 {
             }
             Err(e) => {
                 eprintln!("info error: {}", e);
+                1
+            }
+        }
+    }
+}
+
+fn handle_gateway(args: &[String]) -> i32 {
+    if has_json_flag(args) {
+        match CommandClient::new().and_then(|mut client| client.gateway()) {
+            Ok(gateways) => {
+                println!("{}", serde_json::to_string_pretty(&gateways).unwrap());
+                0
+            }
+            Err(e) => {
+                eprintln!("gateway error: {}", e);
+                1
+            }
+        }
+    } else {
+        match CommandClient::new().and_then(|mut client| client.gateway()) {
+            Ok(gateways) => {
+                console_out::console_gateway(gateways);
+                0
+            }
+            Err(e) => {
+                eprintln!("gateway error: {}", e);
                 1
             }
         }

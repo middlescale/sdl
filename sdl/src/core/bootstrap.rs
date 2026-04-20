@@ -405,6 +405,11 @@ impl Sdl {
     ) -> crate::data_plane::gateway_session::GatewaySessionSummary {
         self.runtime.gateway_sessions.session_summary()
     }
+    pub fn gateway_session_summaries(
+        &self,
+    ) -> Vec<crate::data_plane::gateway_session::GatewaySessionSummary> {
+        self.runtime.gateway_sessions.session_summaries()
+    }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
         self.runtime.route_manager().use_channel_type()
     }

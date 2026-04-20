@@ -1,4 +1,4 @@
-use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
 use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{write_saved_config, FileConfig};
@@ -291,6 +291,13 @@ impl CommandHandler for ServiceCommandHandler {
                 Ok(info)
             }
             Err(_) => Ok(self.0.stopped_info()),
+        }
+    }
+
+    fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
+        match self.0.current_runtime() {
+            Ok(vnt) => Ok(crate::command::command_gateway(vnt.as_ref())),
+            Err(_) => Ok(Vec::new()),
         }
     }
 

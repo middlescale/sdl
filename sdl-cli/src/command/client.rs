@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use std::io;
 
-use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
 use crate::command::ipc;
 
 pub struct CommandClient;
@@ -24,6 +24,9 @@ impl CommandClient {
     }
     pub fn info(&mut self) -> io::Result<Info> {
         self.send_cmd(b"info")
+    }
+    pub fn gateway(&mut self) -> io::Result<Vec<GatewayItem>> {
+        self.send_cmd(b"gateway")
     }
     pub fn traffic(&mut self) -> io::Result<TrafficSummary> {
         self.send_cmd(b"traffic")

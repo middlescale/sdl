@@ -23,8 +23,12 @@ use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
 use crate::util::{DebugWatch, StopManager};
 
+const GATEWAY_SWITCH_BETTER_RT_MS: i64 = 15;
+const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
+
 #[derive(Clone, Default)]
 struct GatewaySessionState {
+    gateway_id: String,
     ticket: Vec<u8>,
     session_id: u64,
     policy_rev: u64,
@@ -39,6 +43,7 @@ struct GatewaySessionState {
     lease_secs_hint: u32,
     grace_secs_hint: u32,
     reauth_required: bool,
+    last_rtt_ms: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -58,6 +63,14 @@ enum GatewayTransport {
 }
 
 impl GatewaySession {
+    fn is_available(guard: &GatewaySessionState, now_ms: i64) -> bool {
+        let expire_unix_ms = guard
+            .grace_expire_unix_ms
+            .max(guard.lease_expire_unix_ms)
+            .max(guard.ticket_expire_unix_ms);
+        guard.authenticated && now_ms <= expire_unix_ms
+    }
+
     fn new_quic(endpoint: SocketAddr, debug_watch: DebugWatch, stats: DataPlaneStats) -> Self {
         Self {
             endpoint,
@@ -130,6 +143,7 @@ impl GatewaySession {
 
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
+        guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
         guard.policy_rev = grant.policy_rev;
@@ -147,6 +161,7 @@ impl GatewaySession {
         guard.lease_secs_hint = grant.lease_secs;
         guard.grace_secs_hint = grant.grace_secs;
         guard.reauth_required = false;
+        guard.last_rtt_ms = None;
         drop(guard);
         match &self.channel {
             GatewayTransport::Quic(channel) => {
@@ -196,12 +211,16 @@ impl GatewaySession {
 
     fn summary(&self) -> GatewaySessionSummary {
         let guard = self.state.lock();
+        let now_ms = now_time() as i64;
         GatewaySessionSummary {
             configured: true,
-            authenticated: guard.authenticated,
+            authenticated: Self::is_available(&guard, now_ms),
             endpoint: Some(self.endpoint),
+            gateway_id: guard.gateway_id.clone(),
             channel_name: guard.channel_name.clone(),
             reauth_required: guard.reauth_required,
+            rt_ms: guard.last_rtt_ms,
+            active: false,
         }
     }
 
@@ -250,7 +269,7 @@ impl GatewaySession {
                 .grace_expire_unix_ms
                 .max(guard.lease_expire_unix_ms)
                 .max(guard.ticket_expire_unix_ms);
-            if !guard.authenticated || now_ms > expire_unix_ms {
+            if !Self::is_available(&guard, now_ms) {
                 log::debug!(
                     "gateway relay unavailable endpoint={}, authenticated={}, now_ms={}, expire_unix_ms={}, session_id={}",
                     self.endpoint,
@@ -295,6 +314,9 @@ impl GatewaySession {
         guard.authenticated = ack.ok;
         if ack.ok {
             let now_ms = now_time() as i64;
+            if guard.last_hello_unix_ms > 0 && now_ms >= guard.last_hello_unix_ms {
+                guard.last_rtt_ms = Some((now_ms - guard.last_hello_unix_ms).max(1));
+            }
             guard.keepalive_secs = ack.keepalive_secs;
             guard.lease_expire_unix_ms = if ack.lease_expire_unix_ms > 0 {
                 ack.lease_expire_unix_ms
@@ -333,6 +355,7 @@ impl GatewaySession {
             guard.lease_expire_unix_ms = 0;
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = ack.reauth_required;
+            guard.last_rtt_ms = None;
             log::warn!(
                 "gateway relay auth rejected, session={}, endpoint={}, reason={}, reauth_required={}",
                 ack.session_id,
@@ -417,8 +440,17 @@ pub struct GatewaySessionSummary {
     pub configured: bool,
     pub authenticated: bool,
     pub endpoint: Option<SocketAddr>,
+    pub gateway_id: String,
     pub channel_name: String,
     pub reauth_required: bool,
+    pub rt_ms: Option<i64>,
+    pub active: bool,
+}
+
+#[derive(Default)]
+struct GatewaySelectionState {
+    selected_endpoint: Option<SocketAddr>,
+    last_switch_unix_ms: i64,
 }
 
 #[derive(Clone)]
@@ -426,6 +458,7 @@ pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     runtime: Arc<OnceLock<(StopManager, PacketCallback)>>,
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
+    selection: Arc<Mutex<GatewaySelectionState>>,
     worker_started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
     stats: DataPlaneStats,
@@ -441,6 +474,7 @@ impl GatewaySessions {
             current_device,
             runtime: Arc::new(OnceLock::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
             worker_started: Arc::new(AtomicCell::new(false)),
             debug_watch,
             stats,
@@ -500,32 +534,20 @@ impl GatewaySessions {
         virtual_ip: Ipv4Addr,
         device_id: String,
     ) {
-        let preferred_kind = grant.default_gateway_channel.enum_value_or_default();
+        self.set_gateway_grants(std::slice::from_ref(grant), virtual_ip, device_id);
+    }
+
+    pub fn set_gateway_grants(
+        &self,
+        grants: &[GatewayAccessGrant],
+        virtual_ip: Ipv4Addr,
+        device_id: String,
+    ) {
         let mut parsed = Vec::new();
         let mut desired = HashSet::new();
-        let mut selected_channels: Vec<(SocketAddr, GatewayChannelKind)> = grant
-            .gateway_channels
-            .iter()
-            .filter_map(|channel| {
-                let kind = channel.kind.enum_value_or_default();
-                let supported = match kind {
-                    GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
-                        grant.gateway_udp_public_key.len() == 32
-                            && !grant.gateway_udp_key_id.is_empty()
-                    }
-                    GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
-                    _ => false,
-                };
-                if !supported || kind != preferred_kind {
-                    return None;
-                }
-                parse_transport_endpoint(&channel.addr)
-                    .ok()
-                    .map(|endpoint| (endpoint, kind))
-            })
-            .collect();
-        if selected_channels.is_empty() {
-            selected_channels = grant
+        for grant in grants {
+            let preferred_kind = grant.default_gateway_channel.enum_value_or_default();
+            let mut selected_channels: Vec<(SocketAddr, GatewayChannelKind)> = grant
                 .gateway_channels
                 .iter()
                 .filter_map(|channel| {
@@ -538,7 +560,7 @@ impl GatewaySessions {
                         GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
                         _ => false,
                     };
-                    if !supported {
+                    if !supported || kind != preferred_kind {
                         return None;
                     }
                     parse_transport_endpoint(&channel.addr)
@@ -546,10 +568,33 @@ impl GatewaySessions {
                         .map(|endpoint| (endpoint, kind))
                 })
                 .collect();
-        }
-        for (endpoint, kind) in selected_channels {
-            if desired.insert(endpoint) {
-                parsed.push((endpoint, kind));
+            if selected_channels.is_empty() {
+                selected_channels = grant
+                    .gateway_channels
+                    .iter()
+                    .filter_map(|channel| {
+                        let kind = channel.kind.enum_value_or_default();
+                        let supported = match kind {
+                            GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
+                                grant.gateway_udp_public_key.len() == 32
+                                    && !grant.gateway_udp_key_id.is_empty()
+                            }
+                            GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
+                            _ => false,
+                        };
+                        if !supported {
+                            return None;
+                        }
+                        parse_transport_endpoint(&channel.addr)
+                            .ok()
+                            .map(|endpoint| (endpoint, kind))
+                    })
+                    .collect();
+            }
+            for (endpoint, kind) in selected_channels {
+                if desired.insert(endpoint) {
+                    parsed.push((grant.clone(), endpoint, kind));
+                }
             }
         }
         if parsed.is_empty() {
@@ -560,15 +605,20 @@ impl GatewaySessions {
             return;
         }
         log::info!(
-            "gateway grant applied for virtual ip {} with endpoints {:?}, session_id={}, default_channel={:?}",
+            "gateway grants applied for virtual ip {} with endpoints {:?}, gateways={:?}",
             virtual_ip,
-            parsed.iter().map(|(endpoint, _)| *endpoint).collect::<Vec<_>>(),
-            grant.session_id,
-            grant.default_gateway_channel.enum_value_or_default()
+            parsed
+                .iter()
+                .map(|(_, endpoint, _)| *endpoint)
+                .collect::<Vec<_>>(),
+            parsed
+                .iter()
+                .map(|(grant, _, _)| grant.gateway_id.clone())
+                .collect::<Vec<_>>()
         );
         let mut guard = self.sessions.lock();
         guard.retain(|addr, _| desired.contains(addr));
-        for (endpoint, kind) in parsed {
+        for (grant, endpoint, kind) in parsed {
             let session = if let Some(existing) = guard.get(&endpoint).cloned() {
                 existing
             } else {
@@ -576,7 +626,7 @@ impl GatewaySessions {
                     GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
                         match GatewaySession::new_udp(
                             endpoint,
-                            grant,
+                            &grant,
                             self.debug_watch.clone(),
                             self.stats.clone(),
                         ) {
@@ -600,7 +650,7 @@ impl GatewaySessions {
                 guard.insert(endpoint, created.clone());
                 created
             };
-            if let Err(e) = session.update_grant(grant, device_id.clone()) {
+            if let Err(e) = session.update_grant(&grant, device_id.clone()) {
                 log::warn!("update gateway session failed {}: {:?}", endpoint, e);
                 continue;
             }
@@ -610,10 +660,12 @@ impl GatewaySessions {
                 }
             }
         }
+        self.reset_selection_if_missing(&guard);
     }
 
     pub fn clear_gateway_grant(&self) {
         self.sessions.lock().clear();
+        *self.selection.lock() = GatewaySelectionState::default();
     }
 
     pub fn ticket_expire_unix_ms(&self) -> i64 {
@@ -634,12 +686,45 @@ impl GatewaySessions {
     }
 
     pub fn session_summary(&self) -> GatewaySessionSummary {
-        self.sessions
-            .lock()
-            .values()
-            .map(GatewaySession::summary)
-            .max_by_key(|summary| (summary.authenticated, summary.reauth_required))
+        let guard = self.sessions.lock();
+        let active = self.choose_active_endpoint_locked(&guard);
+        active
+            .and_then(|endpoint| guard.get(&endpoint))
+            .map(|session| {
+                let mut summary = session.summary();
+                summary.active = true;
+                summary
+            })
+            .or_else(|| {
+                guard
+                    .values()
+                    .map(GatewaySession::summary)
+                    .max_by_key(gateway_summary_sort_key)
+            })
             .unwrap_or_default()
+    }
+
+    pub fn session_summaries(&self) -> Vec<GatewaySessionSummary> {
+        let guard = self.sessions.lock();
+        let active = self.choose_active_endpoint_locked(&guard);
+        let mut summaries: Vec<GatewaySessionSummary> = guard
+            .iter()
+            .map(|(endpoint, session)| {
+                let mut summary = session.summary();
+                summary.active = Some(*endpoint) == active;
+                summary
+            })
+            .collect();
+        summaries.sort_by_key(|summary| {
+            (
+                summary.endpoint != active,
+                !summary.authenticated,
+                summary.rt_ms.unwrap_or(i64::MAX),
+                summary.gateway_id.clone(),
+                summary.channel_name.clone(),
+            )
+        });
+        summaries
     }
 
     pub fn mark_refresh_requested(&self) {
@@ -656,7 +741,11 @@ impl GatewaySessions {
     }
 
     pub fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
-        let sessions: Vec<GatewaySession> = self.sessions.lock().values().cloned().collect();
+        let guard = self.sessions.lock();
+        let active = self.choose_active_endpoint_locked(&guard);
+        let mut sessions: Vec<GatewaySession> = guard.values().cloned().collect();
+        drop(guard);
+        sessions.sort_by_key(|session| gateway_session_order_key(session, active));
         let mut last_err = None;
         for session in sessions {
             match session.send_relay(packet) {
@@ -697,6 +786,64 @@ impl GatewaySessions {
             );
         }
     }
+
+    fn reset_selection_if_missing(&self, sessions: &HashMap<SocketAddr, GatewaySession>) {
+        let mut selection = self.selection.lock();
+        if selection
+            .selected_endpoint
+            .is_some_and(|endpoint| !sessions.contains_key(&endpoint))
+        {
+            selection.selected_endpoint = None;
+            selection.last_switch_unix_ms = 0;
+        }
+    }
+
+    fn choose_active_endpoint_locked(
+        &self,
+        sessions: &HashMap<SocketAddr, GatewaySession>,
+    ) -> Option<SocketAddr> {
+        let now_ms = now_time() as i64;
+        let best = sessions
+            .iter()
+            .map(|(endpoint, session)| (*endpoint, session.summary()))
+            .max_by_key(|(_, summary)| gateway_summary_sort_key(summary));
+        let mut selection = self.selection.lock();
+        let current = selection.selected_endpoint.and_then(|endpoint| {
+            sessions
+                .get(&endpoint)
+                .map(|session| (endpoint, session.summary()))
+        });
+        let chosen = match (current, best) {
+            (Some((current_endpoint, current_summary)), Some((best_endpoint, best_summary))) => {
+                if current_endpoint == best_endpoint {
+                    current_endpoint
+                } else if !current_summary.authenticated {
+                    best_endpoint
+                } else if best_summary.authenticated
+                    && gateway_summary_is_clearly_better(&best_summary, &current_summary)
+                    && now_ms - selection.last_switch_unix_ms >= GATEWAY_SWITCH_COOLDOWN_MS
+                {
+                    best_endpoint
+                } else {
+                    current_endpoint
+                }
+            }
+            (Some((current_endpoint, current_summary)), None) => {
+                if current_summary.configured {
+                    current_endpoint
+                } else {
+                    return None;
+                }
+            }
+            (None, Some((best_endpoint, _))) => best_endpoint,
+            (None, None) => return None,
+        };
+        if selection.selected_endpoint != Some(chosen) {
+            selection.selected_endpoint = Some(chosen);
+            selection.last_switch_unix_ms = now_ms;
+        }
+        Some(chosen)
+    }
 }
 
 impl Default for GatewaySessions {
@@ -730,6 +877,48 @@ fn sanitize_worker_name(addr: SocketAddr) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+fn gateway_summary_sort_key(
+    summary: &GatewaySessionSummary,
+) -> (
+    bool,
+    std::cmp::Reverse<i64>,
+    bool,
+    std::cmp::Reverse<String>,
+) {
+    (
+        summary.authenticated,
+        std::cmp::Reverse(summary.rt_ms.unwrap_or(i64::MAX)),
+        !summary.reauth_required,
+        std::cmp::Reverse(summary.gateway_id.clone()),
+    )
+}
+
+fn gateway_summary_is_clearly_better(
+    challenger: &GatewaySessionSummary,
+    current: &GatewaySessionSummary,
+) -> bool {
+    match (challenger.rt_ms, current.rt_ms) {
+        (Some(challenger_rt), Some(current_rt)) => {
+            current_rt - challenger_rt >= GATEWAY_SWITCH_BETTER_RT_MS
+        }
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+fn gateway_session_order_key(
+    session: &GatewaySession,
+    active: Option<SocketAddr>,
+) -> (bool, bool, i64, String) {
+    let summary = session.summary();
+    (
+        Some(session.endpoint) != active,
+        !summary.authenticated,
+        summary.rt_ms.unwrap_or(i64::MAX),
+        summary.gateway_id,
+    )
 }
 
 #[cfg(test)]

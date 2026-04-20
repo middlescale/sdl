@@ -1,7 +1,7 @@
 use console::{style, Style};
 use std::net::Ipv4Addr;
 
-use crate::command::entity::{DeviceItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
 
 pub mod table;
 
@@ -177,6 +177,62 @@ pub fn console_route_table(mut list: Vec<RouteItem>) {
         ]);
     }
 
+    table::println_table(out_list)
+}
+
+pub fn console_gateway(mut list: Vec<GatewayItem>) {
+    if list.is_empty() {
+        println!("No gateway candidates found");
+        return;
+    }
+    list.sort_by_key(|item| {
+        (
+            !item.active,
+            item.status != "connected",
+            item.rt_ms.parse::<i64>().unwrap_or(i64::MAX),
+            item.gateway_id.clone(),
+        )
+    });
+    let mut out_list = Vec::with_capacity(list.len() + 1);
+    out_list.push(vec![
+        ("Gateway".to_string(), Style::new()),
+        ("Endpoint".to_string(), Style::new()),
+        ("Channel".to_string(), Style::new()),
+        ("Status".to_string(), Style::new()),
+        ("Rt(ms)".to_string(), Style::new()),
+        ("Active".to_string(), Style::new()),
+    ]);
+    for item in list {
+        let style = if item.active {
+            Style::new().green()
+        } else if item.status == "connected" {
+            Style::new().yellow()
+        } else {
+            Style::new().color256(102)
+        };
+        out_list.push(vec![
+            (item.gateway_id, style.clone()),
+            (item.endpoint, style.clone()),
+            (item.channel, style.clone()),
+            (item.status, style.clone()),
+            (
+                if item.rt_ms.is_empty() {
+                    "-".to_string()
+                } else {
+                    item.rt_ms
+                },
+                style.clone(),
+            ),
+            (
+                if item.active {
+                    "yes".to_string()
+                } else {
+                    "".to_string()
+                },
+                style,
+            ),
+        ]);
+    }
     table::println_table(out_list)
 }
 

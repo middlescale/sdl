@@ -226,30 +226,31 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         key
     }
 
-    fn apply_gateway_grant(
+    fn apply_gateway_grants(
         &self,
-        grant: Option<&proto::message::GatewayAccessGrant>,
+        grants: &[proto::message::GatewayAccessGrant],
+        legacy_grant: Option<&proto::message::GatewayAccessGrant>,
         virtual_ip: Ipv4Addr,
     ) {
-        if let Some(grant) = grant {
-            self.runtime.gateway_sessions.set_gateway_grant(
-                grant,
-                virtual_ip,
-                self.runtime.config.device_id.clone(),
-            );
-            log::info!(
-                "gateway grant: channels={:?} default={:?} session_id={} policy_rev={} expire={} caps={:?}",
-                grant.gateway_channels,
-                grant.default_gateway_channel.enum_value_or_default(),
-                grant.session_id,
-                grant.policy_rev,
-                grant.ticket_expire_unix_ms,
-                grant.gateway_capabilities
-            );
-        } else {
+        let effective_grants = collect_gateway_grants(grants, legacy_grant);
+        if effective_grants.is_empty() {
             self.runtime.gateway_sessions.clear_gateway_grant();
             log::info!("gateway grant cleared");
+            return;
         }
+        self.runtime.gateway_sessions.set_gateway_grants(
+            &effective_grants,
+            virtual_ip,
+            self.runtime.config.device_id.clone(),
+        );
+        log::info!(
+            "gateway grants applied count={} gateways={:?}",
+            effective_grants.len(),
+            effective_grants
+                .iter()
+                .map(|grant| grant.gateway_id.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     fn reconcile_punch_sessions(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
@@ -459,7 +460,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Ipv4Addr::from(response.virtual_ip & response.virtual_netmask);
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
                 log::info!("注册成功：{:?}", register_info);
-                self.apply_gateway_grant(response.gateway_access_grant.as_ref(), virtual_ip);
+                self.apply_gateway_grants(
+                    &response.gateway_access_grants,
+                    response.gateway_access_grant.as_ref(),
+                    virtual_ip,
+                );
                 let dns_profile = response.dns_profile.as_ref().map(|profile| DnsProfile {
                     servers: profile.servers.clone(),
                     match_domains: profile.match_domains.clone(),
@@ -542,7 +547,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         });
                     if should_refresh_gateway_grant_after_registration(
                         old.status.offline(),
-                        response.gateway_access_grant.as_ref().is_some(),
+                        has_gateway_grants(
+                            &response.gateway_access_grants,
+                            response.gateway_access_grant.as_ref(),
+                        ),
                     ) {
                         match self
                             .runtime
@@ -572,6 +580,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::PushDeviceList => {
                 let response = DeviceList::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
+                self.apply_gateway_grants(
+                    &response.gateway_access_grants,
+                    None,
+                    current_device.virtual_ip,
+                );
                 self.set_device_info_list(response.device_info_list, response.epoch as _);
                 self.runtime
                     .control_session
@@ -894,7 +907,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     log::info!("gateway grant refresh skipped: {}", response.reason);
                     return Ok(());
                 }
-                self.apply_gateway_grant(
+                self.apply_gateway_grants(
+                    &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
                     current_device.virtual_ip,
                 );
@@ -1383,6 +1397,23 @@ fn observed_udp_port_from_registration(
     } else {
         0
     }
+}
+
+fn collect_gateway_grants(
+    grants: &[proto::message::GatewayAccessGrant],
+    legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+) -> Vec<proto::message::GatewayAccessGrant> {
+    if !grants.is_empty() {
+        return grants.to_vec();
+    }
+    legacy_grant.cloned().into_iter().collect()
+}
+
+fn has_gateway_grants(
+    grants: &[proto::message::GatewayAccessGrant],
+    legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+) -> bool {
+    !grants.is_empty() || legacy_grant.is_some()
 }
 
 fn should_refresh_gateway_grant_after_registration(
