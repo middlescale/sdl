@@ -300,12 +300,6 @@ pub fn command_info(vnt: &Sdl) -> Info {
         UseChannelType::P2p => "p2p".to_string(),
         UseChannelType::All => "auto".to_string(),
     };
-    let control_server = vnt.control_server_addr();
-    let relay_server = if control_server.port() == 0 {
-        config.server_address_str.clone()
-    } else {
-        control_server.to_string()
-    };
     let nat_type = format!("{:?}", nat_info.nat_type);
     let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();
     let public_ips = public_ips.join(",");
@@ -344,7 +338,6 @@ pub fn command_info(vnt: &Sdl) -> Info {
         auth_pending: service_state.auth_pending,
         channel_policy,
         last_error: service_state.last_error,
-        relay_server,
         nat_type,
         public_ips,
         local_addr,

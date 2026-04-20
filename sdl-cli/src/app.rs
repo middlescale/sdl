@@ -145,7 +145,6 @@ impl ServiceManager {
             auth_pending: state.auth_pending,
             channel_policy,
             last_error: state.last_error,
-            relay_server: config.server_address_str,
             nat_type: String::new(),
             public_ips: String::new(),
             local_addr: String::new(),

@@ -81,7 +81,6 @@ pub fn console_info(status: Info) {
     if let Some(last_error) = &status.last_error {
         println!("Last error: {}", style(last_error).red());
     }
-    println!("Relay server: {}", style(status.relay_server).green());
     println!(
         "Udp listen: {}",
         style(status.udp_listen_addr.join(", ")).green()

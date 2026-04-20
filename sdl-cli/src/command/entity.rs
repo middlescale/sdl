@@ -18,7 +18,6 @@ pub struct Info {
     pub auth_pending: bool,
     pub channel_policy: String,
     pub last_error: Option<String>,
-    pub relay_server: String,
     pub nat_type: String,
     pub public_ips: String,
     pub local_addr: String,
