@@ -23,6 +23,25 @@ pub const PUB_STUN: [&str; 4] = [
     "stun.cdnbye.com",
 ];
 
+pub fn normalize_default_device_name(hostname: &str) -> String {
+    let trimmed = hostname.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        return "UnknownName".to_string();
+    }
+    let first_label = trimmed.split('.').next().unwrap_or(trimmed).trim();
+    if first_label.is_empty() {
+        trimmed.to_string()
+    } else {
+        first_label.to_string()
+    }
+}
+
+pub fn default_device_name() -> String {
+    let hostname = std::env::var("HOSTNAME")
+        .unwrap_or_else(|_| gethostname::gethostname().to_string_lossy().into_owned());
+    normalize_default_device_name(&hostname)
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     #[cfg(feature = "integrated_tun")]
@@ -73,8 +92,7 @@ impl Config {
         ports: Option<Vec<u16>>,
         nic: Option<String>,
     ) -> anyhow::Result<Self> {
-        let name = std::env::var("HOSTNAME")
-            .unwrap_or_else(|_| gethostname::gethostname().to_string_lossy().into_owned());
+        let name = default_device_name();
         Config::new(
             #[cfg(feature = "integrated_tun")]
             #[cfg(target_os = "windows")]
@@ -251,5 +269,29 @@ impl Config {
             auth_group,
             auth_ticket,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_default_device_name;
+
+    #[test]
+    fn normalize_default_device_name_truncates_fqdn() {
+        assert_eq!(
+            normalize_default_device_name("HuangdeMac-mini.local"),
+            "HuangdeMac-mini"
+        );
+        assert_eq!(
+            normalize_default_device_name("node1.example.internal"),
+            "node1"
+        );
+    }
+
+    #[test]
+    fn normalize_default_device_name_handles_plain_and_empty_names() {
+        assert_eq!(normalize_default_device_name("plain-host"), "plain-host");
+        assert_eq!(normalize_default_device_name(""), "UnknownName");
+        assert_eq!(normalize_default_device_name(".local"), "local");
     }
 }

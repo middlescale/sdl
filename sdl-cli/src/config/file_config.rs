@@ -58,10 +58,7 @@ impl Default for FileConfig {
             tap: false,
             group: DEFAULT_SERVICE_GROUP.to_string(),
             device_id: get_device_id(),
-            name: gethostname::gethostname()
-                .to_str()
-                .unwrap_or("UnknownName")
-                .to_string(),
+            name: sdl::core::default_device_name(),
             server_address: DEFAULT_SERVICE_SERVER.to_string(),
             stun_server,
             in_ips: vec![],
