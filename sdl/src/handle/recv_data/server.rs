@@ -63,7 +63,7 @@ pub struct ServerPacketHandler<Call, Device> {
     runtime: Arc<SdlRuntime>,
     device: Device,
     callback: Call,
-    punch_active_sessions: Arc<Mutex<HashMap<Ipv4Addr, ActivePunchSession>>>,
+    punch_active_sessions: Arc<Mutex<HashMap<Ipv4Addr, ActivePunchState>>>,
     device_auth_ok: Arc<AtomicCell<bool>>,
 }
 
@@ -74,6 +74,50 @@ struct ActivePunchSession {
     target: u32,
     attempt: u32,
     deadline_unix_ms: i64,
+}
+
+#[derive(Clone)]
+struct ActivePunchState {
+    active: ActivePunchSession,
+    coalesced: Vec<ActivePunchSession>,
+}
+
+impl ActivePunchState {
+    fn new(active: ActivePunchSession) -> Self {
+        Self {
+            active,
+            coalesced: Vec::new(),
+        }
+    }
+
+    fn contains(&self, session_id: u64, attempt: u32) -> bool {
+        self.active.session_id == session_id && self.active.attempt == attempt
+            || self
+                .coalesced
+                .iter()
+                .any(|session| session.session_id == session_id && session.attempt == attempt)
+    }
+
+    fn coalesce(&mut self, session: ActivePunchSession) {
+        if self.contains(session.session_id, session.attempt) {
+            self.active.deadline_unix_ms =
+                self.active.deadline_unix_ms.max(session.deadline_unix_ms);
+            return;
+        }
+        self.active.deadline_unix_ms = self.active.deadline_unix_ms.max(session.deadline_unix_ms);
+        self.coalesced.push(session);
+    }
+
+    fn sessions(&self) -> Vec<ActivePunchSession> {
+        let mut sessions = Vec::with_capacity(1 + self.coalesced.len());
+        sessions.push(self.active);
+        sessions.extend(self.coalesced.iter().copied());
+        sessions
+    }
+
+    fn deadline_unix_ms(&self) -> i64 {
+        self.active.deadline_unix_ms
+    }
 }
 
 impl<Call, Device> ServerPacketHandler<Call, Device> {
@@ -259,37 +303,31 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let mut expired = Vec::new();
         {
             let mut sessions = self.punch_active_sessions.lock();
-            sessions.retain(|peer_ip, session| {
+            sessions.retain(|peer_ip, state| {
                 if self.runtime.route_manager().direct_path_count(peer_ip) > 0 {
-                    succeeded.push(*session);
+                    succeeded.push(state.sessions());
                     return false;
                 }
-                if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
-                    expired.push(*session);
+                if state.deadline_unix_ms() > 0 && now_ms > state.deadline_unix_ms() {
+                    expired.push(state.sessions());
                     false
                 } else {
                     true
                 }
             });
         }
-        for session in succeeded {
-            self.send_punch_result(
+        for sessions in succeeded {
+            self.send_punch_results(
                 current_device,
-                session.session_id,
-                session.source,
-                session.target,
-                session.attempt,
+                &sessions,
                 PunchResultCode::PunchResultSuccess,
                 "p2p route established",
             )?;
         }
-        for session in expired {
-            self.send_punch_result(
+        for sessions in expired {
+            self.send_punch_results(
                 current_device,
-                session.session_id,
-                session.source,
-                session.target,
-                session.attempt,
+                &sessions,
                 PunchResultCode::PunchResultNoResponse,
                 "deadline exceeded",
             )?;
@@ -348,6 +386,27 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         )
     }
 
+    fn send_punch_results(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        sessions: &[ActivePunchSession],
+        code: PunchResultCode,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        for session in sessions {
+            self.send_punch_result(
+                current_device,
+                session.session_id,
+                session.source,
+                session.target,
+                session.attempt,
+                code,
+                reason,
+            )?;
+        }
+        Ok(())
+    }
+
     fn spawn_punch_session_watchdog(&self, peer_ip: Ipv4Addr, session: ActivePunchSession) {
         let runtime = self.runtime.clone();
         let sessions = self.punch_active_sessions.clone();
@@ -357,29 +416,39 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let now_ms = crate::handle::now_time() as i64;
                 let outcome = {
                     let mut guard = sessions.lock();
-                    let Some(active) = guard.get(&peer_ip).copied() else {
+                    let Some(state) = guard.get(&peer_ip) else {
                         return;
                     };
-                    if active.session_id != session.session_id || active.attempt != session.attempt
+                    if state.active.session_id != session.session_id
+                        || state.active.attempt != session.attempt
                     {
                         return;
                     }
                     if runtime.route_manager().direct_path_count(&peer_ip) > 0 {
-                        guard.remove(&peer_ip);
-                        Some((PunchResultCode::PunchResultSuccess, "p2p route established"))
-                    } else if session.deadline_unix_ms > 0 && now_ms > session.deadline_unix_ms {
-                        guard.remove(&peer_ip);
-                        Some((PunchResultCode::PunchResultNoResponse, "deadline exceeded"))
+                        let state = guard.remove(&peer_ip).expect("active punch state");
+                        Some((
+                            state.sessions(),
+                            PunchResultCode::PunchResultSuccess,
+                            "p2p route established",
+                        ))
+                    } else if state.deadline_unix_ms() > 0 && now_ms > state.deadline_unix_ms() {
+                        let state = guard.remove(&peer_ip).expect("active punch state");
+                        Some((
+                            state.sessions(),
+                            PunchResultCode::PunchResultNoResponse,
+                            "deadline exceeded",
+                        ))
                     } else {
                         None
                     }
                 };
-                if let Some((code, reason)) = outcome {
+                if let Some((sessions, code, reason)) = outcome {
                     log::info!(
-                        "punch watchdog outcome peer={} session_id={} attempt={} code={:?} reason={}",
+                        "punch watchdog outcome peer={} session_id={} attempt={} coalesced_sessions={} code={:?} reason={}",
                         peer_ip,
                         session.session_id,
                         session.attempt,
+                        sessions.len(),
                         code,
                         reason
                     );
@@ -396,28 +465,37 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                     let selected_endpoint =
                         selected_endpoint_for_result(code, runtime.route_manager().direct_route(&peer_ip));
-                    if let Err(err) = send_punch_result_via_control(
-                        &runtime.control_session,
-                        session.session_id,
-                        session.source,
-                        session.target,
-                        session.attempt,
-                        code,
-                        reason,
-                        selected_endpoint,
-                    ) {
-                        log::warn!(
-                            "send punch result from watchdog failed peer={} session_id={} attempt={} err={:?}",
-                            peer_ip,
-                            session.session_id,
-                            session.attempt,
-                            err
-                        );
+                    for punch_session in sessions {
+                        if let Err(err) = send_punch_result_via_control(
+                            &runtime.control_session,
+                            punch_session.session_id,
+                            punch_session.source,
+                            punch_session.target,
+                            punch_session.attempt,
+                            code,
+                            reason,
+                            selected_endpoint.clone(),
+                        ) {
+                            log::warn!(
+                                "send punch result from watchdog failed peer={} session_id={} attempt={} err={:?}",
+                                peer_ip,
+                                punch_session.session_id,
+                                punch_session.attempt,
+                                err
+                            );
+                        }
                     }
                     return;
                 }
                 let sleep = if session.deadline_unix_ms > 0 {
-                    let remaining = session.deadline_unix_ms.saturating_sub(now_ms) as u64;
+                    let remaining = {
+                        let guard = sessions.lock();
+                        guard
+                            .get(&peer_ip)
+                            .map(|state| state.deadline_unix_ms())
+                            .unwrap_or(session.deadline_unix_ms)
+                    }
+                    .saturating_sub(now_ms) as u64;
                     Duration::from_millis(remaining.clamp(1, 200))
                 } else {
                     Duration::from_millis(200)
@@ -826,46 +904,48 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     attempt: punch_start.attempt,
                     deadline_unix_ms,
                 };
-                let replaced = {
+                let coalesced = {
                     let mut sessions = self.punch_active_sessions.lock();
-                    let prev = sessions.insert(peer_ip, session);
-                    match prev {
-                        Some(prev)
-                            if prev.session_id != punch_start.session_id
-                                || prev.attempt != punch_start.attempt =>
-                        {
-                            Some(prev)
+                    match sessions.get_mut(&peer_ip) {
+                        Some(state) => {
+                            state.coalesce(session);
+                            true
                         }
-                        _ => None,
+                        None => {
+                            sessions.insert(peer_ip, ActivePunchState::new(session));
+                            false
+                        }
                     }
                 };
-                if let Some(prev) = replaced {
-                    self.send_punch_result(
-                        current_device,
-                        prev.session_id,
-                        prev.source,
-                        prev.target,
-                        prev.attempt,
-                        PunchResultCode::PunchResultSuperseded,
-                        "superseded by new attempt",
-                    )?;
-                }
-                let accepted = self
-                    .runtime
-                    .punch_coordinator
-                    .submit_local(peer_ip, peer_nat_info);
-                let reason = if accepted { "" } else { "punch queue busy" };
+                let (accepted, phase, reason) = if coalesced {
+                    (
+                        true,
+                        PunchSessionPhase::PunchPhaseWaiting,
+                        "coalesced onto active punch session",
+                    )
+                } else {
+                    let accepted = self
+                        .runtime
+                        .punch_coordinator
+                        .submit_local(peer_ip, peer_nat_info);
+                    (
+                        accepted,
+                        if accepted {
+                            PunchSessionPhase::PunchPhaseSending
+                        } else {
+                            PunchSessionPhase::PunchPhaseFailed
+                        },
+                        if accepted { "" } else { "punch queue busy" },
+                    )
+                };
                 log::info!(
-                    "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} reason={}",
+                    "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} coalesced={} reason={}",
                     peer_ip,
                     punch_start.session_id,
                     punch_start.attempt,
                     accepted,
-                    if accepted {
-                        PunchSessionPhase::PunchPhaseSending
-                    } else {
-                        PunchSessionPhase::PunchPhaseFailed
-                    },
+                    phase,
+                    coalesced,
                     reason
                 );
                 let ack = build_punch_ack(
@@ -873,6 +953,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     u32::from(current_device.virtual_ip),
                     punch_start.attempt,
                     accepted,
+                    phase,
                     reason,
                 );
                 let bytes = ack
@@ -894,7 +975,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         PunchResultCode::PunchResultRejected,
                         reason,
                     )?;
-                } else {
+                } else if !coalesced {
                     self.spawn_punch_session_watchdog(peer_ip, session);
                 }
             }
@@ -1181,6 +1262,7 @@ fn build_punch_ack(
     source: u32,
     attempt: u32,
     accepted: bool,
+    phase: PunchSessionPhase,
     reason: &str,
 ) -> PunchAck {
     let mut ack = PunchAck::new();
@@ -1189,11 +1271,7 @@ fn build_punch_ack(
     ack.attempt = attempt;
     ack.accepted = accepted;
     ack.reason = reason.to_string();
-    ack.phase = protobuf::EnumOrUnknown::new(if accepted {
-        PunchSessionPhase::PunchPhaseSending
-    } else {
-        PunchSessionPhase::PunchPhaseFailed
-    });
+    ack.phase = protobuf::EnumOrUnknown::new(phase);
     ack
 }
 
@@ -1430,6 +1508,7 @@ mod tests {
         format_punch_endpoint, log_sampled_unauthorized_server_source_drop,
         observed_udp_port_from_registration, punch_endpoint_from_route,
         selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
+        ActivePunchSession, ActivePunchState,
     };
     use crate::data_plane::route::Route;
     use crate::nat::punch::PunchModel;
@@ -1478,7 +1557,7 @@ mod tests {
 
     #[test]
     fn build_punch_ack_sets_reason() {
-        let ack = build_punch_ack(11, 2, 4, false, "busy");
+        let ack = build_punch_ack(11, 2, 4, false, PunchSessionPhase::PunchPhaseFailed, "busy");
         assert_eq!(ack.session_id, 11);
         assert_eq!(ack.source, 2);
         assert_eq!(ack.attempt, 4);
@@ -1488,6 +1567,50 @@ mod tests {
             ack.phase.enum_value_or_default(),
             PunchSessionPhase::PunchPhaseFailed
         );
+    }
+
+    #[test]
+    fn active_punch_state_coalesces_deadline_and_sessions() {
+        let mut state = ActivePunchState::new(ActivePunchSession {
+            session_id: 11,
+            source: 2,
+            target: 3,
+            attempt: 1,
+            deadline_unix_ms: 100,
+        });
+        state.coalesce(ActivePunchSession {
+            session_id: 12,
+            source: 2,
+            target: 3,
+            attempt: 2,
+            deadline_unix_ms: 250,
+        });
+
+        assert_eq!(state.deadline_unix_ms(), 250);
+        let sessions = state.sessions();
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].session_id, 11);
+        assert_eq!(sessions[1].session_id, 12);
+    }
+
+    #[test]
+    fn active_punch_state_ignores_duplicate_session() {
+        let active = ActivePunchSession {
+            session_id: 11,
+            source: 2,
+            target: 3,
+            attempt: 1,
+            deadline_unix_ms: 100,
+        };
+        let mut state = ActivePunchState::new(active);
+        state.coalesce(ActivePunchSession {
+            deadline_unix_ms: 200,
+            ..active
+        });
+
+        let sessions = state.sessions();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(state.deadline_unix_ms(), 200);
     }
 
     #[test]
