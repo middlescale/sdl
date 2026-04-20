@@ -72,7 +72,7 @@ impl Default for FileConfig {
             use_channel: "all".to_string(),
             cipher_model: None,
             punch_model: "all".to_string(),
-            ports: None,
+            ports: Some(vec![29873]),
             latency_first: false,
             p2p_heartbeat_interval_sec: 10,
             p2p_route_idle_timeout_sec: 30,
@@ -253,6 +253,7 @@ server_address: https://control.middlescale.net/control
         let file_conf = FileConfig::default();
         assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
         assert_eq!(file_conf.server_address, DEFAULT_SERVICE_SERVER);
+        assert_eq!(file_conf.ports, Some(vec![29873]));
         assert_eq!(file_conf.p2p_heartbeat_interval_sec, 10);
         assert_eq!(file_conf.p2p_route_idle_timeout_sec, 30);
     }
