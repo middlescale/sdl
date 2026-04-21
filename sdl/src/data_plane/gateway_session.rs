@@ -28,6 +28,7 @@ const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 
 #[derive(Clone, Default)]
 struct GatewaySessionState {
+    configured: bool,
     gateway_id: String,
     ticket: Vec<u8>,
     session_id: u64,
@@ -143,6 +144,7 @@ impl GatewaySession {
 
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
+        guard.configured = true;
         guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
@@ -196,6 +198,26 @@ impl GatewaySession {
         Ok(())
     }
 
+    fn clear_grant(&self) {
+        let mut guard = self.state.lock();
+        guard.configured = false;
+        guard.gateway_id.clear();
+        guard.ticket.clear();
+        guard.session_id = 0;
+        guard.policy_rev = 0;
+        guard.ticket_expire_unix_ms = 0;
+        guard.device_id.clear();
+        guard.authenticated = false;
+        guard.last_hello_unix_ms = 0;
+        guard.keepalive_secs = 0;
+        guard.lease_expire_unix_ms = 0;
+        guard.grace_expire_unix_ms = 0;
+        guard.lease_secs_hint = 0;
+        guard.grace_secs_hint = 0;
+        guard.reauth_required = false;
+        guard.last_rtt_ms = None;
+    }
+
     fn ticket_expire_unix_ms(&self) -> i64 {
         self.state.lock().ticket_expire_unix_ms
     }
@@ -213,7 +235,7 @@ impl GatewaySession {
         let guard = self.state.lock();
         let now_ms = now_time() as i64;
         GatewaySessionSummary {
-            configured: true,
+            configured: guard.configured,
             authenticated: Self::is_available(&guard, now_ms),
             endpoint: Some(self.endpoint),
             gateway_id: guard.gateway_id.clone(),
@@ -664,7 +686,9 @@ impl GatewaySessions {
     }
 
     pub fn clear_gateway_grant(&self) {
-        self.sessions.lock().clear();
+        for session in self.sessions.lock().values() {
+            session.clear_grant();
+        }
         *self.selection.lock() = GatewaySelectionState::default();
     }
 
@@ -699,6 +723,7 @@ impl GatewaySessions {
                 guard
                     .values()
                     .map(GatewaySession::summary)
+                    .filter(|summary| summary.configured)
                     .max_by_key(gateway_summary_sort_key)
             })
             .unwrap_or_default()
@@ -714,6 +739,7 @@ impl GatewaySessions {
                 summary.active = Some(*endpoint) == active;
                 summary
             })
+            .filter(|summary| summary.configured)
             .collect();
         summaries.sort_by_key(|summary| {
             (
@@ -737,7 +763,10 @@ impl GatewaySessions {
         self.sessions
             .lock()
             .values()
-            .any(|session| session.matches_addr(addr))
+            .any(|session| {
+                let summary = session.summary();
+                summary.configured && session.matches_addr(addr)
+            })
     }
 
     pub fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -806,12 +835,14 @@ impl GatewaySessions {
         let best = sessions
             .iter()
             .map(|(endpoint, session)| (*endpoint, session.summary()))
+            .filter(|(_, summary)| summary.configured)
             .max_by_key(|(_, summary)| gateway_summary_sort_key(summary));
         let mut selection = self.selection.lock();
         let current = selection.selected_endpoint.and_then(|endpoint| {
             sessions
                 .get(&endpoint)
                 .map(|session| (endpoint, session.summary()))
+                .filter(|(_, summary)| summary.configured)
         });
         let chosen = match (current, best) {
             (Some((current_endpoint, current_summary)), Some((best_endpoint, best_summary))) => {
