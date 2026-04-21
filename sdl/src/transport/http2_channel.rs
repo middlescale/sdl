@@ -204,6 +204,7 @@ async fn connect(
     request_uri: &str,
     on_packet: PacketCallback,
 ) -> anyhow::Result<ActiveConnection> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {
