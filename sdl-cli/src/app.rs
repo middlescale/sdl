@@ -527,6 +527,7 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
 }
 
 pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
+    sdl::install_default_crypto_provider();
     if !root_check::is_app_elevated() {
         println!("Please run sdl-service with administrator or root privileges");
         return 1;

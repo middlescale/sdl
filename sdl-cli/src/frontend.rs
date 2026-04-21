@@ -23,6 +23,7 @@ fn print_usage() {
 }
 
 pub fn run() -> i32 {
+    sdl::install_default_crypto_provider();
     let args: Vec<String> = std::env::args().collect();
     if args.len() <= 1 {
         print_usage();
