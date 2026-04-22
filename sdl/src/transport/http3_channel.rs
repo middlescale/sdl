@@ -257,7 +257,6 @@ async fn connect(
     server_name: &str,
     request_uri: &str,
 ) -> anyhow::Result<Http3ClientConnection> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {

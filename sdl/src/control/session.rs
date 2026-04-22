@@ -26,7 +26,7 @@ use crate::proto::message::{
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::control_addr::parse_control_address;
-use crate::transport::control_channel::ControlChannel;
+use crate::transport::http3_channel::Http3Channel;
 use crate::util::{
     address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
 };
@@ -52,7 +52,7 @@ pub struct SharedDataPlane {
 
 #[derive(Clone)]
 pub struct ControlSession {
-    channel: ControlChannel,
+    channel: Http3Channel,
     config: RuntimeConfig,
     data_plane: SharedDataPlane,
     data_plane_stats: DataPlaneStats,
@@ -63,7 +63,7 @@ pub struct ControlSession {
 
 impl ControlSession {
     pub fn new(
-        channel: ControlChannel,
+        channel: Http3Channel,
         config: RuntimeConfig,
         data_plane: SharedDataPlane,
         data_plane_stats: DataPlaneStats,

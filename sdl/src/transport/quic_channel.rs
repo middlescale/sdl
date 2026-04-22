@@ -291,7 +291,6 @@ async fn connect(
 }
 
 fn build_client_crypto() -> anyhow::Result<rustls::ClientConfig> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut roots = RootCertStore::empty();
     let certs = rustls_native_certs::load_native_certs();
     for cert in certs.certs {

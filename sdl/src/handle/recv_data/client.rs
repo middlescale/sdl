@@ -49,15 +49,6 @@ fn log_sampled_drop(
         log::debug!("{}", message(total));
     }
 }
-
-fn should_bypass_peer_decrypt_for_gateway(
-    source: Ipv4Addr,
-    current_device: &CurrentDeviceInfo,
-    via_gateway: bool,
-) -> bool {
-    via_gateway && source == current_device.virtual_gateway
-}
-
 /// 处理来源于客户端的包
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
@@ -159,10 +150,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
-        let via_gateway = self
-            .runtime
-            .gateway_sessions
-            .is_gateway_addr(route_key.addr);
         if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
             log_sampled_drop(
                 &UNKNOWN_PEER_DROP_COUNT,
@@ -176,9 +163,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        if !should_bypass_peer_decrypt_for_gateway(source, current_device, via_gateway)
-            && !self.decrypt_by_route(&source, route_key, &mut net_packet)?
-        {
+        if !self.decrypt_by_route(&source, route_key, &mut net_packet)? {
             return Ok(());
         }
         let packet_len = net_packet.buffer().as_ref().len();
@@ -190,7 +175,11 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
                 .data_plane_stats
                 .record_peer_down(source, packet_len);
         }
-        if via_gateway {
+        if self
+            .runtime
+            .gateway_sessions
+            .is_gateway_addr(route_key.addr)
+        {
             self.runtime
                 .data_plane_stats
                 .record_gateway_down(packet_len);
@@ -228,58 +217,6 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             Protocol::Unknown(_) => {}
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::should_bypass_peer_decrypt_for_gateway;
-    use crate::data_plane::route::RouteKey;
-    use crate::handle::CurrentDeviceInfo;
-    use crate::transport::connect_protocol::ConnectProtocol;
-    use std::net::Ipv4Addr;
-
-    #[test]
-    fn bypasses_peer_decrypt_for_virtual_gateway_packets_via_gateway() {
-        let current_device = CurrentDeviceInfo::new(
-            Ipv4Addr::new(10, 26, 0, 3),
-            Ipv4Addr::new(255, 255, 255, 0),
-            Ipv4Addr::new(10, 26, 0, 1),
-        );
-        let route_key = RouteKey::new(ConnectProtocol::UDP, "120.78.210.64:29901".parse().unwrap());
-        assert!(should_bypass_peer_decrypt_for_gateway(
-            current_device.virtual_gateway,
-            &current_device,
-            route_key.protocol().is_udp()
-        ));
-    }
-
-    #[test]
-    fn does_not_bypass_peer_decrypt_for_non_gateway_source() {
-        let current_device = CurrentDeviceInfo::new(
-            Ipv4Addr::new(10, 26, 0, 3),
-            Ipv4Addr::new(255, 255, 255, 0),
-            Ipv4Addr::new(10, 26, 0, 1),
-        );
-        assert!(!should_bypass_peer_decrypt_for_gateway(
-            Ipv4Addr::new(10, 26, 0, 5),
-            &current_device,
-            true
-        ));
-    }
-
-    #[test]
-    fn does_not_bypass_peer_decrypt_for_gateway_source_on_non_gateway_route() {
-        let current_device = CurrentDeviceInfo::new(
-            Ipv4Addr::new(10, 26, 0, 3),
-            Ipv4Addr::new(255, 255, 255, 0),
-            Ipv4Addr::new(10, 26, 0, 1),
-        );
-        assert!(!should_bypass_peer_decrypt_for_gateway(
-            current_device.virtual_gateway,
-            &current_device,
-            false
-        ));
     }
 }
 

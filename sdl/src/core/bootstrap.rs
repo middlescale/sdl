@@ -25,6 +25,7 @@ use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, Punch};
 use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
+use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
 #[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
@@ -160,10 +161,7 @@ impl Sdl {
             std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
         )?;
         let control_session = ControlSession::new(
-            crate::transport::control_channel::ControlChannel::new(
-                config.server_address,
-                &config.server_address_str,
-            )?,
+            Http3Channel::new(config.server_address, &config.server_address_str)?,
             runtime_config.clone(),
             crate::control::SharedDataPlane {
                 current_device: current_device.clone(),
