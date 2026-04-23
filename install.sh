@@ -128,6 +128,7 @@ KillMode=control-group
 Environment=RUST_LOG=info
 Environment=SUDO_UID=${TARGET_UID}
 Environment=SUDO_GID=${TARGET_GID}
+Environment=SDL_DEVICE_KEY_PATH=${INSTALL_DIR}/env/device.key
 
 [Install]
 WantedBy=multi-user.target
