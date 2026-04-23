@@ -38,6 +38,7 @@ const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
 const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
 const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
 const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+const RELAY_REPUNCH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Shared data-plane objects that are owned jointly by the control session and
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
@@ -184,6 +185,7 @@ impl ControlSession {
             .checked_sub(Duration::from_secs(3))
             .unwrap_or_else(Instant::now);
         let mut public_addr_delay = Duration::from_secs(3);
+        let mut last_relay_repunch_at = Instant::now();
         loop {
             if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
                 break;
@@ -244,7 +246,44 @@ impl ControlSession {
                 last_public_addr_at = Instant::now();
                 public_addr_delay = self.nat_test.public_addr_retry_delay();
             }
+            if !self
+                .data_plane
+                .route_manager
+                .use_channel_type()
+                .is_only_relay()
+                && last_relay_repunch_at.elapsed() >= RELAY_REPUNCH_INTERVAL
+            {
+                let peers_missing_direct_route = self.peers_missing_direct_route();
+                if !peers_missing_direct_route.is_empty() {
+                    log::info!(
+                        "periodic repunch requested for peers without direct route: {:?}",
+                        peers_missing_direct_route
+                    );
+                    self.trigger_status_report_with_nat_ready(
+                        PunchTriggerReason::PunchTriggerManualRequest,
+                    );
+                }
+                last_relay_repunch_at = Instant::now();
+            }
         }
+    }
+
+    fn peers_missing_direct_route(&self) -> Vec<std::net::Ipv4Addr> {
+        self.data_plane
+            .peer_state
+            .lock()
+            .devices
+            .values()
+            .filter(|info| info.status.is_online())
+            .filter_map(|info| {
+                (self
+                    .data_plane
+                    .route_manager
+                    .direct_path_count(&info.virtual_ip)
+                    == 0)
+                    .then_some(info.virtual_ip)
+            })
+            .collect()
     }
 
     pub fn send_server_heartbeat(&self, epoch: u16) -> anyhow::Result<()> {
