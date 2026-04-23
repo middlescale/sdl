@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+log_step() {
+  printf '[install] %s\n' "$*"
+}
+
 usage() {
   cat <<'EOF'
 Usage: sudo ./install.sh [options]
@@ -84,21 +88,26 @@ TARGET_UID="$(id -u "${TARGET_USER}")"
 TARGET_GID="$(id -g "${TARGET_USER}")"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
+log_step "Stopping existing service if present: ${SERVICE_NAME}"
 systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
 
+log_step "Preparing install directories under ${INSTALL_DIR}"
 install -d -m 755 "${INSTALL_DIR}"
 install -d -m 700 "${INSTALL_DIR}/env"
 install -d -m 755 "${LINK_DIR}"
 
+log_step "Installing sdl and sdl-service binaries"
 install -m 755 "${SOURCE_DIR}/sdl" "${INSTALL_DIR}/sdl"
 install -m 755 "${SOURCE_DIR}/sdl-service" "${INSTALL_DIR}/sdl-service"
 
+log_step "Copying persisted env files (if present)"
 for name in config.json device-id; do
   if [[ -f "${SOURCE_DIR}/env/${name}" ]]; then
     install -m 600 "${SOURCE_DIR}/env/${name}" "${INSTALL_DIR}/env/${name}"
   fi
 done
 
+log_step "Applying env ownership for ${TARGET_USER} (${TARGET_UID}:${TARGET_GID})"
 chown "${TARGET_UID}:${TARGET_GID}" "${INSTALL_DIR}/env"
 chmod 700 "${INSTALL_DIR}/env"
 for name in config.json device-id; do
@@ -108,9 +117,11 @@ for name in config.json device-id; do
   fi
 done
 
+log_step "Updating CLI symlinks in ${LINK_DIR}"
 ln -sfn "${INSTALL_DIR}/sdl" "${LINK_DIR}/sdl"
 ln -sfn "${INSTALL_DIR}/sdl-service" "${LINK_DIR}/sdl-service"
 
+log_step "Writing systemd unit: ${UNIT_PATH}"
 cat > "${UNIT_PATH}" <<EOF
 [Unit]
 Description=SDL Service
@@ -134,7 +145,9 @@ Environment=SDL_DEVICE_KEY_PATH=${INSTALL_DIR}/env/device.key
 WantedBy=multi-user.target
 EOF
 
+log_step "Reloading systemd manager"
 systemctl daemon-reload
+log_step "Enabling and starting ${SERVICE_NAME} (this may take a few seconds)"
 systemctl enable --now "${SERVICE_NAME}"
 
 echo "Installed SDL to ${INSTALL_DIR}"
