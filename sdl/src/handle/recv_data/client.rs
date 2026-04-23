@@ -49,6 +49,10 @@ fn log_sampled_drop(
         log::debug!("{}", message(total));
     }
 }
+
+fn requires_peer_decrypt(source: Ipv4Addr, current_device: &CurrentDeviceInfo) -> bool {
+    source != current_device.virtual_gateway
+}
 /// 处理来源于客户端的包
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
@@ -150,7 +154,9 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
-        if source != current_device.virtual_gateway && self.runtime.peer_info(&source).is_none() {
+        if requires_peer_decrypt(source, current_device)
+            && self.runtime.peer_info(&source).is_none()
+        {
             log_sampled_drop(
                 &UNKNOWN_PEER_DROP_COUNT,
                 &UNKNOWN_PEER_DROP_LOG_LIMITER,
@@ -163,7 +169,9 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             );
             return Ok(());
         }
-        if !self.decrypt_by_route(&source, route_key, &mut net_packet)? {
+        if requires_peer_decrypt(source, current_device)
+            && !self.decrypt_by_route(&source, route_key, &mut net_packet)?
+        {
             return Ok(());
         }
         let packet_len = net_packet.buffer().as_ref().len();
@@ -217,6 +225,41 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             Protocol::Unknown(_) => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_peer_decrypt;
+    use crate::handle::CurrentDeviceInfo;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn virtual_gateway_packets_skip_peer_decrypt() {
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+
+        assert!(!requires_peer_decrypt(
+            Ipv4Addr::new(10, 26, 0, 1),
+            &current_device
+        ));
+    }
+
+    #[test]
+    fn peer_packets_still_require_peer_decrypt() {
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+
+        assert!(requires_peer_decrypt(
+            Ipv4Addr::new(10, 26, 0, 5),
+            &current_device
+        ));
     }
 }
 
