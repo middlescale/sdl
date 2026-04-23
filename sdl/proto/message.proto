@@ -356,10 +356,10 @@ message ClientStatusInfo {
     uint64 up_stream = 3;
     uint64 down_stream = 4;
     PunchNatType nat_type = 5;
-    reserved 6, 7, 9;
-    repeated uint32 local_udp_ports = 8;
+    reserved 6, 7, 8, 9;
     repeated PunchEndpoint public_udp_endpoints = 10;
     PunchTriggerReason punch_trigger_reason = 11;
+    repeated PunchEndpoint local_udp_endpoints = 12;
 }
 message RouteItem {
     fixed32 next_ip = 1;

@@ -503,10 +503,26 @@ impl ControlSession {
                 PunchNatType::Symmetric
             });
         let nat_info = self.nat_test.nat_info();
-        message.local_udp_ports = nat_info.udp_ports.iter().map(|p| *p as u32).collect();
         message.public_udp_endpoints = nat_info
             .public_udp_endpoints
             .iter()
+            .map(|addr| {
+                let mut endpoint = PunchEndpoint::new();
+                endpoint.port = u32::from(addr.port());
+                match addr {
+                    std::net::SocketAddr::V4(addr) => {
+                        endpoint.ip = u32::from(*addr.ip());
+                    }
+                    std::net::SocketAddr::V6(addr) => {
+                        endpoint.ipv6 = addr.ip().octets().to_vec();
+                    }
+                }
+                endpoint
+            })
+            .collect();
+        message.local_udp_endpoints = nat_info
+            .local_udp_endpoints()
+            .into_iter()
             .map(|addr| {
                 let mut endpoint = PunchEndpoint::new();
                 endpoint.port = u32::from(addr.port());

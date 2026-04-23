@@ -7894,12 +7894,12 @@ pub struct ClientStatusInfo {
     pub down_stream: u64,
     // @@protoc_insertion_point(field:ClientStatusInfo.nat_type)
     pub nat_type: ::protobuf::EnumOrUnknown<PunchNatType>,
-    // @@protoc_insertion_point(field:ClientStatusInfo.local_udp_ports)
-    pub local_udp_ports: ::std::vec::Vec<u32>,
     // @@protoc_insertion_point(field:ClientStatusInfo.public_udp_endpoints)
     pub public_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
     // @@protoc_insertion_point(field:ClientStatusInfo.punch_trigger_reason)
     pub punch_trigger_reason: ::protobuf::EnumOrUnknown<PunchTriggerReason>,
+    // @@protoc_insertion_point(field:ClientStatusInfo.local_udp_endpoints)
+    pub local_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
     // special fields
     // @@protoc_insertion_point(special_field:ClientStatusInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -7945,11 +7945,6 @@ impl ClientStatusInfo {
             |m: &mut ClientStatusInfo| { &mut m.nat_type },
         ));
         fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
-            "local_udp_ports",
-            |m: &ClientStatusInfo| { &m.local_udp_ports },
-            |m: &mut ClientStatusInfo| { &mut m.local_udp_ports },
-        ));
-        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
             "public_udp_endpoints",
             |m: &ClientStatusInfo| { &m.public_udp_endpoints },
             |m: &mut ClientStatusInfo| { &mut m.public_udp_endpoints },
@@ -7958,6 +7953,11 @@ impl ClientStatusInfo {
             "punch_trigger_reason",
             |m: &ClientStatusInfo| { &m.punch_trigger_reason },
             |m: &mut ClientStatusInfo| { &mut m.punch_trigger_reason },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
+            "local_udp_endpoints",
+            |m: &ClientStatusInfo| { &m.local_udp_endpoints },
+            |m: &mut ClientStatusInfo| { &mut m.local_udp_endpoints },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ClientStatusInfo>(
             "ClientStatusInfo",
@@ -7992,17 +7992,14 @@ impl ::protobuf::Message for ClientStatusInfo {
                 40 => {
                     self.nat_type = is.read_enum_or_unknown()?;
                 },
-                66 => {
-                    is.read_repeated_packed_uint32_into(&mut self.local_udp_ports)?;
-                },
-                64 => {
-                    self.local_udp_ports.push(is.read_uint32()?);
-                },
                 82 => {
                     self.public_udp_endpoints.push(is.read_message()?);
                 },
                 88 => {
                     self.punch_trigger_reason = is.read_enum_or_unknown()?;
+                },
+                98 => {
+                    self.local_udp_endpoints.push(is.read_message()?);
                 },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
@@ -8032,9 +8029,6 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.nat_type != ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric) {
             my_size += ::protobuf::rt::int32_size(5, self.nat_type.value());
         }
-        for value in &self.local_udp_ports {
-            my_size += ::protobuf::rt::uint32_size(8, *value);
-        };
         for value in &self.public_udp_endpoints {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
@@ -8042,6 +8036,10 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.punch_trigger_reason != ::protobuf::EnumOrUnknown::new(PunchTriggerReason::PunchTriggerUnknown) {
             my_size += ::protobuf::rt::int32_size(11, self.punch_trigger_reason.value());
         }
+        for value in &self.local_udp_endpoints {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -8063,15 +8061,15 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.nat_type != ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric) {
             os.write_enum(5, ::protobuf::EnumOrUnknown::value(&self.nat_type))?;
         }
-        for v in &self.local_udp_ports {
-            os.write_uint32(8, *v)?;
-        };
         for v in &self.public_udp_endpoints {
             ::protobuf::rt::write_message_field_with_cached_size(10, v, os)?;
         };
         if self.punch_trigger_reason != ::protobuf::EnumOrUnknown::new(PunchTriggerReason::PunchTriggerUnknown) {
             os.write_enum(11, ::protobuf::EnumOrUnknown::value(&self.punch_trigger_reason))?;
         }
+        for v in &self.local_udp_endpoints {
+            ::protobuf::rt::write_message_field_with_cached_size(12, v, os)?;
+        };
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -8094,9 +8092,9 @@ impl ::protobuf::Message for ClientStatusInfo {
         self.up_stream = 0;
         self.down_stream = 0;
         self.nat_type = ::protobuf::EnumOrUnknown::new(PunchNatType::Symmetric);
-        self.local_udp_ports.clear();
         self.public_udp_endpoints.clear();
         self.punch_trigger_reason = ::protobuf::EnumOrUnknown::new(PunchTriggerReason::PunchTriggerUnknown);
+        self.local_udp_endpoints.clear();
         self.special_fields.clear();
     }
 
@@ -8107,9 +8105,9 @@ impl ::protobuf::Message for ClientStatusInfo {
             up_stream: 0,
             down_stream: 0,
             nat_type: ::protobuf::EnumOrUnknown::from_i32(0),
-            local_udp_ports: ::std::vec::Vec::new(),
             public_udp_endpoints: ::std::vec::Vec::new(),
             punch_trigger_reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            local_udp_endpoints: ::std::vec::Vec::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8911,38 +8909,38 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\x18\x06\x20\x01(\tR\
     \x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEn\
     dpointR\x10selectedEndpoint\x12(\n\x05phase\x18\x08\x20\x01(\x0e2\x12.Pu\
-    nchSessionPhaseR\x05phase\"\xfc\x02\n\x10ClientStatusInfo\x12\x16\n\x06s\
+    nchSessionPhaseR\x05phase\"\x9a\x03\n\x10ClientStatusInfo\x12\x16\n\x06s\
     ource\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08p2p_list\x18\x02\x20\x03\
     (\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04\
     R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\ndownStream\
     \x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\
-    &\n\x0flocal_udp_ports\x18\x08\x20\x03(\rR\rlocalUdpPorts\x12@\n\x14publ\
-    ic_udp_endpoints\x18\n\x20\x03(\x0b2\x0e.PunchEndpointR\x12publicUdpEndp\
-    oints\x12E\n\x14punch_trigger_reason\x18\x0b\x20\x01(\x0e2\x13.PunchTrig\
-    gerReasonR\x12punchTriggerReasonJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\
-    \x08J\x04\x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\
-    \x01(\x07R\x06nextIp*d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHAN\
-    NEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14\
-    GATEWAY_CHANNEL_QUIC\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\
-    \0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\x12\x07\n\x03All\x10\0\
-    \x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Ud\
-    p\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\xab\x01\n\x12PunchTriggerReason\
-    \x12\x17\n\x13PunchTriggerUnknown\x10\0\x12\x1c\n\x18PunchTriggerStatusU\
-    pdate\x10\x01\x12\x1c\n\x18PunchTriggerRouteTimeout\x10\x02\x12!\n\x1dPu\
-    nchTriggerReconnectRecovery\x10\x03\x12\x1d\n\x19PunchTriggerManualReque\
-    st\x10\x04*\xb5\x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPhaseUnknow\
-    n\x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11PunchPhase\
-    Sending\x10\x02\x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\n\x11Punc\
-    hPhaseSuccess\x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\x12\x14\n\
-    \x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelectionPolicy\
-    \x12!\n\x1dPunchEndpointSelectionDefault\x10\0\x12\x1d\n\x19PunchEndpoin\
-    tSelectionAll\x10\x01\x12&\n\"PunchEndpointSelectionPreferPublic\x10\x02\
-    *\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\
-    \x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\
-    \x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCan\
-    celed\x10\x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\n\x15Punc\
-    hResultNoResponse\x10\x06\x12\x19\n\x15PunchResultSuperseded\x10\x07b\
-    \x06proto3\
+    @\n\x14public_udp_endpoints\x18\n\x20\x03(\x0b2\x0e.PunchEndpointR\x12pu\
+    blicUdpEndpoints\x12E\n\x14punch_trigger_reason\x18\x0b\x20\x01(\x0e2\
+    \x13.PunchTriggerReasonR\x12punchTriggerReason\x12>\n\x13local_udp_endpo\
+    ints\x18\x0c\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\
+    \x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\
+    \n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*\
+    d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\
+    \x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\
+    \x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\
+    \x10\x01*F\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\
+    \x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\
+    \x07IPv6Udp\x10\x04*\xab\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchT\
+    riggerUnknown\x10\0\x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\
+    \x1c\n\x18PunchTriggerRouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconne\
+    ctRecovery\x10\x03\x12\x1d\n\x19PunchTriggerManualRequest\x10\x04*\xb5\
+    \x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\
+    \n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\
+    \x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\
+    \x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseF\
+    ailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunch\
+    EndpointSelectionDefault\x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\
+    \x10\x01\x12&\n\"PunchEndpointSelectionPreferPublic\x10\x02*\xd8\x01\n\
+    \x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\x16\n\x12P\
+    unchResultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\x02\x12\x16\
+    \n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCanceled\x10\
+    \x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\n\x15PunchResultNo\
+    Response\x10\x06\x12\x19\n\x15PunchResultSuperseded\x10\x07b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
