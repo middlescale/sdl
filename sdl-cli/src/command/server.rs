@@ -85,7 +85,7 @@ where
             "list" => {
                 serde_yaml::to_string(&handler.list()?).unwrap_or_else(|e| format!("error {:?}", e))
             }
-            "info" => {
+            "status" | "info" => {
                 serde_yaml::to_string(&handler.info()?).unwrap_or_else(|e| format!("error {:?}", e))
             }
             "gateway" => serde_yaml::to_string(&handler.gateway()?)
@@ -198,6 +198,73 @@ mod tests {
         let out = command("rename:desktop windows", &handler).unwrap();
         let parsed: String = serde_yaml::from_str(&out).unwrap();
         assert_eq!(parsed, "desktop windows");
+    }
+
+    #[test]
+    fn status_command_reuses_info_handler() {
+        struct StatusHandler;
+
+        impl CommandHandler for StatusHandler {
+            fn route(&self) -> io::Result<Vec<RouteItem>> {
+                Err(io::Error::other("unused"))
+            }
+            fn list(&self) -> io::Result<Vec<DeviceItem>> {
+                Err(io::Error::other("unused"))
+            }
+            fn info(&self) -> io::Result<Info> {
+                Ok(Info {
+                    name: "status-ok".to_string(),
+                    runtime_name: String::new(),
+                    restart_required: false,
+                    device_id: String::new(),
+                    virtual_ip: String::new(),
+                    virtual_gateway: String::new(),
+                    virtual_netmask: String::new(),
+                    gateway_session_status: String::new(),
+                    gateway_endpoint: String::new(),
+                    gateway_channel: String::new(),
+                    connect_status: String::new(),
+                    data_plane_status: String::new(),
+                    auth_pending: false,
+                    channel_policy: String::new(),
+                    last_error: None,
+                    nat_type: String::new(),
+                    public_ips: String::new(),
+                    local_addr: String::new(),
+                    ipv6_addr: String::new(),
+                    port_mapping_list: Vec::new(),
+                    in_ips: Vec::new(),
+                    out_ips: Vec::new(),
+                    udp_listen_addr: Vec::new(),
+                })
+            }
+            fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
+                Err(io::Error::other("unused"))
+            }
+            fn traffic(&self) -> io::Result<TrafficSummary> {
+                Err(io::Error::other("unused"))
+            }
+            fn resume_runtime(&self) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn suspend_runtime(&self) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn channel_change(&self, _use_channel_type: UseChannelType) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn rename(&self, _new_name: &str) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn auth(&self, _auth: AuthCommand) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+        }
+
+        let handler = StatusHandler;
+        let out = command("status", &handler).unwrap();
+        let parsed: Info = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(parsed.name, "status-ok");
     }
 
     struct FailingRenameHandler;

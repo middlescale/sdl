@@ -309,7 +309,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("--disable-stats", ("关闭流量统计", "Disable traffic statistics")),
         ("--list", ("后台运行时,查看其他设备列表", "View list of other devices when running in background")),
         ("--all", ("后台运行时,查看其他设备完整信息", "View complete information of other devices when running in background")),
-        ("--info", ("后台运行时,查看当前设备信息", "View information of current device when running in background")),
+        ("--status", ("后台运行时,查看当前设备状态", "View current device status when running in background")),
         ("--route", ("后台运行时,查看数据转发路径", "View data forwarding path when running in background")),
         ("--stop", ("停止后台运行", "Stop running in background"))
         // ... 其他选项
@@ -469,8 +469,8 @@ fn print_usage(program: &str, _opts: Options) {
             yellow(get_description("--all", &language).to_string())
         );
         println!(
-            "  --info              {}",
-            yellow(get_description("--info", &language).to_string())
+            "  --status            {}",
+            yellow(get_description("--status", &language).to_string())
         );
         println!(
             "  --route             {}",

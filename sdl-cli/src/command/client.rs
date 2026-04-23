@@ -22,6 +22,9 @@ impl CommandClient {
     pub fn route(&mut self) -> io::Result<Vec<RouteItem>> {
         self.send_cmd(b"route")
     }
+    pub fn status(&mut self) -> io::Result<Info> {
+        self.send_cmd(b"status")
+    }
     pub fn info(&mut self) -> io::Result<Info> {
         self.send_cmd(b"info")
     }

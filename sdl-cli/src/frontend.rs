@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 fn print_usage() {
     println!(
-        "sdl <resume|list|info|gateway|route|traffic|suspend|rename|auth|channel-change|version> [options]"
+        "sdl <resume|list|status|gateway|route|traffic|suspend|rename|auth|channel-change|version> [options]"
     );
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
-    println!("  sdl info [--json]");
+    println!("  sdl status [--json]");
     println!("  sdl gateway [--json]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
@@ -32,7 +32,7 @@ pub fn run() -> i32 {
     match command {
         "resume" => handle_resume(&args[2..]),
         "list" => handle_list(&args[2..]),
-        "info" => handle_info(&args[2..]),
+        "status" | "info" => handle_status(&args[2..]),
         "gateway" => handle_gateway(&args[2..]),
         "route" => handle_route(&args[2..]),
         "traffic" => handle_traffic(&args[2..]),
@@ -210,26 +210,26 @@ fn handle_list(args: &[String]) -> i32 {
     }
 }
 
-fn handle_info(args: &[String]) -> i32 {
+fn handle_status(args: &[String]) -> i32 {
     if has_json_flag(args) {
-        match CommandClient::new().and_then(|mut client| client.info()) {
-            Ok(info) => {
-                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+        match CommandClient::new().and_then(|mut client| client.status()) {
+            Ok(status) => {
+                println!("{}", serde_json::to_string_pretty(&status).unwrap());
                 0
             }
             Err(e) => {
-                eprintln!("info error: {}", e);
+                eprintln!("status error: {}", e);
                 1
             }
         }
     } else {
-        match CommandClient::new().and_then(|mut client| client.info()) {
-            Ok(info) => {
-                console_out::console_info(info);
+        match CommandClient::new().and_then(|mut client| client.status()) {
+            Ok(status) => {
+                console_out::console_info(status);
                 0
             }
             Err(e) => {
-                eprintln!("info error: {}", e);
+                eprintln!("status error: {}", e);
                 1
             }
         }
