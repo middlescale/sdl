@@ -113,6 +113,10 @@ jobs:
           mv ./target/$TARGET/release/$EXEC_SDL ./artifacts/$EXEC_SDL
           mv ./target/$TARGET/release/$EXEC_SDL_SERVICE ./artifacts/$EXEC_SDL_SERVICE
           mv ./README ./artifacts/README.txt
+          if [[ ! $OS =~ ^windows.*$ ]]; then
+            cp ./install.sh ./artifacts/install.sh
+            chmod +x ./artifacts/install.sh
+          fi
           cd ./artifacts
           if [[ $OS =~ ^windows.*$ ]]; then
             powershell.exe -NoLogo -NoProfile -Command "Compress-Archive -Path * -DestinationPath '$ARCHIVE_NAME'"

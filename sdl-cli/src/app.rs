@@ -531,9 +531,21 @@ pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
         println!("Please run sdl-service with administrator or root privileges");
         return 1;
     }
+    let service_lock = match crate::service_lock::acquire_service_lock() {
+        Ok(lock) => lock,
+        Err(e) => {
+            log::error!("failed to acquire service instance lock: {:?}", e);
+            println!("{}", style(format!("Error {}", e)).red());
+            return 1;
+        }
+    };
     let build_version = crate::build_version_string();
     println!("sdl-service version {}", build_version);
     log::info!("sdl-service version {}", build_version);
+    log::info!(
+        "acquired service instance lock at {}",
+        service_lock.path().display()
+    );
     let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
     manager.mutate_state(|state| {
         state.runtime_running = false;
@@ -602,5 +614,6 @@ pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
 
     let _ = shutdown_receiver.recv();
     manager.shutdown();
+    drop(service_lock);
     0
 }

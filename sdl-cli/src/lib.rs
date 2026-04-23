@@ -10,6 +10,7 @@ pub mod frontend;
 pub mod fs_access;
 pub mod identifier;
 pub mod root_check;
+mod service_lock;
 
 mod args_parse;
 mod generated_serial_number {
