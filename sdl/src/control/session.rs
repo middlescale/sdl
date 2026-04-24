@@ -91,7 +91,18 @@ impl ControlSession {
             self.channel
                 .update_server_name(control_addr.server_name().to_string());
         }
-        self.channel.send_packet(packet)
+        match self.channel.send_packet(packet) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotConnected {
+                    self.force_reconnect_without_callback(format!(
+                        "control packet enqueue failed: {:?}",
+                        e
+                    ));
+                }
+                Err(e)
+            }
+        }
     }
 
     pub fn send_handshake(&self) -> io::Result<()> {
@@ -117,7 +128,11 @@ impl ControlSession {
             last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
             on_packet(data, route_key);
         };
-        self.channel.start(stop_manager.clone(), wrapped)?;
+        let control_session = self.clone();
+        self.channel
+            .start(stop_manager.clone(), wrapped, move |reason| {
+                control_session.force_reconnect_without_callback(reason);
+            })?;
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
         let worker = stop_manager.add_listener("controlSession".into(), move || {
             let _ = stop_sender.send(());
@@ -161,14 +176,25 @@ impl ControlSession {
     }
 
     fn mark_control_disconnected<Call: SdlCallback>(&self, call: &Call, reason: String) {
-        self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
-        crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
+        if !self.force_reconnect_without_callback(reason.clone()) {
+            return;
+        }
         call.error(ErrorInfo::new_msg(
             ErrorType::Disconnect,
             format!("{reason}; existing gateway/p2p data plane is kept"),
         ));
+    }
+
+    fn force_reconnect_without_callback(&self, reason: String) -> bool {
+        if self.current_device().status.offline() {
+            return false;
+        }
+        self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
+        crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
+        self.clear_negotiated_capabilities();
         self.data_plane.route_manager.clear_peer(&CONTROL_VIP);
         log::warn!("{reason}");
+        true
     }
 
     fn run<Call: SdlCallback>(&self, call: Call, stop_receiver: mpsc::Receiver<()>) {

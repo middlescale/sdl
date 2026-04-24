@@ -22,6 +22,8 @@ use crate::transport::control_addr::parse_control_address;
 use crate::transport::quic_channel::{consume_pending_frames, frame_quic_packet, PacketCallback};
 use crate::util::StopManager;
 
+type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
+
 enum Http3Command {
     Send(Vec<u8>),
 }
@@ -61,14 +63,21 @@ impl Http3Channel {
         })
     }
 
-    pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
+    pub fn start<F, E>(
+        &self,
+        stop_manager: StopManager,
+        on_packet: F,
+        on_transport_error: E,
+    ) -> anyhow::Result<()>
     where
         F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        E: Fn(String) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
             return Ok(());
         };
         let callback: PacketCallback = Arc::new(on_packet);
+        let on_transport_error: TransportErrorCallback = Arc::new(on_transport_error);
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
         let request_uri = self.request_uri.clone();
@@ -86,8 +95,15 @@ impl Http3Channel {
             .name(worker_name.clone())
             .spawn(move || {
                 let worker_task = runtime.spawn(async move {
-                    run_http3_worker(receiver, server_addr, server_name, request_uri, callback)
-                        .await;
+                    run_http3_worker(
+                        receiver,
+                        server_addr,
+                        server_name,
+                        request_uri,
+                        callback,
+                        on_transport_error,
+                    )
+                    .await;
                 });
                 runtime.block_on(async {
                     let mut worker_task = worker_task;
@@ -138,6 +154,7 @@ async fn run_http3_worker(
     server_name: Arc<Mutex<String>>,
     request_uri: String,
     on_packet: PacketCallback,
+    on_transport_error: TransportErrorCallback,
 ) {
     let mut active: Option<ActiveConnection> = None;
     while let Some(command) = receiver.recv().await {
@@ -180,6 +197,10 @@ async fn run_http3_worker(
                         }
                         Err(e) => {
                             log::warn!("control http3 connect failed {}: {:?}", addr, e);
+                            on_transport_error(format!(
+                                "control http3 connect failed {}: {:?}",
+                                addr, e
+                            ));
                             continue;
                         }
                     }
@@ -220,6 +241,10 @@ async fn run_http3_worker(
                                 send.send_data(Bytes::from(frame_quic_packet(&data))).await
                             {
                                 log::warn!("control http3 resend failed {}: {:?}", addr, e);
+                                on_transport_error(format!(
+                                    "control http3 resend failed {}: {:?}",
+                                    addr, e
+                                ));
                                 endpoint.close(0u32.into(), &[]);
                             } else {
                                 active = Some(ActiveConnection {
@@ -232,6 +257,10 @@ async fn run_http3_worker(
                         }
                         Err(e) => {
                             log::warn!("control http3 reconnect failed {}: {:?}", addr, e);
+                            on_transport_error(format!(
+                                "control http3 reconnect failed {}: {:?}",
+                                addr, e
+                            ));
                         }
                     }
                 }
