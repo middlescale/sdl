@@ -14,16 +14,19 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use sys_locale::get_locale;
 
+fn executable_root_from(path: PathBuf) -> PathBuf {
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    if let Some(v) = path.as_path().parent() {
+        v.to_path_buf()
+    } else {
+        log::warn!("current_exe parent none:{:?}", path);
+        PathBuf::new()
+    }
+}
+
 pub fn app_home() -> io::Result<PathBuf> {
     let root_path = match std::env::current_exe() {
-        Ok(path) => {
-            if let Some(v) = path.as_path().parent() {
-                v.to_path_buf()
-            } else {
-                log::warn!("current_exe parent none:{:?}", path);
-                PathBuf::new()
-            }
-        }
+        Ok(path) => executable_root_from(path),
         Err(e) => {
             log::warn!("current_exe err:{:?}", e);
             PathBuf::new()
@@ -486,9 +489,10 @@ fn print_usage(program: &str, _opts: Options) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args_config_from;
+    use super::{executable_root_from, parse_args_config_from};
     use crate::config::{DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
     use std::fs;
+    use std::path::PathBuf;
 
     fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -567,6 +571,36 @@ ports: [30001]
         .expect_err("--model should be rejected");
 
         assert!(err.to_string().contains("Unrecognized option: 'model'"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_root_from_resolves_symlink_parent() {
+        use std::os::unix::fs::symlink;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let base = std::env::temp_dir().join(format!(
+            "sdl-cli-app-home-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let real_dir = base.join("opt").join("sdl");
+        let link_dir = base.join("usr").join("local").join("bin");
+        fs::create_dir_all(&real_dir).expect("create real dir");
+        fs::create_dir_all(&link_dir).expect("create link dir");
+        let real_exe = real_dir.join("sdl");
+        fs::write(&real_exe, b"").expect("create real exe");
+        let link_exe = link_dir.join("sdl");
+        symlink(&real_exe, &link_exe).expect("create symlink");
+
+        let root = executable_root_from(link_exe);
+
+        assert_eq!(root, PathBuf::from(&real_dir));
+
+        let _ = fs::remove_dir_all(base);
     }
 }
 
