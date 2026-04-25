@@ -64,6 +64,8 @@ pub struct ServerPacketHandler<Call, Device> {
     device: Device,
     callback: Call,
     punch_active_sessions: Arc<Mutex<HashMap<Ipv4Addr, ActivePunchState>>>,
+    // Keep device-list commit/apply in order with other peer_state epoch mutators.
+    device_list_update_lock: Arc<Mutex<()>>,
     device_auth_ok: Arc<AtomicCell<bool>>,
 }
 
@@ -80,6 +82,11 @@ struct ActivePunchSession {
 struct ActivePunchState {
     active: ActivePunchSession,
     coalesced: Vec<ActivePunchSession>,
+}
+
+struct DeviceListUpdate {
+    previous_peers: HashMap<Ipv4Addr, PeerDeviceInfo>,
+    ip_list: Vec<PeerDeviceInfo>,
 }
 
 impl ActivePunchState {
@@ -127,6 +134,7 @@ impl<Call, Device> ServerPacketHandler<Call, Device> {
             device,
             callback,
             punch_active_sessions: Arc::new(Mutex::new(HashMap::new())),
+            device_list_update_lock: Arc::new(Mutex::new(())),
             device_auth_ok: Arc::new(AtomicCell::new(false)),
         }
     }
@@ -295,6 +303,50 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 .map(|grant| grant.gateway_id.clone())
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn prepare_device_list_update(
+        &self,
+        device_info_list: Vec<proto::message::DeviceInfo>,
+        epoch: u16,
+    ) -> Option<DeviceListUpdate> {
+        let ip_list: Vec<PeerDeviceInfo> = device_info_list
+            .into_iter()
+            .map(|info| {
+                PeerDeviceInfo::new(
+                    Ipv4Addr::from(info.virtual_ip),
+                    info.name,
+                    info.device_status as u8,
+                    info.device_id,
+                    info.device_pub_key,
+                    info.online_kx_pub,
+                )
+            })
+            .collect();
+        let next_devices: HashMap<Ipv4Addr, PeerDeviceInfo> = ip_list
+            .iter()
+            .cloned()
+            .map(|peer| (peer.virtual_ip, peer))
+            .collect();
+        let previous_peers = {
+            let mut peer_state = self.runtime.peer_state.lock();
+            let current_epoch = peer_state.epoch;
+            let Some(previous_peers) =
+                try_commit_device_list_state(&mut peer_state, epoch, next_devices)
+            else {
+                log::info!(
+                    "ignore stale device list: current_epoch={}, incoming_epoch={}",
+                    current_epoch,
+                    epoch
+                );
+                return None;
+            };
+            previous_peers
+        };
+        Some(DeviceListUpdate {
+            previous_peers,
+            ip_list,
+        })
     }
 
     fn reconcile_punch_sessions(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
@@ -538,6 +590,18 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Ipv4Addr::from(response.virtual_ip & response.virtual_netmask);
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
                 log::info!("注册成功：{:?}", register_info);
+                let _device_list_update_guard = self.device_list_update_lock.lock();
+                let Some(device_list_update) = self.prepare_device_list_update(
+                    response.device_info_list.clone(),
+                    response.epoch as _,
+                ) else {
+                    log::info!(
+                        "ignore stale registration response: virtual_ip={}, epoch={}",
+                        virtual_ip,
+                        response.epoch
+                    );
+                    return Ok(());
+                };
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
@@ -615,7 +679,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             }
                         }
                     }
-                    self.set_device_info_list(response.device_info_list, response.epoch as _);
+                    self.set_device_info_list(device_list_update);
                     self.runtime
                         .control_session
                         .trigger_status_report_with_nat_ready(if old.status.offline() {
@@ -658,12 +722,18 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::PushDeviceList => {
                 let response = DeviceList::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
+                let _device_list_update_guard = self.device_list_update_lock.lock();
+                let Some(device_list_update) =
+                    self.prepare_device_list_update(response.device_info_list, response.epoch as _)
+                else {
+                    return Ok(());
+                };
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     None,
                     current_device.virtual_ip,
                 );
-                self.set_device_info_list(response.device_info_list, response.epoch as _);
+                self.set_device_info_list(device_list_update);
                 self.runtime
                     .control_session
                     .trigger_status_report_with_nat_ready(
@@ -1011,33 +1081,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         Ok(())
     }
-    fn set_device_info_list(&self, device_info_list: Vec<proto::message::DeviceInfo>, epoch: u16) {
-        let previous_peers = {
-            let peer_state = self.runtime.peer_state.lock();
-            let current_epoch = peer_state.epoch;
-            if is_stale_epoch(current_epoch, epoch) {
-                log::info!(
-                    "ignore stale device list: current_epoch={}, incoming_epoch={}",
-                    current_epoch,
-                    epoch
-                );
-                return;
-            }
-            peer_state.devices.clone()
-        };
-        let ip_list: Vec<PeerDeviceInfo> = device_info_list
-            .into_iter()
-            .map(|info| {
-                PeerDeviceInfo::new(
-                    Ipv4Addr::from(info.virtual_ip),
-                    info.name,
-                    info.device_status as u8,
-                    info.device_id,
-                    info.device_pub_key,
-                    info.online_kx_pub,
-                )
-            })
-            .collect();
+    fn set_device_info_list(&self, device_list_update: DeviceListUpdate) {
+        let DeviceListUpdate {
+            previous_peers,
+            ip_list,
+        } = device_list_update;
         let active_vips: HashSet<Ipv4Addr> = ip_list.iter().map(|peer| peer.virtual_ip).collect();
         let previous_by_identity: HashMap<Vec<u8>, Ipv4Addr> = previous_peers
             .values()
@@ -1109,15 +1157,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
             }
         }
-        {
-            let mut dev = self.runtime.peer_state.lock();
-            //这里可能会收到旧的消息，但是随着时间推移总会收到新的
-            dev.epoch = epoch;
-            dev.devices.clear();
-            for peer_info in ip_list.clone() {
-                dev.devices.insert(peer_info.virtual_ip, peer_info);
-            }
-        }
         self.runtime
             .peer_crypto
             .rotate_peer_session_ciphers(peer_session_ciphers);
@@ -1168,6 +1207,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 );
                 let err = ErrorInfo::new(ErrorType::Disconnect);
                 self.callback.error(err);
+                let _device_list_update_guard = self.device_list_update_lock.lock();
                 //掉线epoch要归零
                 {
                     let mut dev = self.runtime.peer_state.lock();
@@ -1255,6 +1295,19 @@ fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
         return false;
     }
     current_epoch.wrapping_sub(incoming_epoch) < (u16::MAX / 2)
+}
+
+fn try_commit_device_list_state(
+    peer_state: &mut crate::handle::PeerState,
+    epoch: u16,
+    next_devices: HashMap<Ipv4Addr, PeerDeviceInfo>,
+) -> Option<HashMap<Ipv4Addr, PeerDeviceInfo>> {
+    if is_stale_epoch(peer_state.epoch, epoch) {
+        return None;
+    }
+    let previous_peers = std::mem::replace(&mut peer_state.devices, next_devices);
+    peer_state.epoch = epoch;
+    Some(previous_peers)
 }
 
 fn build_punch_ack(
@@ -1505,15 +1558,18 @@ fn should_refresh_gateway_grant_after_registration(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        format_punch_endpoint, log_sampled_unauthorized_server_source_drop,
+        format_punch_endpoint, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
         observed_udp_port_from_registration, punch_endpoint_from_route,
         selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
+        try_commit_device_list_state,
         ActivePunchSession, ActivePunchState,
     };
     use crate::data_plane::route::Route;
+    use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart};
     use crate::transport::connect_protocol::ConnectProtocol;
+    use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
@@ -1566,6 +1622,93 @@ mod tests {
         assert_eq!(
             ack.phase.enum_value_or_default(),
             PunchSessionPhase::PunchPhaseFailed
+        );
+    }
+
+    #[test]
+    fn is_stale_epoch_accepts_zero_and_same_epoch() {
+        assert!(!is_stale_epoch(0, 10));
+        assert!(!is_stale_epoch(10, 10));
+    }
+
+    #[test]
+    fn is_stale_epoch_rejects_older_epoch_without_wrap() {
+        assert!(is_stale_epoch(83, 63));
+        assert!(!is_stale_epoch(63, 83));
+    }
+
+    #[test]
+    fn try_commit_device_list_state_rejects_stale_without_overwriting_state() {
+        let existing_peer = PeerDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            "peer-3".to_string(),
+            0,
+            "peer-3".to_string(),
+            vec![1],
+            vec![2],
+        );
+        let mut peer_state = crate::handle::PeerState {
+            epoch: 83,
+            devices: HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
+        };
+        let next_peer = PeerDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 4),
+            "peer-4".to_string(),
+            0,
+            "peer-4".to_string(),
+            vec![3],
+            vec![4],
+        );
+        let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer)]);
+
+        let previous = try_commit_device_list_state(&mut peer_state, 63, next_devices);
+
+        assert!(previous.is_none());
+        assert_eq!(peer_state.epoch, 83);
+        assert_eq!(peer_state.devices.len(), 1);
+        assert_eq!(
+            peer_state.devices.get(&Ipv4Addr::new(10, 26, 0, 3)),
+            Some(&existing_peer)
+        );
+    }
+
+    #[test]
+    fn try_commit_device_list_state_updates_epoch_and_returns_previous_peers() {
+        let existing_peer = PeerDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            "peer-3".to_string(),
+            0,
+            "peer-3".to_string(),
+            vec![1],
+            vec![2],
+        );
+        let next_peer = PeerDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 4),
+            "peer-4".to_string(),
+            0,
+            "peer-4".to_string(),
+            vec![3],
+            vec![4],
+        );
+        let mut peer_state = crate::handle::PeerState {
+            epoch: 63,
+            devices: HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
+        };
+        let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer.clone())]);
+
+        let previous = try_commit_device_list_state(&mut peer_state, 83, next_devices)
+            .expect("fresh epoch should commit");
+
+        assert_eq!(previous.len(), 1);
+        assert_eq!(
+            previous.get(&Ipv4Addr::new(10, 26, 0, 3)),
+            Some(&existing_peer)
+        );
+        assert_eq!(peer_state.epoch, 83);
+        assert_eq!(peer_state.devices.len(), 1);
+        assert_eq!(
+            peer_state.devices.get(&Ipv4Addr::new(10, 26, 0, 4)),
+            Some(&next_peer)
         );
     }
 

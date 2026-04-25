@@ -303,12 +303,13 @@ impl Punch {
         id: Ipv4Addr,
         mut nat_info: NatInfo,
         count: usize,
-    ) -> io::Result<()> {
+    ) -> io::Result<bool> {
         if self.route_manager.has_enough_direct_paths(&id) {
             log::info!("已打洞成功,无需打洞:{:?}", id);
-            return Ok(());
+            return Ok(false);
         }
         let device_info = self.current_device.load();
+        let mut sent = false;
 
         nat_info
             .public_ips
@@ -320,12 +321,13 @@ impl Punch {
             .local_ipv4
             .filter(|ip| device_info.not_in_network(*ip));
         if !self.punch_model.use_udp() || !nat_info.punch_model.use_udp() {
-            return Ok(());
+            return Ok(false);
         }
         if self.punch_model.use_ipv6() && nat_info.punch_model.use_ipv6() {
             if let Some(ipv6_addr) = nat_info.local_udp_ipv6addr() {
                 if !self.nat_test.is_local_address(false, ipv6_addr) {
                     self.peer_probe_tracker.record_punch_probe(id, ipv6_addr);
+                    sent = true;
                     let rs = self.udp_channel.send_to(buf, ipv6_addr);
                     log::info!("发送到ipv6地址:{:?},rs={:?} {}", ipv6_addr, rs, id);
                 }
@@ -335,16 +337,18 @@ impl Punch {
         for addr in &nat_info.public_udp_endpoints {
             if !self.nat_test.is_local_address(false, *addr) {
                 self.peer_probe_tracker.record_punch_probe(id, *addr);
+                sent = true;
                 let _ = self.udp_channel.send_to(buf, *addr);
                 thread::sleep(Duration::from_millis(3));
             }
         }
         if !self.punch_model.use_ipv4() || !nat_info.punch_model.use_ipv4() {
-            return Ok(());
+            return Ok(sent);
         }
         if let Some(ipv4_addr) = nat_info.local_udp_ipv4addr() {
             if !self.nat_test.is_local_address(false, ipv4_addr) {
                 self.peer_probe_tracker.record_punch_probe(id, ipv4_addr);
+                sent = true;
                 let _ = self.udp_channel.send_to(buf, ipv4_addr);
             }
         }
@@ -360,6 +364,7 @@ impl Punch {
                     }
                     let addr = SocketAddrV4::new(*ip, *port);
                     self.peer_probe_tracker.record_punch_probe(id, addr.into());
+                    sent = true;
                     let _ = self.udp_channel.send_to(buf, addr.into());
                     thread::sleep(Duration::from_millis(3));
                 }
@@ -405,6 +410,9 @@ impl Punch {
                         &nat_info.public_ips,
                         max_k1 as usize,
                     )?;
+                    if k > 0 && !nat_info.public_ips.is_empty() {
+                        sent = true;
+                    }
                 }
                 let start = *self.port_index.entry(id).or_insert(0);
                 let mut end = start + max_k2;
@@ -419,6 +427,9 @@ impl Punch {
                         &nat_info.public_ips,
                         max_k2,
                     )?;
+                if start < end && !nat_info.public_ips.is_empty() {
+                    sent = true;
+                }
                 if index >= self.port_vec.len() {
                     index = 0
                 }
@@ -438,6 +449,7 @@ impl Punch {
                         }
                         let addr = SocketAddr::V4(SocketAddrV4::new(*ip, port));
                         self.peer_probe_tracker.record_punch_probe(id, addr);
+                        sent = true;
                         self.udp_channel.send_to(buf, addr)?;
                         thread::sleep(Duration::from_millis(2));
                     }
@@ -448,7 +460,7 @@ impl Punch {
                 }
             }
         }
-        Ok(())
+        Ok(sent)
     }
 
     fn punch_symmetric(

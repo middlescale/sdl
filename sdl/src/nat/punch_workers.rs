@@ -173,7 +173,12 @@ fn punch_start(
                 0
             }
         };
-        log::info!("第{}次发起打洞,目标:{:?},{:?} ", count, peer_ip, nat_info);
+        log::debug!(
+            "处理 PunchRequest 任务,目标:{:?},第{}次,{:?}",
+            peer_ip,
+            count,
+            nat_info
+        );
 
         if peer_encrypt {
             let Ok(cipher) = peer_crypto.current_cipher(&peer_ip) else {
@@ -188,11 +193,12 @@ fn punch_start(
                 continue;
             }
         }
-        log::info!("开始发送 PunchRequest,目标:{},第{}次", peer_ip, count);
-        if let Err(e) = punch.punch(packet.buffer(), peer_ip, nat_info, count) {
-            log::warn!("{:?}", e)
-        } else {
-            log::info!("PunchRequest 发送完成,目标:{},第{}次", peer_ip, count);
+        match punch.punch(packet.buffer(), peer_ip, nat_info, count) {
+            Err(e) => log::warn!("{:?}", e),
+            Ok(true) => {
+                log::info!("PunchRequest 发送完成,目标:{},第{}次", peer_ip, count);
+            }
+            Ok(false) => {}
         }
     }
 }

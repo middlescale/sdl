@@ -15,6 +15,24 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
 
 `make release`是 build release
 
+### 安装服务
+
+- `install.sh` 现同时支持：
+  - Linux `systemd`
+  - macOS `launchd`
+- 默认会把 `sdl` / `sdl-service` 安装到 `/opt/sdl`，并把命令链接到 `/usr/local/bin`
+- 安装时会尽量保留 `env/` 下的持久文件（如 `config.json`、`device-id`、`device.key`）
+
+示例：
+
+```bash
+cd sdl
+sudo ./install.sh --source-dir ./target/release --user "$USER"
+```
+
+- Linux 安装后会启用 `systemd` unit：`sdl-service`
+- macOS 安装后会写入 `/Library/LaunchDaemons/net.middlescale.sdl-service.plist`
+
 ### 项目定位（当前阶段）
 
 - 当前工作区和二进制已切到 `sdl` / `sdl-service`，产品定位是 **SDL / Software Defined LAN**，而不是传统意义上的 SD-WAN。

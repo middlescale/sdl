@@ -40,6 +40,18 @@ sudo sdl-service -f /path/to/config.yaml
 - `sdl suspend`：只挂起当前 runtime 的本地收发，不退出 `sdl-service` 进程
 - `sdl resume`：不带 service 参数时，恢复已存在的 runtime；如果 runtime 已退出，则按保存配置重建
 
+### 推荐安装方式
+
+如果希望把 `sdl-service` 作为系统服务常驻运行，优先使用仓库根目录的 `install.sh`：
+
+```bash
+sudo ./install.sh --source-dir ./target/release --user "$USER"
+```
+
+- Linux: 安装到 `/opt/sdl`，生成并启动 `systemd` 服务 `sdl-service`
+- macOS: 安装到 `/opt/sdl`，生成并启动 `launchd` 服务 `net.middlescale.sdl-service`
+- 安装脚本会复用 `/opt/sdl/env/` 下的持久配置，并把本地前端命令链接到 `/usr/local/bin`
+
 ### 前端命令示例
 
 ```bash
