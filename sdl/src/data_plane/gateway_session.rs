@@ -514,16 +514,20 @@ impl GatewaySessions {
             if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
                 break;
             }
-            let current_device = self.current_device.load();
-            let sessions: Vec<GatewaySession> = self.sessions.lock().values().cloned().collect();
-            for session in sessions {
-                if let Err(e) = session.tick(&current_device) {
-                    log::debug!(
-                        "gateway session tick failed endpoint={}: {:?}",
-                        session.endpoint,
-                        e
-                    );
-                }
+            self.trigger_connect_now();
+        }
+    }
+
+    pub fn trigger_connect_now(&self) {
+        let current_device = self.current_device.load();
+        let sessions: Vec<GatewaySession> = self.sessions.lock().values().cloned().collect();
+        for session in sessions {
+            if let Err(e) = session.tick(&current_device) {
+                log::debug!(
+                    "gateway session tick failed endpoint={}: {:?}",
+                    session.endpoint,
+                    e
+                );
             }
         }
     }
@@ -661,6 +665,8 @@ impl GatewaySessions {
             }
         }
         self.reset_selection_if_missing(&guard);
+        drop(guard);
+        self.trigger_connect_now();
     }
 
     pub fn clear_gateway_grant(&self) {

@@ -627,6 +627,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         .update_addr(public_ip, observed_udp_port);
                     let old = current_device;
                     let dns_changed = self.runtime.replace_dns_profile(dns_profile);
+                    let vip_changed = old.virtual_ip != virtual_ip
+                        || old.virtual_gateway != virtual_gateway
+                        || old.virtual_netmask != virtual_netmask;
                     let mut cur = *current_device;
                     loop {
                         let mut new_current_device = cur;
@@ -645,12 +648,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             break;
                         }
                     }
+                    self.runtime.gateway_sessions.trigger_connect_now();
 
-                    if old.virtual_ip != virtual_ip
-                        || old.virtual_gateway != virtual_gateway
-                        || old.virtual_netmask != virtual_netmask
-                        || dns_changed
-                    {
+                    if vip_changed || dns_changed {
                         if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
                             log::info!("ip发生变化,old:{:?},response={:?}", old, response);
                         }
@@ -680,6 +680,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         }
                     }
                     self.set_device_info_list(device_list_update);
+                    if vip_changed {
+                        // apply_gateway_grants() may have kicked the gateway session while
+                        // current_device still held the old/unspecified VIP; trigger again
+                        // only when the virtual addressing actually changed so wake/reconnect
+                        // paths use the committed VIP without adding an extra round for
+                        // unchanged registrations.
+                        self.runtime.gateway_sessions.trigger_connect_now();
+                    }
                     self.runtime
                         .control_session
                         .trigger_status_report_with_nat_ready(if old.status.offline() {
