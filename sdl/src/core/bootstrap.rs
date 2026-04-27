@@ -31,7 +31,7 @@ use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{load_or_create_device_signing_key, DebugWatch, PeerCryptoManager, StopManager};
-use crate::{nat, DnsProfile, SdlCallback};
+use crate::{ensure_rustls_crypto_provider, nat, DnsProfile, SdlCallback};
 
 #[derive(Clone)]
 struct NullCallback;
@@ -67,6 +67,8 @@ impl Sdl {
         callback: Call,
         device: Device,
     ) -> anyhow::Result<Self> {
+        #[cfg(feature = "quic")]
+        ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);
         let device_signing_key = Arc::new(load_or_create_device_signing_key(&config.device_id)?);
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
