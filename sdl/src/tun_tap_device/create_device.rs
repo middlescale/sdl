@@ -70,13 +70,6 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
 
     #[cfg(target_os = "windows")]
     {
-        let name = config
-            .device_name
-            .clone()
-            .unwrap_or_else(|| DEFAULT_TUN_NAME.to_string());
-        if let Err(err) = delete_adapter_info_from_reg(&name) {
-            log::warn!("清理Windows网卡注册表信息失败 {}: {:?}", name, err);
-        }
         tun_builder = tun_builder.metric(0).ring_capacity(4 * 1024 * 1024);
     }
 

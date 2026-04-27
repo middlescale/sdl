@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use protobuf::Message;
 
@@ -364,14 +365,17 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         }),
                     );
                 }
+                let inject_started = Instant::now();
                 let written =
                     write_full_device(&self.device, net_packet.payload(), "peer ip packet inject")?;
+                let inject_elapsed = inject_started.elapsed();
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
                     log::debug!(
-                        "peer icmp echo reply injected into tun src={} dst={} written_bytes={}",
+                        "peer icmp echo reply injected into tun src={} dst={} written_bytes={} inject_elapsed_us={}",
                         icmp_source,
                         icmp_destination,
-                        written
+                        written,
+                        inject_elapsed.as_micros()
                     );
                     self.runtime.debug_watch.emit(
                         "icmp",
@@ -379,7 +383,10 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                         serde_json::json!({
                             "src": icmp_source.to_string(),
                             "dst": icmp_destination.to_string(),
+                            "attempted_bytes": net_packet.payload().len(),
                             "written_bytes": written,
+                            "inject_elapsed_us": inject_elapsed.as_micros(),
+                            "inject_elapsed_ms": inject_elapsed.as_millis(),
                             "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
                             "icmp_id": echo_meta.map(|meta| meta.identifier),
                             "icmp_seq": echo_meta.map(|meta| meta.sequence),

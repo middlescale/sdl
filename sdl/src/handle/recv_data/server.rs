@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
@@ -219,6 +219,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                         {
                             let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
                             if icmp_packet.kind() == Kind::EchoReply {
+                                let echo_meta = parse_icmp_echo_meta(&icmp_packet);
                                 //网关ip ping的回应
                                 log::debug!(
                                     "gateway icmp echo reply received src={} dst={} via={} bytes={}",
@@ -235,22 +236,25 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                         "dst": ipv4.destination_ip().to_string(),
                                         "via": route_key.addr.to_string(),
                                         "bytes": net_packet.payload().len(),
-                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
-                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
-                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
-                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
+                                        "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                        "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                        "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                                     }),
                                 );
+                                let inject_started = Instant::now();
                                 let written = write_full_device(
                                     &self.device,
                                     net_packet.payload(),
                                     "gateway ip packet inject",
                                 )?;
+                                let inject_elapsed = inject_started.elapsed();
                                 log::debug!(
-                                    "gateway icmp echo reply injected into tun src={} dst={} written_bytes={}",
+                                    "gateway icmp echo reply injected into tun src={} dst={} written_bytes={} inject_elapsed_us={}",
                                     ipv4.source_ip(),
                                     ipv4.destination_ip(),
-                                    written
+                                    written,
+                                    inject_elapsed.as_micros()
                                 );
                                 self.runtime.debug_watch.emit(
                                     "icmp",
@@ -258,11 +262,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     serde_json::json!({
                                         "src": ipv4.source_ip().to_string(),
                                         "dst": ipv4.destination_ip().to_string(),
+                                        "attempted_bytes": net_packet.payload().len(),
                                         "written_bytes": written,
-                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
-                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
-                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
-                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
+                                        "inject_elapsed_us": inject_elapsed.as_micros(),
+                                        "inject_elapsed_ms": inject_elapsed.as_millis(),
+                                        "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                        "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                        "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                                     }),
                                 );
                                 return Ok(());
