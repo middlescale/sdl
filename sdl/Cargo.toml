@@ -4,7 +4,7 @@ version = "1.2.16"
 edition = "2021"
 
 [dependencies]
-tun-rs = { version = "2.7.5", features = ["interruptible"], optional = true }
+tun-rs = { version = "2.5.0", features = ["interruptible"], optional = true }
 sdl_packet = { package = "sdl-packet", path = "../sdl-packet" }
 bytes = "1.5.0"
 log = "0.4.17"
@@ -36,9 +36,11 @@ ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
 futures-util = "0.3"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
+h2 = "0.4"
 http = "1.4.0"
 
 tokio = { version = "1.37.0", features = ["full"] }
+tokio-rustls = "0.26"
 
 lz4_flex = { version = "0.11", default-features = false, optional = true }
 zstd = { version = "0.13.1", optional = true }
