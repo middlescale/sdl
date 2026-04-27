@@ -32,7 +32,11 @@ impl DeviceAdapter {
 impl DeviceWrite for DeviceAdapter {
     #[inline]
     fn write(&self, buf: &[u8]) -> io::Result<usize> {
-        if let Some(tun) = self.tun.lock().as_ref() {
+        let tun = self.tun.lock().as_ref().cloned();
+        if let Some(tun) = tun {
+            // Hold the mutex only long enough to clone the adapter handle.
+            // On Windows, sending can block, so keeping the lock across send()
+            // serializes every writer behind the slowest one.
             tun.send(buf)
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not tun device"))

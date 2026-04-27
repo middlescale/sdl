@@ -68,9 +68,9 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        tun_builder = tun_builder.metric(0).ring_capacity(4 * 1024 * 1024);
+#[cfg(target_os = "windows")]
+{
+        tun_builder = tun_builder.metric(0).ring_capacity(16 * 1024 * 1024);
     }
 
     #[cfg(target_os = "linux")]
