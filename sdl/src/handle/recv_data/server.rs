@@ -32,6 +32,8 @@ use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
+use crate::tun_tap_device::vnt_device::write_full_device;
+use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::{proto, DnsProfile, PeerClientInfo};
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
@@ -233,9 +235,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                         "dst": ipv4.destination_ip().to_string(),
                                         "via": route_key.addr.to_string(),
                                         "bytes": net_packet.payload().len(),
+                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
+                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
+                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
                                     }),
                                 );
-                                let written = self.device.write(net_packet.payload())?;
+                                let written = write_full_device(
+                                    &self.device,
+                                    net_packet.payload(),
+                                    "gateway ip packet inject",
+                                )?;
                                 log::debug!(
                                     "gateway icmp echo reply injected into tun src={} dst={} written_bytes={}",
                                     ipv4.source_ip(),
@@ -249,6 +259,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                         "src": ipv4.source_ip().to_string(),
                                         "dst": ipv4.destination_ip().to_string(),
                                         "written_bytes": written,
+                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
+                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
+                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
                                     }),
                                 );
                                 return Ok(());
@@ -933,7 +947,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     &pending,
                     &response.response,
                 )?;
-                self.device.write(&packet)?;
+                write_full_device(&self.device, &packet, "dns response inject")?;
             }
             service_packet::Protocol::PunchStart => {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload())

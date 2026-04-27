@@ -23,6 +23,8 @@ use crate::protocol::{
     control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
 };
 use crate::tun_tap_device::vnt_device::DeviceWrite;
+use crate::tun_tap_device::vnt_device::write_full_device;
+use crate::util::icmp_debug::{parse_icmp_echo_meta, IcmpEchoMeta};
 
 static UNKNOWN_PEER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 static UNKNOWN_PEER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
@@ -275,12 +277,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             ip_turn_packet::Protocol::Ipv4 => {
                 let mut log_peer_echo_reply = None;
+                let mut echo_meta: Option<IcmpEchoMeta> = None;
                 {
                     let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
                     if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
                         && ipv4.destination_ip() == destination
                     {
                         let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
+                        echo_meta = parse_icmp_echo_meta(&icmp_packet);
                         if icmp_packet.kind() == Kind::EchoRequest {
                             //开启ping
                             icmp_packet.set_kind(Kind::EchoReply);
@@ -353,10 +357,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             "dst": icmp_destination.to_string(),
                             "via": route_key.addr.to_string(),
                             "bytes": net_packet.payload().len(),
+                            "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                            "icmp_id": echo_meta.map(|meta| meta.identifier),
+                            "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                            "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                         }),
                     );
                 }
-                let written = self.device.write(net_packet.payload())?;
+                let written =
+                    write_full_device(&self.device, net_packet.payload(), "peer ip packet inject")?;
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
                     log::debug!(
                         "peer icmp echo reply injected into tun src={} dst={} written_bytes={}",
@@ -371,6 +380,10 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             "src": icmp_source.to_string(),
                             "dst": icmp_destination.to_string(),
                             "written_bytes": written,
+                            "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                            "icmp_id": echo_meta.map(|meta| meta.identifier),
+                            "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                            "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                         }),
                     );
                 }

@@ -20,6 +20,7 @@ use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
 use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::icmp_debug::parse_icmp_echo_meta;
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;
@@ -30,7 +31,14 @@ fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> a
             ipv4_packet.set_source_ip(ipv4_packet.destination_ip());
             ipv4_packet.set_destination_ip(src);
             ipv4_packet.update_checksum();
-            device_writer.send(ipv4_packet.buffer)?;
+            let written = device_writer.send(ipv4_packet.buffer)?;
+            if written != ipv4_packet.buffer.len() {
+                anyhow::bail!(
+                    "self icmp reply short write: wrote {} of {}",
+                    written,
+                    ipv4_packet.buffer.len()
+                );
+            }
         }
     }
     Ok(())
@@ -165,6 +173,9 @@ pub(crate) fn handle(
     let dest_ip = ipv4_packet.destination_ip();
     let protocol = ipv4_packet.protocol();
     if protocol == Protocol::Icmp {
+        let icmp_meta = IcmpPacket::new(ipv4_packet.payload())
+            .ok()
+            .and_then(|packet| parse_icmp_echo_meta(&packet));
         log::debug!(
             "tun outbound icmp src={} dst={} bytes={}",
             src_ip,
@@ -178,6 +189,10 @@ pub(crate) fn handle(
                 "src": src_ip.to_string(),
                 "dst": dest_ip.to_string(),
                 "bytes": data_len.saturating_sub(12),
+                "icmp_kind": icmp_meta.map(|meta| meta.kind_label()),
+                "icmp_id": icmp_meta.map(|meta| meta.identifier),
+                "icmp_seq": icmp_meta.map(|meta| meta.sequence),
+                "icmp_checksum_valid": icmp_meta.map(|meta| meta.checksum_valid),
             }),
         );
     }
