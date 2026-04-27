@@ -191,6 +191,10 @@ impl ControlSession {
         }
         self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
         crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
+        {
+            let mut peer_state = self.data_plane.peer_state.lock();
+            peer_state.epoch = 0;
+        }
         self.clear_negotiated_capabilities();
         self.data_plane.route_manager.clear_peer(&CONTROL_VIP);
         log::warn!("{reason}");
