@@ -21,7 +21,6 @@ pub use handle::callback::*;
 pub mod compression;
 pub use sdl_packet;
 
-#[cfg(feature = "quic")]
 pub(crate) fn ensure_rustls_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();

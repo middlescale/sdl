@@ -87,10 +87,16 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
             .clone()
             .unwrap_or(DEFAULT_TUN_NAME.to_string());
         delete_device(&device_name);
+        let device = tun_builder.mtu(config.mtu as u16).build_sync()?;
+        set_device_up(&device_name)?;
+        Ok(Arc::new(device))
     }
 
-    let device = tun_builder.mtu(config.mtu as u16).build_sync()?;
-    Ok(Arc::new(device))
+    #[cfg(not(target_os = "linux"))]
+    {
+        let device = tun_builder.mtu(config.mtu as u16).build_sync()?;
+        Ok(Arc::new(device))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -106,6 +112,21 @@ fn delete_device(name: &str) {
     if !delete_tun.status.success() {
         log::warn!("删除网卡失败:{:?}", delete_tun);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn set_device_up(name: &str) -> io::Result<()> {
+    use std::process::Command;
+
+    let cmd = format!("ip link set dev {} up", name);
+    let out = Command::new("sh").arg("-c").arg(&cmd).output()?;
+    if !out.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("cmd={},out={:?}", cmd, out),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -232,6 +253,44 @@ pub fn add_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+pub fn delete_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result<()> {
+    use std::process::Command;
+
+    let prefix_len = u32::from(netmask).count_ones();
+    let route_target = if netmask.is_broadcast() {
+        format!("{address}/32")
+    } else {
+        format!("{address}/{prefix_len}")
+    };
+    println!("exe cmd: ip route del {} dev {}", route_target, name);
+    let out = Command::new("ip")
+        .arg("route")
+        .arg("del")
+        .arg(&route_target)
+        .arg("dev")
+        .arg(name)
+        .output()?;
+    if !out.status.success() {
+        let fallback_cmd = if netmask.is_broadcast() {
+            format!("route del -host {:?} {}", address, name)
+        } else {
+            format!("route del -net {}/{} {}", address, prefix_len, name)
+        };
+        if let Err(route_err) = exe_cmd(&fallback_cmd) {
+            return Err(io::Error::new(
+                route_err.kind(),
+                format!(
+                    "ip route delete error: cmd=ip route del {} dev {},out={:?}; fallback route error: {route_err}",
+                    route_target, name, out
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn exe_linux_ip_route_cmd(name: &str, route_target: &str) -> io::Result<()> {
     use std::process::Command;

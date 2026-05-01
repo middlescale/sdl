@@ -31,8 +31,8 @@ use crate::proto::message::{
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
-use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::tun_tap_device::vnt_device::write_full_device;
+use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::{proto, DnsProfile, PeerClientInfo};
 
@@ -1583,8 +1583,7 @@ mod tests {
         format_punch_endpoint, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
         observed_udp_port_from_registration, punch_endpoint_from_route,
         selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
-        try_commit_device_list_state,
-        ActivePunchSession, ActivePunchState,
+        try_commit_device_list_state, ActivePunchSession, ActivePunchState,
     };
     use crate::data_plane::route::Route;
     use crate::handle::PeerDeviceInfo;

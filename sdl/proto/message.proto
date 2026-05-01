@@ -58,6 +58,7 @@ enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
     GATEWAY_CHANNEL_UDP = 1;
     GATEWAY_CHANNEL_QUIC = 2;
+    GATEWAY_CHANNEL_HTTPS = 3;
 }
 message GatewayChannel {
     GatewayChannelKind kind = 1;

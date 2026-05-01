@@ -8262,6 +8262,8 @@ pub enum GatewayChannelKind {
     GATEWAY_CHANNEL_UDP = 1,
     // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_QUIC)
     GATEWAY_CHANNEL_QUIC = 2,
+    // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_HTTPS)
+    GATEWAY_CHANNEL_HTTPS = 3,
 }
 
 impl ::protobuf::Enum for GatewayChannelKind {
@@ -8276,6 +8278,7 @@ impl ::protobuf::Enum for GatewayChannelKind {
             0 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN),
             1 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
             2 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+            3 => ::std::option::Option::Some(GatewayChannelKind::GATEWAY_CHANNEL_HTTPS),
             _ => ::std::option::Option::None
         }
     }
@@ -8284,6 +8287,7 @@ impl ::protobuf::Enum for GatewayChannelKind {
         GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN,
         GatewayChannelKind::GATEWAY_CHANNEL_UDP,
         GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+        GatewayChannelKind::GATEWAY_CHANNEL_HTTPS,
     ];
 }
 
@@ -8920,27 +8924,28 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     ints\x18\x0c\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\
     \x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\
     \n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*\
-    d\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\
-    \x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\
-    \x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\
-    \x10\x01*F\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\
-    \x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\
-    \x07IPv6Udp\x10\x04*\xab\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchT\
-    riggerUnknown\x10\0\x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\
-    \x1c\n\x18PunchTriggerRouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconne\
-    ctRecovery\x10\x03\x12\x1d\n\x19PunchTriggerManualRequest\x10\x04*\xb5\
-    \x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\
-    \n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\
-    \x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\
-    \x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseF\
-    ailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunch\
-    EndpointSelectionDefault\x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\
-    \x10\x01\x12&\n\"PunchEndpointSelectionPreferPublic\x10\x02*\xd8\x01\n\
-    \x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\x16\n\x12P\
-    unchResultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\x02\x12\x16\
-    \n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCanceled\x10\
-    \x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\n\x15PunchResultNo\
-    Response\x10\x06\x12\x19\n\x15PunchResultSuperseded\x10\x07b\x06proto3\
+    \x7f\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\
+    \x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_Q\
+    UIC\x10\x02\x12\x19\n\x15GATEWAY_CHANNEL_HTTPS\x10\x03*'\n\x0cPunchNatTy\
+    pe\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\
+    \x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\
+    \x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\xab\x01\
+    \n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\x12\x1c\
+    \n\x18PunchTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchTriggerRouteTim\
+    eout\x10\x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\x1d\n\
+    \x19PunchTriggerManualRequest\x10\x04*\xb5\x01\n\x11PunchSessionPhase\
+    \x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhaseScheduled\
+    \x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11PunchPhaseW\
+    aiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11Punch\
+    PhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\
+    \x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\
+    \x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpo\
+    intSelectionPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\
+    \x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\
+    \x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\
+    \x03\x12\x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchResultRe\
+    jected\x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15P\
+    unchResultSuperseded\x10\x07b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

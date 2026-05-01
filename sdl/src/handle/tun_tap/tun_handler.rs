@@ -19,8 +19,8 @@ use crate::handle::CurrentDeviceInfo;
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
-use crate::util::{PeerCryptoManager, StopManager};
 use crate::util::icmp_debug::parse_icmp_echo_meta;
+use crate::util::{PeerCryptoManager, StopManager};
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;

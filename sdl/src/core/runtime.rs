@@ -114,6 +114,8 @@ pub struct SdlRuntime {
     pub tun_device_helper: TunDeviceHelper,
     #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
     pub applied_dns_interface: Arc<Mutex<Option<String>>>,
+    #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+    pub applied_dns_profile: Arc<Mutex<Option<DnsProfile>>>,
     #[cfg(all(
         feature = "integrated_tun",
         any(target_os = "macos", target_os = "windows")
@@ -311,8 +313,13 @@ impl SdlRuntime {
     fn clear_applied_dns_profile(&self) {
         #[cfg(target_os = "linux")]
         {
-            if let Some(interface_name) = self.applied_dns_interface.lock().take() {
-                if let Err(err) = crate::util::linux_dns::revert_split_dns(&interface_name) {
+            let interface_name = self.applied_dns_interface.lock().take();
+            let applied_profile = self.applied_dns_profile.lock().take();
+            if let Some(interface_name) = interface_name {
+                if let Err(err) = crate::util::linux_dns::revert_split_dns(
+                    &interface_name,
+                    applied_profile.as_ref(),
+                ) {
                     log::warn!(
                         "failed to revert split DNS for interface {}: {:?}",
                         interface_name,
@@ -358,9 +365,15 @@ impl SdlRuntime {
         if profile.servers.is_empty() || profile.match_domains.is_empty() {
             return;
         }
-        match crate::util::linux_dns::apply_split_dns(interface_name, &profile) {
+        let previous_profile = self.applied_dns_profile.lock().clone();
+        match crate::util::linux_dns::apply_split_dns(
+            interface_name,
+            previous_profile.as_ref(),
+            &profile,
+        ) {
             Ok(()) => {
                 *self.applied_dns_interface.lock() = Some(interface_name.to_string());
+                *self.applied_dns_profile.lock() = Some(profile);
             }
             Err(err) => {
                 log::warn!(

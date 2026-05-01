@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
+use http::Uri;
 use parking_lot::Mutex;
 use protobuf::Message;
 use rand::RngCore;
@@ -20,11 +21,13 @@ use crate::proto::message::{
 };
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 use crate::transport::gateway_udp_channel::GatewayUdpChannel;
+use crate::transport::http2_channel::Http2Channel;
 use crate::transport::quic_channel::{PacketCallback, QuicChannel};
 use crate::util::{DebugWatch, StopManager};
 
 const GATEWAY_SWITCH_BETTER_RT_MS: i64 = 15;
 const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
+const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
 
 #[derive(Clone, Default)]
 struct GatewaySessionState {
@@ -59,6 +62,7 @@ pub struct GatewaySession {
 #[derive(Clone)]
 enum GatewayTransport {
     Quic(QuicChannel),
+    Https(Http2Channel),
     Udp(GatewayUdpChannel),
 }
 
@@ -109,6 +113,23 @@ impl GatewaySession {
         })
     }
 
+    fn new_https(
+        endpoint: SocketAddr,
+        request_uri: String,
+        server_name: String,
+        debug_watch: DebugWatch,
+        stats: DataPlaneStats,
+    ) -> Self {
+        Self {
+            endpoint,
+            state: Arc::new(Mutex::new(GatewaySessionState::default())),
+            channel: GatewayTransport::Https(Http2Channel::new(endpoint, request_uri, server_name)),
+            started: Arc::new(AtomicCell::new(false)),
+            debug_watch,
+            stats,
+        }
+    }
+
     fn start(&self, stop_manager: &StopManager, on_packet: &PacketCallback) -> anyhow::Result<()> {
         if self.started.swap(true) {
             return Ok(());
@@ -119,6 +140,18 @@ impl GatewaySession {
         let on_packet = on_packet.clone();
         match &self.channel {
             GatewayTransport::Quic(channel) => {
+                let on_packet = on_packet.clone();
+                let stats = stats.clone();
+                channel.start_named(
+                    stop_manager.clone(),
+                    &worker_name,
+                    move |packet: Vec<u8>, route_key| {
+                        stats.record_transport_down(endpoint.ip(), packet.len());
+                        on_packet(packet, route_key);
+                    },
+                )?
+            }
+            GatewayTransport::Https(channel) => {
                 let on_packet = on_packet.clone();
                 let stats = stats.clone();
                 channel.start_named(
@@ -151,6 +184,7 @@ impl GatewaySession {
         guard.device_id = device_id;
         guard.channel_name = match &self.channel {
             GatewayTransport::Quic(_) => "quic".to_string(),
+            GatewayTransport::Https(_) => "https".to_string(),
             GatewayTransport::Udp(_) => "udp".to_string(),
         };
         guard.authenticated = false;
@@ -162,6 +196,7 @@ impl GatewaySession {
         guard.grace_secs_hint = grant.grace_secs;
         guard.reauth_required = false;
         guard.last_rtt_ms = None;
+        let http2_idle_timeout = gateway_http2_idle_timeout(guard.keepalive_secs);
         drop(guard);
         match &self.channel {
             GatewayTransport::Quic(channel) => {
@@ -178,6 +213,33 @@ impl GatewaySession {
                     .unwrap_or_else(|| self.endpoint.ip().to_string());
                 channel.update_server_name(server_name);
                 channel.update_server_addr(self.endpoint);
+            }
+            GatewayTransport::Https(channel) => {
+                let selected_channel = grant.gateway_channels.iter().find(|channel_meta| {
+                    channel_meta.kind.enum_value_or_default()
+                        == GatewayChannelKind::GATEWAY_CHANNEL_HTTPS
+                        && parse_https_transport_target(&channel_meta.addr)
+                            .map(|target| target.endpoint == self.endpoint)
+                            .unwrap_or(false)
+                });
+                let parsed_target = selected_channel
+                    .and_then(|channel_meta| parse_https_transport_target(&channel_meta.addr).ok());
+                let server_name = selected_channel
+                    .map(|channel_meta| channel_meta.server_name.clone())
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        parsed_target
+                            .as_ref()
+                            .map(|target| target.server_name.clone())
+                    })
+                    .unwrap_or_else(|| self.endpoint.ip().to_string());
+                let request_uri = parsed_target
+                    .map(|target| target.request_uri)
+                    .unwrap_or_else(|| format!("https://{}/gateway", self.endpoint));
+                channel.update_server_addr(self.endpoint);
+                channel.update_server_name(server_name);
+                channel.update_request_uri(request_uri);
+                channel.update_idle_timeout(http2_idle_timeout);
             }
             GatewayTransport::Udp(channel) => {
                 let gateway_udp_public_key: [u8; 32] = grant
@@ -296,6 +358,7 @@ impl GatewaySession {
     fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         match &self.channel {
             GatewayTransport::Quic(channel) => channel.send_packet(packet),
+            GatewayTransport::Https(channel) => channel.send_packet(packet),
             GatewayTransport::Udp(channel) => channel.send_packet(packet),
         }
     }
@@ -329,6 +392,9 @@ impl GatewaySession {
                 guard.lease_expire_unix_ms + i64::from(guard.grace_secs_hint) * 1_000
             };
             guard.reauth_required = ack.reauth_required;
+            if let GatewayTransport::Https(channel) = &self.channel {
+                channel.update_idle_timeout(gateway_http2_idle_timeout(ack.keepalive_secs));
+            }
             log::info!(
                 "gateway relay authenticated, session={}, endpoint={}, keepalive_secs={}, lease_expire={}, grace_expire={}, reauth_required={}",
                 ack.session_id,
@@ -356,6 +422,9 @@ impl GatewaySession {
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = ack.reauth_required;
             guard.last_rtt_ms = None;
+            if let GatewayTransport::Https(channel) = &self.channel {
+                channel.update_idle_timeout(gateway_http2_idle_timeout(0));
+            }
             log::warn!(
                 "gateway relay auth rejected, session={}, endpoint={}, reason={}, reauth_required={}",
                 ack.session_id,
@@ -547,11 +616,11 @@ impl GatewaySessions {
         virtual_ip: Ipv4Addr,
         device_id: String,
     ) {
-        let mut parsed = Vec::new();
+        let mut parsed: Vec<(GatewayAccessGrant, ResolvedGatewayChannel)> = Vec::new();
         let mut desired = HashSet::new();
         for grant in grants {
             let preferred_kind = grant.default_gateway_channel.enum_value_or_default();
-            let mut selected_channels: Vec<(SocketAddr, GatewayChannelKind)> = grant
+            let mut selected_channels: Vec<ResolvedGatewayChannel> = grant
                 .gateway_channels
                 .iter()
                 .filter_map(|channel| {
@@ -562,14 +631,13 @@ impl GatewaySessions {
                                 && !grant.gateway_udp_key_id.is_empty()
                         }
                         GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
+                        GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => true,
                         _ => false,
                     };
                     if !supported || kind != preferred_kind {
                         return None;
                     }
-                    parse_transport_endpoint(&channel.addr)
-                        .ok()
-                        .map(|endpoint| (endpoint, kind))
+                    resolve_gateway_channel(channel).ok()
                 })
                 .collect();
             if selected_channels.is_empty() {
@@ -584,20 +652,19 @@ impl GatewaySessions {
                                     && !grant.gateway_udp_key_id.is_empty()
                             }
                             GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
+                            GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => true,
                             _ => false,
                         };
                         if !supported {
                             return None;
                         }
-                        parse_transport_endpoint(&channel.addr)
-                            .ok()
-                            .map(|endpoint| (endpoint, kind))
+                        resolve_gateway_channel(channel).ok()
                     })
                     .collect();
             }
-            for (endpoint, kind) in selected_channels {
-                if desired.insert(endpoint) {
-                    parsed.push((grant.clone(), endpoint, kind));
+            for channel in selected_channels {
+                if desired.insert(channel.endpoint) {
+                    parsed.push((grant.clone(), channel));
                 }
             }
         }
@@ -613,20 +680,21 @@ impl GatewaySessions {
             virtual_ip,
             parsed
                 .iter()
-                .map(|(_, endpoint, _)| *endpoint)
+                .map(|(_, channel)| channel.endpoint)
                 .collect::<Vec<_>>(),
             parsed
                 .iter()
-                .map(|(grant, _, _)| grant.gateway_id.clone())
+                .map(|(grant, _)| grant.gateway_id.clone())
                 .collect::<Vec<_>>()
         );
         let mut guard = self.sessions.lock();
         guard.retain(|addr, _| desired.contains(addr));
-        for (grant, endpoint, kind) in parsed {
+        for (grant, resolved_channel) in parsed {
+            let endpoint = resolved_channel.endpoint;
             let session = if let Some(existing) = guard.get(&endpoint).cloned() {
                 existing
             } else {
-                let created = match kind {
+                let created = match resolved_channel.kind {
                     GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
                         match GatewaySession::new_udp(
                             endpoint,
@@ -645,6 +713,16 @@ impl GatewaySessions {
                             }
                         }
                     }
+                    GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => GatewaySession::new_https(
+                        endpoint,
+                        resolved_channel
+                            .request_uri
+                            .clone()
+                            .unwrap_or_else(|| format!("https://{}/gateway", endpoint)),
+                        resolved_channel.server_name.clone(),
+                        self.debug_watch.clone(),
+                        self.stats.clone(),
+                    ),
                     _ => GatewaySession::new_quic(
                         endpoint,
                         self.debug_watch.clone(),
@@ -878,6 +956,88 @@ fn parse_transport_endpoint(addr: &str) -> anyhow::Result<SocketAddr> {
         .ok_or_else(|| anyhow::anyhow!("no socket address resolved for {normalized}"))
 }
 
+#[derive(Clone)]
+struct ResolvedGatewayChannel {
+    endpoint: SocketAddr,
+    kind: GatewayChannelKind,
+    server_name: String,
+    request_uri: Option<String>,
+}
+
+#[derive(Debug)]
+struct HttpsTransportTarget {
+    endpoint: SocketAddr,
+    server_name: String,
+    request_uri: String,
+}
+
+fn resolve_gateway_channel(
+    channel: &crate::proto::message::GatewayChannel,
+) -> anyhow::Result<ResolvedGatewayChannel> {
+    let kind = channel.kind.enum_value_or_default();
+    match kind {
+        GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => {
+            let target = parse_https_transport_target(&channel.addr)?;
+            Ok(ResolvedGatewayChannel {
+                endpoint: target.endpoint,
+                kind,
+                server_name: if channel.server_name.is_empty() {
+                    target.server_name
+                } else {
+                    channel.server_name.clone()
+                },
+                request_uri: Some(target.request_uri),
+            })
+        }
+        _ => {
+            let endpoint = parse_transport_endpoint(&channel.addr)?;
+            Ok(ResolvedGatewayChannel {
+                endpoint,
+                kind,
+                server_name: if channel.server_name.is_empty() {
+                    endpoint.ip().to_string()
+                } else {
+                    channel.server_name.clone()
+                },
+                request_uri: None,
+            })
+        }
+    }
+}
+
+fn parse_https_transport_target(addr: &str) -> anyhow::Result<HttpsTransportTarget> {
+    let uri: Uri = addr.trim().parse()?;
+    if uri.scheme_str() != Some("https") {
+        anyhow::bail!("gateway https addr must use https://");
+    }
+    let host = uri
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("gateway https addr missing host: {addr}"))?;
+    let port = uri.port_u16().unwrap_or(443);
+    let authority = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
+    let endpoint = authority
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no socket address resolved for {authority}"))?;
+    let path = match uri.path_and_query().map(|value| value.as_str()) {
+        Some("/") | None => "/gateway".to_string(),
+        Some(path) if path.is_empty() => "/gateway".to_string(),
+        Some("/gateway") => "/gateway".to_string(),
+        Some(path) => {
+            anyhow::bail!("gateway https addr path must be /gateway or empty, got {path}")
+        }
+    };
+    Ok(HttpsTransportTarget {
+        endpoint,
+        server_name: host.to_string(),
+        request_uri: format!("https://{}{}", authority, path),
+    })
+}
+
 fn sanitize_worker_name(addr: SocketAddr) -> String {
     addr.to_string()
         .chars()
@@ -927,10 +1087,18 @@ fn gateway_session_order_key(
     )
 }
 
+fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
+    let keepalive_secs = u64::from(keepalive_secs.max(3));
+    Duration::from_secs((keepalive_secs * 2).max(GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_transport_endpoint;
+    use super::{
+        gateway_http2_idle_timeout, parse_https_transport_target, parse_transport_endpoint,
+    };
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
     #[test]
     fn parse_transport_endpoint_accepts_socket_addr() {
@@ -951,5 +1119,35 @@ mod tests {
         let endpoint = parse_transport_endpoint("quic://localhost:29900").unwrap();
         assert_eq!(endpoint.port(), 29900);
         assert!(endpoint.ip().is_loopback());
+    }
+
+    #[test]
+    fn parse_https_transport_target_defaults_gateway_path() {
+        let target = parse_https_transport_target("https://127.0.0.1:443").unwrap();
+        assert_eq!(target.endpoint.port(), 443);
+        assert_eq!(target.request_uri, "https://127.0.0.1:443/gateway");
+    }
+
+    #[test]
+    fn parse_https_transport_target_rejects_non_gateway_path() {
+        let err = parse_https_transport_target("https://127.0.0.1:443/custom").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("gateway https addr path must be /gateway or empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn gateway_http2_idle_timeout_uses_minimum_before_ack() {
+        assert_eq!(
+            gateway_http2_idle_timeout(0),
+            Duration::from_secs(super::GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS)
+        );
+    }
+
+    #[test]
+    fn gateway_http2_idle_timeout_tracks_keepalive_window() {
+        assert_eq!(gateway_http2_idle_timeout(7), Duration::from_secs(14));
     }
 }

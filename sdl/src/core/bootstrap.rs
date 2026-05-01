@@ -67,7 +67,6 @@ impl Sdl {
         callback: Call,
         device: Device,
     ) -> anyhow::Result<Self> {
-        #[cfg(feature = "quic")]
         ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);
         let device_signing_key = Arc::new(load_or_create_device_signing_key(&config.device_id)?);
@@ -273,6 +272,8 @@ impl Sdl {
                 tun_device_helper,
                 #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
                 applied_dns_interface: Arc::new(Mutex::new(None)),
+                #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+                applied_dns_profile: Arc::new(Mutex::new(None)),
                 #[cfg(all(
                     feature = "integrated_tun",
                     any(target_os = "macos", target_os = "windows")
