@@ -9,6 +9,7 @@ const MANAGED_COMMENT: &str = "managed by sdl";
 
 pub(crate) fn apply_split_dns(
     _interface_name: &str,
+    previous_profile: Option<&DnsProfile>,
     profile: &DnsProfile,
 ) -> io::Result<Vec<String>> {
     if profile.servers.is_empty() || profile.match_domains.is_empty() {
@@ -18,17 +19,14 @@ pub(crate) fn apply_split_dns(
     if domains.is_empty() {
         return Ok(Vec::new());
     }
-    exec_powershell(&build_apply_script(&domains, &profile.servers))?;
+    if let Err(err) = reconcile_nrpt_rules(previous_profile, Some(profile)) {
+        return rollback_apply_failure(previous_profile, profile, err);
+    }
     Ok(domains)
 }
 
-pub(crate) fn revert_split_dns(domains: &[String]) -> io::Result<()> {
-    let domains = normalize_match_domains(domains);
-    if domains.is_empty() {
-        return Ok(());
-    }
-    exec_powershell(&build_revert_script(&domains))?;
-    Ok(())
+pub(crate) fn revert_split_dns(previous_profile: Option<&DnsProfile>) -> io::Result<()> {
+    reconcile_nrpt_rules(previous_profile, None)
 }
 
 fn exec_powershell(script: &str) -> io::Result<()> {
@@ -84,6 +82,42 @@ foreach ($namespace in $namespaces) {{ \
     )
 }
 
+fn reconcile_nrpt_rules(
+    previous_profile: Option<&DnsProfile>,
+    profile: Option<&DnsProfile>,
+) -> io::Result<()> {
+    let previous_domains = normalized_profile_domains(previous_profile);
+    let current_domains = normalized_profile_domains(profile);
+
+    if let Some(profile) = profile {
+        if !current_domains.is_empty() && !profile.servers.is_empty() {
+            exec_powershell(&build_apply_script(&current_domains, &profile.servers))?;
+        }
+    }
+
+    let removed = removed_domains(&previous_domains, &current_domains);
+    if !removed.is_empty() {
+        exec_powershell(&build_revert_script(&removed))?;
+    }
+    Ok(())
+}
+
+fn rollback_apply_failure(
+    previous_profile: Option<&DnsProfile>,
+    profile: &DnsProfile,
+    err: io::Error,
+) -> io::Result<Vec<String>> {
+    let kind = err.kind();
+    let err_msg = err.to_string();
+    match reconcile_nrpt_rules(Some(profile), previous_profile) {
+        Ok(()) => Err(io::Error::new(kind, err_msg)),
+        Err(rollback_err) => Err(io::Error::new(
+            kind,
+            format!("{err_msg}; rollback to previous split DNS state failed: {rollback_err}"),
+        )),
+    }
+}
+
 fn build_revert_script(domains: &[String]) -> String {
     let namespaces = domains
         .iter()
@@ -117,13 +151,29 @@ fn normalize_match_domains(domains: &[String]) -> Vec<String> {
     normalized
 }
 
+fn normalized_profile_domains(profile: Option<&DnsProfile>) -> Vec<String> {
+    profile
+        .map(|profile| normalize_match_domains(&profile.match_domains))
+        .unwrap_or_default()
+}
+
+fn removed_domains(previous_domains: &[String], current_domains: &[String]) -> Vec<String> {
+    previous_domains
+        .iter()
+        .filter(|domain| !current_domains.contains(domain))
+        .cloned()
+        .collect()
+}
+
 fn ps_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_apply_script, build_revert_script, normalize_match_domains};
+    use super::{
+        build_apply_script, build_revert_script, normalize_match_domains, removed_domains,
+    };
 
     #[test]
     fn normalize_match_domains_dedups_and_trims() {
@@ -157,5 +207,14 @@ mod tests {
         assert!(script.contains("Remove-DnsClientNrptRule"));
         assert!(script.contains("'.ms.net'"));
         assert!(script.contains("'managed by sdl'"));
+    }
+
+    #[test]
+    fn removed_domains_only_keeps_stale_namespaces() {
+        let removed = removed_domains(
+            &["ms.net".into(), "sales.ms.net".into()],
+            &["sales.ms.net".into(), "corp.ms.net".into()],
+        );
+        assert_eq!(removed, vec!["ms.net"]);
     }
 }
