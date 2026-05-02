@@ -193,7 +193,10 @@ fn override_service_file_config(
     if matches.opt_present("a") {
         file_conf.tap = true;
     }
-    if let Some(device_name) = matches.opt_str("nic") {
+    if let Some(device_name) = matches
+        .opt_str("tun_name")
+        .or_else(|| matches.opt_str("nic"))
+    {
         file_conf.device_name = Some(device_name);
     }
     #[cfg(feature = "port_mapping")]
@@ -232,6 +235,7 @@ pub fn parse_args_config_from(
     opts.optmulti("e", "", "stun服务器", "<stun-server>");
     opts.optflag("a", "", "使用tap模式");
     opts.optopt("", "nic", "虚拟网卡名称,windows下使用tap则必填", "<tun0>");
+    opts.optopt("", "tun_name", "指定tun网卡名称", "<sdl-tun>");
     opts.optmulti("i", "", "配置点对网(IP代理)入站时使用", "<in-ip>");
     opts.optmulti("o", "", "配置点对网出站时使用", "<out-ip>");
     opts.optopt("u", "", "自定义mtu(默认为1430)", "<mtu>");
@@ -301,6 +305,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("--p2p-route-idle-sec <sec>", ("P2P直连路由空闲清理秒数,默认30秒", "P2P direct-route idle cleanup timeout in seconds, default 30s")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
         ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
+        ("--tun_name <sdl-tun>", ("指定tun网卡名称", "Specify TUN interface name")),
         ("--packet-loss <0>", ("模拟丢包,取值0~1之间的小数,程序会按设定的概率主动丢包,可用于模拟弱网", "Simulate packet loss, value between 0 and 1, program actively drops packets based on set probability, useful for simulating weak networks")),
         ("--packet-delay <0>", ("模拟延迟,正整数,单位毫秒,程序将根据设定值延迟发送数据包,可用于模拟弱网", "Simulate latency, integer, in milliseconds (ms). The program will delay sending packets according to the set value and can be used to simulate weak networks")),
         ("--mapping <mapping>", ("端口映射,例如 --mapping udp:0.0.0.0:80-domain:80 映射目标是本地路由能访问的设备", "Port mapping, e.g., --mapping udp:0.0.0.0:80-domain:80 maps to a device accessible by local routing")),
@@ -409,6 +414,11 @@ fn print_usage(program: &str, _opts: Options) {
     println!(
         "  --nic <tun0>        {}",
         get_description("--nic <tun0>", &language)
+    );
+    #[cfg(feature = "integrated_tun")]
+    println!(
+        "  --tun_name <sdl-tun> {}",
+        get_description("--tun_name <sdl-tun>", &language)
     );
     println!(
         "  --packet-loss <0>   {}",
@@ -571,6 +581,21 @@ ports: [30001]
         .expect_err("--model should be rejected");
 
         assert!(err.to_string().contains("Unrecognized option: 'model'"));
+    }
+
+    #[test]
+    fn parse_args_service_accepts_tun_name() {
+        let result = parse_args_config_from(vec![
+            "sdl-service".to_string(),
+            "--tun_name".to_string(),
+            "my-sdl-tun".to_string(),
+        ])
+        .expect("parse args should succeed")
+        .expect("config should be returned");
+
+        let (config, saved) = result;
+        assert_eq!(config.device_name.as_deref(), Some("my-sdl-tun"));
+        assert_eq!(saved.device_name.as_deref(), Some("my-sdl-tun"));
     }
 
     #[cfg(unix)]
