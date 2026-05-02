@@ -8,7 +8,9 @@ use crate::protocol::BUFFER_SIZE;
 use crate::util::{PeerCryptoManager, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
+use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 use tun_rs::InterruptEvent;
 use tun_rs::SyncDevice;
 
@@ -78,13 +80,33 @@ fn start_simple0(
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
+    let mut disabled_retry_count = 0u32;
     loop {
         let len = match device.recv_intr(&mut buf[12..], event) {
-            Ok(len) => len + 12,
+            Ok(len) => {
+                disabled_retry_count = 0;
+                len + 12
+            }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::Interrupted && event.is_trigger() {
                     log::info!("tun device interrupted");
                     break;
+                }
+                if is_retryable_interface_disabled_error(&e) {
+                    disabled_retry_count = disabled_retry_count.saturating_add(1);
+                    if disabled_retry_count == 1 || disabled_retry_count % 10 == 0 {
+                        log::warn!(
+                            "tun interface temporarily disabled, retrying (attempt {}): {:?}",
+                            disabled_retry_count,
+                            e
+                        );
+                    }
+                    if event.is_trigger() {
+                        log::info!("tun device interrupted while waiting for interface recovery");
+                        break;
+                    }
+                    std::thread::sleep(interface_disabled_retry_delay(disabled_retry_count));
+                    continue;
                 }
                 return Err(e.into());
             }
@@ -110,4 +132,42 @@ fn start_simple0(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn is_retryable_interface_disabled_error(err: &io::Error) -> bool {
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("interface has been disabled")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_retryable_interface_disabled_error(_err: &io::Error) -> bool {
+    false
+}
+
+fn interface_disabled_retry_delay(retry_count: u32) -> Duration {
+    let millis = 100u64.saturating_mul(2u64.saturating_pow(retry_count.saturating_sub(1).min(3)));
+    Duration::from_millis(millis.min(1_000))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::interface_disabled_retry_delay;
+
+    #[test]
+    fn interface_disabled_retry_delay_is_capped() {
+        assert_eq!(interface_disabled_retry_delay(1).as_millis(), 100);
+        assert_eq!(interface_disabled_retry_delay(2).as_millis(), 200);
+        assert_eq!(interface_disabled_retry_delay(3).as_millis(), 400);
+        assert_eq!(interface_disabled_retry_delay(4).as_millis(), 800);
+        assert_eq!(interface_disabled_retry_delay(5).as_millis(), 800);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_interface_disabled_errors_are_retryable() {
+        let err = std::io::Error::other("The interface has been disabled");
+        assert!(super::is_retryable_interface_disabled_error(&err));
+    }
 }

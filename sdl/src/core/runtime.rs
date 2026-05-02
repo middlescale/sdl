@@ -301,9 +301,9 @@ impl SdlRuntime {
         }
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
-        self.tun_device_helper.start(device)?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
+        self.tun_device_helper.start(device)?;
         Ok(())
     }
 
