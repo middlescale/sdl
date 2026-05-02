@@ -37,11 +37,6 @@ pub fn create_device<Call: SdlCallback>(
         log::warn!("添加组播路由失败 ={:?}", e);
     }
 
-    #[cfg(target_os = "windows")]
-    if let Err(e) = add_route(index, config.virtual_network, config.virtual_netmask) {
-        log::warn!("添加虚拟网段路由失败 ={:?}", e);
-    }
-
     for (dest, mask) in config.external_route {
         if let Err(e) = add_route(index, dest, mask) {
             log::warn!("添加路由失败,请检查-i参数是否和现有路由冲突 ={:?}", e);
