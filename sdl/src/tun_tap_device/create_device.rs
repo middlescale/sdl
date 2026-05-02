@@ -37,6 +37,11 @@ pub fn create_device<Call: SdlCallback>(
         log::warn!("添加组播路由失败 ={:?}", e);
     }
 
+    #[cfg(target_os = "windows")]
+    if let Err(e) = add_route(index, config.virtual_network, config.virtual_netmask) {
+        log::warn!("添加虚拟网段路由失败 ={:?}", e);
+    }
+
     for (dest, mask) in config.external_route {
         if let Err(e) = add_route(index, dest, mask) {
             log::warn!("添加路由失败,请检查-i参数是否和现有路由冲突 ={:?}", e);
@@ -70,13 +75,6 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
 
     #[cfg(target_os = "windows")]
     {
-        let name = config
-            .device_name
-            .clone()
-            .unwrap_or_else(|| DEFAULT_TUN_NAME.to_string());
-        if let Err(err) = delete_adapter_info_from_reg(&name) {
-            log::warn!("清理Windows网卡注册表信息失败 {}: {:?}", name, err);
-        }
         tun_builder = tun_builder.metric(0).ring_capacity(4 * 1024 * 1024);
     }
 
