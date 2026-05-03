@@ -19,6 +19,7 @@ use crate::handle::CurrentDeviceInfo;
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
+use crate::tun_tap_device::vnt_device::write_full_sync_device;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::util::{PeerCryptoManager, StopManager};
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
@@ -31,14 +32,7 @@ fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> a
             ipv4_packet.set_source_ip(ipv4_packet.destination_ip());
             ipv4_packet.set_destination_ip(src);
             ipv4_packet.update_checksum();
-            let written = device_writer.send(ipv4_packet.buffer)?;
-            if written != ipv4_packet.buffer.len() {
-                anyhow::bail!(
-                    "self icmp reply short write: wrote {} of {}",
-                    written,
-                    ipv4_packet.buffer.len()
-                );
-            }
+            write_full_sync_device(device_writer, ipv4_packet.buffer, "self icmp reply")?;
         }
     }
     Ok(())

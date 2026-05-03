@@ -33,7 +33,14 @@ impl DeviceWrite for DeviceAdapter {
     #[inline]
     fn write(&self, buf: &[u8]) -> io::Result<usize> {
         if let Some(tun) = self.tun.lock().as_ref() {
-            tun.send(buf)
+            #[cfg(target_os = "windows")]
+            {
+                tun.try_send(buf)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                tun.send(buf)
+            }
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not tun device"))
         }

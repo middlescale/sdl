@@ -81,6 +81,7 @@ fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
             .unwrap_or(DEFAULT_TUN_NAME.to_string());
         delete_device(&device_name);
         let device = tun_builder.mtu(config.mtu as u16).build_sync()?;
+        device.set_nonblocking(true)?;
         set_device_up(&device_name)?;
         Ok(Arc::new(device))
     }

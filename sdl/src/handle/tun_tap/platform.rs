@@ -82,7 +82,7 @@ fn start_simple0(
     let mut extend = [0; BUFFER_SIZE];
     let mut disabled_retry_count = 0u32;
     loop {
-        let len = match device.recv_intr(&mut buf[12..], event) {
+        let len = match recv_tun_packet(&device, &mut buf[12..], event) {
             Ok(len) => {
                 disabled_retry_count = 0;
                 len + 12
@@ -132,6 +132,35 @@ fn start_simple0(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn recv_tun_packet(
+    device: &SyncDevice,
+    buf: &mut [u8],
+    event: &InterruptEvent,
+) -> io::Result<usize> {
+    loop {
+        if event.is_trigger() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        match device.try_recv(buf) {
+            Ok(len) => return Ok(len),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn recv_tun_packet(
+    device: &SyncDevice,
+    buf: &mut [u8],
+    event: &InterruptEvent,
+) -> io::Result<usize> {
+    device.recv_intr(buf, event)
 }
 
 #[cfg(target_os = "windows")]
