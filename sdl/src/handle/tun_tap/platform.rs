@@ -142,6 +142,7 @@ fn recv_tun_packet(
 ) -> io::Result<usize> {
     loop {
         if event.is_trigger() {
+            device.shutdown()?;
             return Err(io::Error::from(io::ErrorKind::Interrupted));
         }
         match device.try_recv(buf) {
