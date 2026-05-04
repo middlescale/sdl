@@ -11,6 +11,8 @@ pub mod fs_access;
 pub mod identifier;
 pub mod root_check;
 mod service_lock;
+#[cfg(target_os = "windows")]
+mod windows_service;
 
 mod args_parse;
 mod generated_serial_number {

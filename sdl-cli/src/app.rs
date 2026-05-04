@@ -2,6 +2,7 @@ use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSu
 use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{write_saved_config, FileConfig};
+use crate::service_lock::ServiceInstanceGuard;
 use anyhow::Context;
 use console::style;
 use sdl::core::{Config, RenameRequestOutcome, Sdl};
@@ -21,6 +22,11 @@ struct ServiceManager {
 
 #[derive(Clone)]
 struct ServiceCommandHandler(Arc<ServiceManager>);
+
+pub(crate) struct RunningService {
+    manager: Arc<ServiceManager>,
+    _service_lock: ServiceInstanceGuard,
+}
 
 impl ServiceManager {
     fn persist_device_name(self: &Arc<Self>, applied_name: String) {
@@ -511,6 +517,87 @@ impl SdlCallback for ServiceCallback {
     }
 }
 
+impl RunningService {
+    pub(crate) fn start(config: Config, saved_config: FileConfig) -> Result<Self, i32> {
+        if !root_check::is_app_elevated() {
+            println!("Please run sdl-service with administrator or root privileges");
+            return Err(1);
+        }
+        let service_lock = match crate::service_lock::acquire_service_lock() {
+            Ok(lock) => lock,
+            Err(e) => {
+                log::error!("failed to acquire service instance lock: {:?}", e);
+                println!("{}", style(format!("Error {}", e)).red());
+                return Err(1);
+            }
+        };
+        let build_version = crate::build_version_string();
+        println!("sdl-service version {}", build_version);
+        log::info!("sdl-service version {}", build_version);
+        log::info!(
+            "acquired service instance lock at {}",
+            service_lock.path().display()
+        );
+        let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
+        manager.mutate_state(|state| {
+            state.runtime_running = false;
+            state.runtime_suspended = false;
+            state.auth_pending = false;
+            state.last_error = None;
+        });
+        #[cfg(feature = "port_mapping")]
+        for (is_tcp, addr, dest) in config.port_mapping_list.iter() {
+            if *is_tcp {
+                println!("TCP port mapping {}->{}", addr, dest)
+            } else {
+                println!("UDP port mapping {}->{}", addr, dest)
+            }
+        }
+        if let Err(e) = manager
+            .clone()
+            .resume_service_runtime()
+            .context("initial service start failed")
+        {
+            log::error!("sdl create error {:?}", e);
+            println!("error: {:?}", e);
+            return Err(1);
+        }
+
+        #[cfg(feature = "command")]
+        {
+            let manager_c = manager.clone();
+            std::thread::Builder::new()
+                .name("CommandServer".into())
+                .spawn(move || {
+                    if let Err(e) = CommandServer::new().start(ServiceCommandHandler(manager_c)) {
+                        log::warn!("cmd:{:?}", e);
+                    }
+                })
+                .expect("CommandServer");
+        }
+
+        Ok(Self {
+            manager,
+            _service_lock: service_lock,
+        })
+    }
+
+    pub(crate) fn shutdown(self) {
+        self.manager.shutdown();
+    }
+}
+
+pub fn run_service_process(args: Vec<String>) -> i32 {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::windows_service::run_service_process(args);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        run_service_from_args(args)
+    }
+}
+
 pub fn run_service_from_args(args: Vec<String>) -> i32 {
     let (config, saved_config) = match crate::cli::parse_args_config_from(args) {
         Ok(rs) => match rs {
@@ -526,70 +613,26 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
     run_service(config, saved_config)
 }
 
-pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
-    if !root_check::is_app_elevated() {
-        println!("Please run sdl-service with administrator or root privileges");
-        return 1;
-    }
-    let service_lock = match crate::service_lock::acquire_service_lock() {
-        Ok(lock) => lock,
-        Err(e) => {
-            log::error!("failed to acquire service instance lock: {:?}", e);
-            println!("{}", style(format!("Error {}", e)).red());
-            return 1;
-        }
+pub(crate) fn run_service_with_shutdown(
+    config: Config,
+    saved_config: FileConfig,
+    shutdown_receiver: std::sync::mpsc::Receiver<()>,
+) -> i32 {
+    let running_service = match RunningService::start(config, saved_config) {
+        Ok(running_service) => running_service,
+        Err(code) => return code,
     };
-    let build_version = crate::build_version_string();
-    println!("sdl-service version {}", build_version);
-    log::info!("sdl-service version {}", build_version);
-    log::info!(
-        "acquired service instance lock at {}",
-        service_lock.path().display()
-    );
-    let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
-    manager.mutate_state(|state| {
-        state.runtime_running = false;
-        state.runtime_suspended = false;
-        state.auth_pending = false;
-        state.last_error = None;
-    });
-    #[cfg(feature = "port_mapping")]
-    for (is_tcp, addr, dest) in config.port_mapping_list.iter() {
-        if *is_tcp {
-            println!("TCP port mapping {}->{}", addr, dest)
-        } else {
-            println!("UDP port mapping {}->{}", addr, dest)
-        }
-    }
-    if let Err(e) = manager
-        .clone()
-        .resume_service_runtime()
-        .context("initial service start failed")
-    {
-        log::error!("sdl create error {:?}", e);
-        println!("error: {:?}", e);
-        return 1;
-    }
+    let _ = shutdown_receiver.recv();
+    running_service.shutdown();
+    0
+}
 
-    #[cfg(feature = "command")]
-    {
-        let manager_c = manager.clone();
-        std::thread::Builder::new()
-            .name("CommandServer".into())
-            .spawn(move || {
-                if let Err(e) = CommandServer::new().start(ServiceCommandHandler(manager_c)) {
-                    log::warn!("cmd:{:?}", e);
-                }
-            })
-            .expect("CommandServer");
-    }
-
-    let (shutdown_sender, shutdown_receiver) = std::sync::mpsc::channel::<()>();
+pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
+    let (_shutdown_sender, shutdown_receiver) = std::sync::mpsc::channel::<()>();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let manager_c = manager.clone();
-        let shutdown_sender = shutdown_sender.clone();
+        let shutdown_sender = _shutdown_sender.clone();
         let mut signals = signal_hook::iterator::Signals::new([
             signal_hook::consts::SIGINT,
             signal_hook::consts::SIGTERM,
@@ -601,7 +644,6 @@ pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
                 match sig {
                     signal_hook::consts::SIGINT | signal_hook::consts::SIGTERM => {
                         println!("Received SIGINT, {}", sig);
-                        manager_c.shutdown();
                         let _ = shutdown_sender.send(());
                         handle.close();
                         break;
@@ -612,8 +654,5 @@ pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
         });
     }
 
-    let _ = shutdown_receiver.recv();
-    manager.shutdown();
-    drop(service_lock);
-    0
+    run_service_with_shutdown(config, saved_config, shutdown_receiver)
 }

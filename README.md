@@ -63,6 +63,16 @@ sudo ./install.sh --source-dir ./target/release --user "$USER"
 cargo build -p sdl-cli --no-default-features
 ```
 
+本地如果需要编译 Windows 版本，优先使用仓库根目录脚本：
+
+```bash
+./build-windows-local.sh
+```
+
+- 本地脚本默认目标是 `x86_64-pc-windows-gnu`
+- 可通过环境变量覆盖，例如 `PROFILE=debug ./build-windows-local.sh`
+- GitHub Release workflow 仍保持 `x86_64-pc-windows-msvc`
+
 `sdl-service` 无参数启动时，会默认使用：
 
 - group：`default.ms.net`
