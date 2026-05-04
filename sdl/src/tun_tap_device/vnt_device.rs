@@ -48,7 +48,8 @@ where
             Err(err) if is_retryable_write_error(&err) => {
                 retry_count = retry_count.saturating_add(1);
                 let elapsed = start.elapsed();
-                if retry_count > max_write_retry_attempts() || elapsed >= max_write_retry_duration() {
+                if retry_count > max_write_retry_attempts() || elapsed >= max_write_retry_duration()
+                {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!(

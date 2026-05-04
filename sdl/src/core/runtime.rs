@@ -409,8 +409,7 @@ impl SdlRuntime {
     }
 
     #[cfg(all(feature = "integrated_tun", target_os = "windows"))]
-    fn apply_dns_profile<Call: SdlCallback>(&self, _interface_name: &str, _callback: &Call) {
-    }
+    fn apply_dns_profile<Call: SdlCallback>(&self, _interface_name: &str, _callback: &Call) {}
 
     #[cfg(all(
         feature = "integrated_tun",
