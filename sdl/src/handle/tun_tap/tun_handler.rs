@@ -170,12 +170,6 @@ pub(crate) fn handle(
         let icmp_meta = IcmpPacket::new(ipv4_packet.payload())
             .ok()
             .and_then(|packet| parse_icmp_echo_meta(&packet));
-        log::debug!(
-            "tun outbound icmp src={} dst={} bytes={}",
-            src_ip,
-            dest_ip,
-            data_len.saturating_sub(12)
-        );
         data_channel.emit_debug_watch_event(
             "icmp",
             "tun_outbound",
@@ -217,12 +211,6 @@ pub(crate) fn handle(
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
         if protocol == Protocol::Icmp {
-            log::debug!(
-                "forwarding outbound icmp to gateway relay src={} dst={} bytes={}",
-                src_ip,
-                dest_ip,
-                data_len.saturating_sub(12)
-            );
             data_channel.emit_debug_watch_event(
                 "icmp",
                 "gateway_relay_forward",
