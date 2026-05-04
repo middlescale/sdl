@@ -18,7 +18,7 @@ pub(crate) mod linux_dns;
 pub(crate) mod macos_dns;
 mod peer_crypto_manager;
 mod peer_probe_tracker;
-#[cfg(test)]
+#[cfg(all(feature = "integrated_tun", target_os = "windows"))]
 pub(crate) mod windows_dns;
 pub use peer_crypto_manager::*;
 pub use peer_probe_tracker::*;

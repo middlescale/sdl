@@ -83,7 +83,7 @@ sdl suspend
 - Linux/macOS 下请显式使用 `sudo sdl-service ...`
 - Windows 下请使用管理员权限启动
 - `sdl-service` 检测到权限不足时只会提示，不会自动弹出 sudo 密码框
-- SDL DNS profile 现支持 Linux（`resolvectl`）和 macOS（`/etc/resolver`）；Windows 侧 split DNS 当前未启用
+- SDL DNS profile 现支持 Linux（`resolvectl`）、macOS（`/etc/resolver`）和 Windows（NRPT）
 
 ## 详细参数说明
 

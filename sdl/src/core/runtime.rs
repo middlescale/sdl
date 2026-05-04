@@ -339,7 +339,14 @@ impl SdlRuntime {
         }
         #[cfg(target_os = "windows")]
         {
-            let _ = self.applied_dns_profile.lock().take();
+            let applied_profile = self.applied_dns_profile.lock().take();
+            if let Err(err) = crate::util::windows_dns::revert_split_dns(applied_profile.as_ref()) {
+                log::warn!(
+                    "failed to revert split DNS profile {:?}: {:?}",
+                    applied_profile,
+                    err
+                );
+            }
         }
     }
 
@@ -409,7 +416,36 @@ impl SdlRuntime {
     }
 
     #[cfg(all(feature = "integrated_tun", target_os = "windows"))]
-    fn apply_dns_profile<Call: SdlCallback>(&self, _interface_name: &str, _callback: &Call) {}
+    fn apply_dns_profile<Call: SdlCallback>(&self, interface_name: &str, callback: &Call) {
+        let profile = self.dns_profile.read().clone();
+        let Some(profile) = profile else {
+            return;
+        };
+        if profile.servers.is_empty() || profile.match_domains.is_empty() {
+            return;
+        }
+        let previous_profile = self.applied_dns_profile.lock().clone();
+        match crate::util::windows_dns::apply_split_dns(
+            interface_name,
+            previous_profile.as_ref(),
+            &profile,
+        ) {
+            Ok(_) => {
+                *self.applied_dns_profile.lock() = Some(profile);
+            }
+            Err(err) => {
+                log::warn!(
+                    "failed to apply split DNS for interface {}: {:?}",
+                    interface_name,
+                    err
+                );
+                callback.error(ErrorInfo::new_msg(
+                    ErrorType::Warn,
+                    format!("split DNS apply failed on {}: {:?}", interface_name, err),
+                ));
+            }
+        }
+    }
 
     #[cfg(all(
         feature = "integrated_tun",

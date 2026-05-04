@@ -87,10 +87,6 @@ fn send_sync_device(device: &SyncDevice, buf: &[u8]) -> io::Result<usize> {
 #[cfg(target_os = "windows")]
 fn is_retryable_write_error(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::WouldBlock
-        || err
-            .to_string()
-            .to_ascii_lowercase()
-            .contains("interface has been disabled")
 }
 
 #[cfg(not(target_os = "windows"))]

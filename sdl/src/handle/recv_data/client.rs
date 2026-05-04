@@ -342,13 +342,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     }
                 }
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
-                    log::debug!(
-                        "peer icmp echo reply received src={} dst={} via={} bytes={}",
-                        icmp_source,
-                        icmp_destination,
-                        route_key.addr,
-                        net_packet.payload().len()
-                    );
                     self.runtime.debug_watch.emit(
                         "icmp",
                         "peer_echo_reply_received",
@@ -367,12 +360,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 let written =
                     write_full_device(&self.device, net_packet.payload(), "peer ip packet inject")?;
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
-                    log::debug!(
-                        "peer icmp echo reply injected into tun src={} dst={} written_bytes={}",
-                        icmp_source,
-                        icmp_destination,
-                        written
-                    );
                     self.runtime.debug_watch.emit(
                         "icmp",
                         "peer_echo_reply_injected",

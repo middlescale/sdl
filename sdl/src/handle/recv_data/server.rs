@@ -220,13 +220,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                             let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
                             if icmp_packet.kind() == Kind::EchoReply {
                                 //网关ip ping的回应
-                                log::debug!(
-                                    "gateway icmp echo reply received src={} dst={} via={} bytes={}",
-                                    ipv4.source_ip(),
-                                    ipv4.destination_ip(),
-                                    route_key.addr,
-                                    net_packet.payload().len()
-                                );
                                 self.runtime.debug_watch.emit(
                                     "icmp",
                                     "gateway_echo_reply_received",
@@ -246,12 +239,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     net_packet.payload(),
                                     "gateway ip packet inject",
                                 )?;
-                                log::debug!(
-                                    "gateway icmp echo reply injected into tun src={} dst={} written_bytes={}",
-                                    ipv4.source_ip(),
-                                    ipv4.destination_ip(),
-                                    written
-                                );
                                 self.runtime.debug_watch.emit(
                                     "icmp",
                                     "gateway_echo_reply_injected",
