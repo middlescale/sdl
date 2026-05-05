@@ -11,7 +11,7 @@ fn print_usage() {
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl status [--json]");
-    println!("  sdl gateway [--json]");
+    println!("  sdl gateway [--json] [--set <gateway-name|auto>]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
     println!("  sdl suspend [--json]                  # 挂起本地收发服务");
@@ -237,7 +237,69 @@ fn handle_status(args: &[String]) -> i32 {
 }
 
 fn handle_gateway(args: &[String]) -> i32 {
-    if has_json_flag(args) {
+    let json = has_json_flag(args);
+    let mut set_value: Option<String> = None;
+    let mut filtered = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--json" => {}
+            "--set" => {
+                let Some(value) = iter.next() else {
+                    let message = "sdl gateway --set requires <gateway-name|auto>";
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message})).unwrap()
+                        );
+                    } else {
+                        eprintln!("{}", message);
+                    }
+                    return 1;
+                };
+                set_value = Some(value.clone());
+            }
+            _ => filtered.push(arg.clone()),
+        }
+    }
+    if !filtered.is_empty() {
+        let message = "sdl gateway only accepts [--json] [--set <gateway-name|auto>]";
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message})).unwrap()
+            );
+        } else {
+            eprintln!("{}", message);
+        }
+        return 1;
+    }
+    if let Some(value) = set_value {
+        match CommandClient::new().and_then(|mut client| client.gateway_set(&value)) {
+            Ok(result) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({"ok": true, "result": result})).unwrap()
+                    );
+                } else {
+                    println!("{}", result);
+                }
+                0
+            }
+            Err(e) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": e.to_string()})).unwrap()
+                    );
+                } else {
+                    eprintln!("gateway error: {}", e);
+                }
+                1
+            }
+        }
+    } else if json {
         match CommandClient::new().and_then(|mut client| client.gateway()) {
             Ok(gateways) => {
                 println!("{}", serde_json::to_string_pretty(&gateways).unwrap());

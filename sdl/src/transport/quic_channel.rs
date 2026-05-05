@@ -194,7 +194,7 @@ async fn run_quic_worker(
                     }
                 }
                 let send_result = if let Some(connection) = active.as_mut() {
-                    connection.send.write_all(&frame_quic_packet(&data)).await
+                    connection.send.write_all(&frame_packet(&data)).await
                 } else {
                     continue;
                 };
@@ -226,7 +226,7 @@ async fn run_quic_worker(
                                     );
                                 }
                             });
-                            if let Err(e) = send.write_all(&frame_quic_packet(&data)).await {
+                            if let Err(e) = send.write_all(&frame_packet(&data)).await {
                                 log::warn!("control quic resend failed {}: {:?}", addr, e);
                                 endpoint.close(0u32.into(), &[]);
                             } else {
@@ -385,7 +385,7 @@ where
     Ok(())
 }
 
-pub(crate) fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
+pub(crate) fn frame_packet(data: &[u8]) -> Vec<u8> {
     let mut framed = Vec::with_capacity(4 + data.len());
     framed.extend_from_slice(&(data.len() as u32).to_be_bytes());
     framed.extend_from_slice(data);
@@ -394,11 +394,11 @@ pub(crate) fn frame_quic_packet(data: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{consume_pending_frames, frame_quic_packet};
+    use super::{consume_pending_frames, frame_packet};
 
     #[test]
-    fn frame_quic_packet_prefixes_big_endian_length() {
-        let framed = frame_quic_packet(b"hello");
+    fn frame_packet_prefixes_big_endian_length() {
+        let framed = frame_packet(b"hello");
         assert_eq!(&framed[..4], &(5u32.to_be_bytes()));
         assert_eq!(&framed[4..], b"hello");
     }
@@ -407,8 +407,8 @@ mod tests {
     fn consume_pending_frames_drains_multiple_complete_packets() {
         let packet_a = vec![1u8; 12];
         let packet_b = vec![2u8; 20];
-        let mut pending = frame_quic_packet(&packet_a);
-        pending.extend_from_slice(&frame_quic_packet(&packet_b));
+        let mut pending = frame_packet(&packet_a);
+        pending.extend_from_slice(&frame_packet(&packet_b));
 
         let mut packets = Vec::new();
         consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn consume_pending_frames_keeps_partial_frame_buffered() {
         let packet = vec![7u8; 16];
-        let framed = frame_quic_packet(&packet);
+        let framed = frame_packet(&packet);
         let mut pending = framed[..10].to_vec();
 
         let mut packets = Vec::new();
@@ -440,8 +440,8 @@ mod tests {
     fn consume_pending_frames_skips_too_short_packets() {
         let short_packet = vec![9u8; 11];
         let valid_packet = vec![8u8; 12];
-        let mut pending = frame_quic_packet(&short_packet);
-        pending.extend_from_slice(&frame_quic_packet(&valid_packet));
+        let mut pending = frame_packet(&short_packet);
+        pending.extend_from_slice(&frame_packet(&valid_packet));
 
         let mut packets = Vec::new();
         consume_pending_frames(&mut pending, &mut |packet| packets.push(packet)).unwrap();

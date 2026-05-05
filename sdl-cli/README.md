@@ -62,6 +62,8 @@ sdl list
 sdl list --json
 sdl status --json
 sdl gateway --json
+sdl gateway --set gateway-1
+sdl gateway --set auto
 sdl route --json
 sdl auth --userId <user-id> [--group default.ms.net] <ticket>
 sdl channel_change --type relay
@@ -73,7 +75,7 @@ sdl suspend
 - `sdl resume`：恢复本地收发服务；优先恢复已有 runtime
 - `sdl suspend`：挂起本地收发服务，但保留内存中的 runtime 状态
 - `sdl rename <name>`：修改当前节点显示名；成功后会同步到 control，并写回本地保存配置，需重启 `sdl-service` 后对外生效
-- `sdl list/status/gateway/route`：查询当前本地服务状态，其中 `sdl gateway` 用于查看当前 gateway candidates 与 active gateway
+- `sdl list/status/gateway/route`：查询当前本地服务状态，其中 `sdl gateway` 用于查看当前 gateway candidates 与 active gateway，`sdl gateway --set <gateway-name>` 可手工指定某个 gateway，`sdl gateway --set auto` 恢复自动选择
 - `sdl auth ...`：向本地 `sdl-service` 提交设备认证；`--group` 不传时默认使用 `default.ms.net`；认证完成后会把状态写回本地状态文件
 - control 服务器地址由 `sdl-service ... -s <server>` 决定
 - 如果设备处于待认证状态，可用 `sdl status --json` 查看 `auth_pending` 和 `last_error`

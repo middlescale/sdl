@@ -518,6 +518,7 @@ pub struct GatewaySessionSummary {
 
 #[derive(Default)]
 struct GatewaySelectionState {
+    manual_endpoint: Option<SocketAddr>,
     selected_endpoint: Option<SocketAddr>,
     last_switch_unix_ms: i64,
 }
@@ -752,6 +753,20 @@ impl GatewaySessions {
         *self.selection.lock() = GatewaySelectionState::default();
     }
 
+    pub fn set_manual_endpoint(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
+        let sessions = self.sessions.lock();
+        if let Some(endpoint) = endpoint {
+            if !sessions.contains_key(&endpoint) {
+                anyhow::bail!("gateway endpoint {endpoint} not found");
+            }
+        }
+        let mut selection = self.selection.lock();
+        selection.manual_endpoint = endpoint;
+        selection.selected_endpoint = endpoint;
+        selection.last_switch_unix_ms = now_time() as i64;
+        Ok(())
+    }
+
     pub fn ticket_expire_unix_ms(&self) -> i64 {
         self.sessions
             .lock()
@@ -827,6 +842,17 @@ impl GatewaySessions {
     pub fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         let guard = self.sessions.lock();
         let active = self.choose_active_endpoint_locked(&guard);
+        let manual_endpoint = self.selection.lock().manual_endpoint;
+        if let Some(endpoint) = manual_endpoint {
+            let Some(session) = guard.get(&endpoint).cloned() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "selected gateway session is unavailable",
+                ));
+            };
+            drop(guard);
+            return session.send_relay(packet);
+        }
         let mut sessions: Vec<GatewaySession> = guard.values().cloned().collect();
         drop(guard);
         sessions.sort_by_key(|session| gateway_session_order_key(session, active));
@@ -874,6 +900,12 @@ impl GatewaySessions {
     fn reset_selection_if_missing(&self, sessions: &HashMap<SocketAddr, GatewaySession>) {
         let mut selection = self.selection.lock();
         if selection
+            .manual_endpoint
+            .is_some_and(|endpoint| !sessions.contains_key(&endpoint))
+        {
+            selection.manual_endpoint = None;
+        }
+        if selection
             .selected_endpoint
             .is_some_and(|endpoint| !sessions.contains_key(&endpoint))
         {
@@ -887,11 +919,18 @@ impl GatewaySessions {
         sessions: &HashMap<SocketAddr, GatewaySession>,
     ) -> Option<SocketAddr> {
         let now_ms = now_time() as i64;
+        let mut selection = self.selection.lock();
+        if let Some(endpoint) = selection.manual_endpoint {
+            if sessions.contains_key(&endpoint) {
+                selection.selected_endpoint = Some(endpoint);
+                return Some(endpoint);
+            }
+            selection.manual_endpoint = None;
+        }
         let best = sessions
             .iter()
             .map(|(endpoint, session)| (*endpoint, session.summary()))
             .max_by_key(|(_, summary)| gateway_summary_sort_key(summary));
-        let mut selection = self.selection.lock();
         let current = selection.selected_endpoint.and_then(|endpoint| {
             sessions
                 .get(&endpoint)

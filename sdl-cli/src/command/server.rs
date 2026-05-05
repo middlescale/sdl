@@ -27,6 +27,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn list(&self) -> io::Result<Vec<DeviceItem>>;
     fn info(&self) -> io::Result<Info>;
     fn gateway(&self) -> io::Result<Vec<GatewayItem>>;
+    fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String>;
     fn traffic(&self) -> io::Result<TrafficSummary>;
     fn resume_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
@@ -109,6 +110,11 @@ where
                 } else if let Some(value) = cmd.strip_prefix("rename:") {
                     serde_yaml::to_string(&handler.rename(value)?)
                         .unwrap_or_else(|e| format!("error {:?}", e))
+                } else if let Some(value) = cmd.strip_prefix("gateway_set:") {
+                    let gateway = value.trim();
+                    let gateway = if gateway.is_empty() { None } else { Some(gateway) };
+                    serde_yaml::to_string(&handler.gateway_set(gateway)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e))
                 } else if let Some(value) = cmd.strip_prefix("auth:") {
                     match serde_json::from_str::<AuthCommand>(value.trim()) {
                         Ok(auth) => {
@@ -148,6 +154,9 @@ mod tests {
         }
         fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
             Ok(Vec::new())
+        }
+        fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String> {
+            Ok(gateway.unwrap_or("auto").to_string())
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {
             Ok(TrafficSummary::default())
@@ -201,6 +210,14 @@ mod tests {
     }
 
     #[test]
+    fn gateway_set_command_passes_raw_value() {
+        let handler = StubHandler;
+        let out = command("gateway_set:gateway-west", &handler).unwrap();
+        let parsed: String = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(parsed, "gateway-west");
+    }
+
+    #[test]
     fn status_command_reuses_info_handler() {
         struct StatusHandler;
 
@@ -239,6 +256,9 @@ mod tests {
                 })
             }
             fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
+                Err(io::Error::other("unused"))
+            }
+            fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
                 Err(io::Error::other("unused"))
             }
             fn traffic(&self) -> io::Result<TrafficSummary> {
@@ -280,6 +300,9 @@ mod tests {
             Err(io::Error::other("unused"))
         }
         fn gateway(&self) -> io::Result<Vec<GatewayItem>> {
+            Err(io::Error::other("unused"))
+        }
+        fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
             Err(io::Error::other("unused"))
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {

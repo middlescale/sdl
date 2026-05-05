@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -410,6 +410,9 @@ impl Sdl {
         &self,
     ) -> Vec<crate::data_plane::gateway_session::GatewaySessionSummary> {
         self.runtime.gateway_sessions.session_summaries()
+    }
+    pub fn set_gateway_selection(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
+        self.runtime.gateway_sessions.set_manual_endpoint(endpoint)
     }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
         self.runtime.route_manager().use_channel_type()

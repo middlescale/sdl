@@ -306,6 +306,33 @@ impl CommandHandler for ServiceCommandHandler {
         }
     }
 
+    fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String> {
+        let vnt = self.0.current_runtime()?;
+        let Some(gateway) = gateway else {
+            vnt.set_gateway_selection(None)
+                .map_err(|e| io::Error::other(format!("gateway selection failed: {e:?}")))?;
+            return Ok("gateway selection changed to auto".to_string());
+        };
+        if gateway.eq_ignore_ascii_case("auto") {
+            vnt.set_gateway_selection(None)
+                .map_err(|e| io::Error::other(format!("gateway selection failed: {e:?}")))?;
+            return Ok("gateway selection changed to auto".to_string());
+        }
+        let gateways = crate::command::command_gateway(vnt.as_ref());
+        let endpoint = gateways
+            .iter()
+            .find(|item| item.gateway_id == gateway || item.endpoint == gateway)
+            .map(|item| item.endpoint.clone())
+            .filter(|endpoint| !endpoint.is_empty())
+            .ok_or_else(|| io::Error::other(format!("gateway '{}' not found", gateway)))?;
+        let endpoint = endpoint
+            .parse()
+            .map_err(|e| io::Error::other(format!("invalid gateway endpoint '{}': {e}", endpoint)))?;
+        vnt.set_gateway_selection(Some(endpoint))
+            .map_err(|e| io::Error::other(format!("gateway selection failed: {e:?}")))?;
+        Ok(format!("gateway selection changed to {}", gateway))
+    }
+
     fn traffic(&self) -> io::Result<TrafficSummary> {
         match self.0.current_runtime() {
             Ok(vnt) => Ok(crate::command::command_traffic(vnt.as_ref())),

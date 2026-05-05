@@ -19,7 +19,7 @@ use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::control_addr::parse_control_address;
-use crate::transport::quic_channel::{consume_pending_frames, frame_quic_packet, PacketCallback};
+use crate::transport::quic_channel::{consume_pending_frames, frame_packet, PacketCallback};
 use crate::util::StopManager;
 
 type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
@@ -205,7 +205,7 @@ async fn run_http3_worker(
                         }
                     }
                 }
-                let frame = Bytes::from(frame_quic_packet(&data));
+                let frame = Bytes::from(frame_packet(&data));
                 let send_result = if let Some(connection) = active.as_mut() {
                     connection.send.send_data(frame).await
                 } else {
@@ -237,9 +237,7 @@ async fn run_http3_worker(
                                     );
                                 }
                             });
-                            if let Err(e) =
-                                send.send_data(Bytes::from(frame_quic_packet(&data))).await
-                            {
+                            if let Err(e) = send.send_data(Bytes::from(frame_packet(&data))).await {
                                 log::warn!("control http3 resend failed {}: {:?}", addr, e);
                                 on_transport_error(format!(
                                     "control http3 resend failed {}: {:?}",

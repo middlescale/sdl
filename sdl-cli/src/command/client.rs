@@ -31,6 +31,10 @@ impl CommandClient {
     pub fn gateway(&mut self) -> io::Result<Vec<GatewayItem>> {
         self.send_cmd(b"gateway")
     }
+    pub fn gateway_set(&mut self, gateway: &str) -> io::Result<String> {
+        let cmd = format!("gateway_set:{}", gateway.trim());
+        self.send_string_cmd(cmd.as_bytes())
+    }
     pub fn traffic(&mut self) -> io::Result<TrafficSummary> {
         self.send_cmd(b"traffic")
     }
