@@ -283,11 +283,29 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         grants: &[proto::message::GatewayAccessGrant],
         legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+        gateway_policy_rev: u64,
         virtual_ip: Ipv4Addr,
     ) {
         let effective_grants = collect_gateway_grants(grants, legacy_grant);
+        let incoming_policy_rev =
+            effective_gateway_policy_rev(gateway_policy_rev, &effective_grants, legacy_grant);
+        let current_policy_rev = self
+            .runtime
+            .gateway_grant_policy_rev
+            .load(Ordering::Relaxed);
+        if !should_apply_gateway_policy_rev(current_policy_rev, incoming_policy_rev) {
+            log::info!(
+                "ignore stale gateway grants: current_policy_rev={}, incoming_policy_rev={}",
+                current_policy_rev,
+                incoming_policy_rev
+            );
+            return;
+        }
         if effective_grants.is_empty() {
             self.runtime.gateway_sessions.clear_gateway_grant();
+            self.runtime
+                .gateway_grant_policy_rev
+                .store(incoming_policy_rev, Ordering::Relaxed);
             log::info!("gateway grant cleared");
             return;
         }
@@ -296,8 +314,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             virtual_ip,
             self.runtime.config.device_id.clone(),
         );
+        self.runtime
+            .gateway_grant_policy_rev
+            .store(incoming_policy_rev, Ordering::Relaxed);
         log::info!(
-            "gateway grants applied count={} gateways={:?}",
+            "gateway grants applied policy_rev={} count={} gateways={:?}",
+            incoming_policy_rev,
             effective_grants.len(),
             effective_grants
                 .iter()
@@ -606,6 +628,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
+                    response.gateway_policy_rev,
                     virtual_ip,
                 );
                 let dns_profile = response.dns_profile.as_ref().map(|profile| DnsProfile {
@@ -706,10 +729,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         match self
                             .runtime
                             .control_session
-                            .send_refresh_gateway_grant_request(
-                                &self.runtime.gateway_sessions,
-                                false,
-                            ) {
+                            .send_refresh_gateway_grant_request(&self.runtime.gateway_sessions, false)
+                        {
                             Ok(_) => {
                                 log::info!(
                                     "registration recovered from offline without gateway grant, requested dedicated gateway grant refresh"
@@ -732,16 +753,23 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let response = DeviceList::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
                 let _device_list_update_guard = self.device_list_update_lock.lock();
-                let Some(device_list_update) =
-                    self.prepare_device_list_update(response.device_info_list, response.epoch as _)
-                else {
-                    return Ok(());
-                };
+                let device_list_update =
+                    self.prepare_device_list_update(response.device_info_list, response.epoch as _);
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     None,
+                    response.gateway_policy_rev,
                     current_device.virtual_ip,
                 );
+                if device_list_update.is_none() {
+                    log::info!(
+                        "skip stale push device list peer update: epoch={}",
+                        response.epoch
+                    );
+                }
+                let Some(device_list_update) = device_list_update else {
+                    return Ok(());
+                };
                 self.set_device_info_list(device_list_update);
                 self.runtime
                     .control_session
@@ -1070,6 +1098,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
+                    response.gateway_policy_rev,
                     current_device.virtual_ip,
                 );
                 log::info!("gateway grant refreshed for {}", current_device.virtual_ip);
@@ -1549,6 +1578,25 @@ fn collect_gateway_grants(
     legacy_grant.cloned().into_iter().collect()
 }
 
+fn effective_gateway_policy_rev(
+    gateway_policy_rev: u64,
+    grants: &[proto::message::GatewayAccessGrant],
+    legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+) -> u64 {
+    if gateway_policy_rev != 0 {
+        return gateway_policy_rev;
+    }
+    collect_gateway_grants(grants, legacy_grant)
+        .into_iter()
+        .map(|grant| grant.policy_rev)
+        .max()
+        .unwrap_or(0)
+}
+
+fn should_apply_gateway_policy_rev(current_policy_rev: u64, incoming_policy_rev: u64) -> bool {
+    incoming_policy_rev == 0 || incoming_policy_rev >= current_policy_rev
+}
+
 fn has_gateway_grants(
     grants: &[proto::message::GatewayAccessGrant],
     legacy_grant: Option<&proto::message::GatewayAccessGrant>,
@@ -1567,15 +1615,18 @@ fn should_refresh_gateway_grant_after_registration(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        format_punch_endpoint, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
-        observed_udp_port_from_registration, punch_endpoint_from_route,
-        selected_endpoint_for_result, should_refresh_gateway_grant_after_registration,
+        effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
+        log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
+        punch_endpoint_from_route, selected_endpoint_for_result,
+        should_apply_gateway_policy_rev, should_refresh_gateway_grant_after_registration,
         try_commit_device_list_state, ActivePunchSession, ActivePunchState,
     };
     use crate::data_plane::route::Route;
     use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
-    use crate::proto::message::{PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart};
+    use crate::proto::message::{
+        GatewayAccessGrant, PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart,
+    };
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -1788,6 +1839,31 @@ mod tests {
             result.phase.enum_value_or_default(),
             PunchSessionPhase::PunchPhaseTimeout
         );
+    }
+
+    #[test]
+    fn effective_gateway_policy_rev_prefers_message_level_value() {
+        let mut grant = GatewayAccessGrant::new();
+        grant.policy_rev = 7;
+
+        assert_eq!(effective_gateway_policy_rev(11, &[grant], None), 11);
+    }
+
+    #[test]
+    fn effective_gateway_policy_rev_falls_back_to_grant_policy_rev() {
+        let mut grant1 = GatewayAccessGrant::new();
+        grant1.policy_rev = 3;
+        let mut grant2 = GatewayAccessGrant::new();
+        grant2.policy_rev = 5;
+
+        assert_eq!(effective_gateway_policy_rev(0, &[grant1, grant2], None), 5);
+    }
+
+    #[test]
+    fn should_apply_gateway_policy_rev_rejects_older_policy() {
+        assert!(!should_apply_gateway_policy_rev(9, 8));
+        assert!(should_apply_gateway_policy_rev(9, 9));
+        assert!(should_apply_gateway_policy_rev(9, 10));
     }
 
     #[test]

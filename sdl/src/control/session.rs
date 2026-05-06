@@ -48,6 +48,7 @@ pub struct SharedDataPlane {
     pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub gateway_sessions: GatewaySessions,
+    pub gateway_grant_policy_rev: Arc<AtomicU64>,
     pub route_manager: RouteManager,
 }
 
@@ -458,7 +459,7 @@ impl ControlSession {
             virtual_ip,
             device_id: self.config.device_id.clone(),
             last_session_id: snapshot.as_ref().map(|v| v.session_id).unwrap_or(0),
-            last_policy_rev: snapshot.as_ref().map(|v| v.policy_rev).unwrap_or(0),
+            last_policy_rev: self.data_plane.gateway_grant_policy_rev.load(Ordering::Relaxed),
             force_reissue,
             ..Default::default()
         };
@@ -698,7 +699,10 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
     if expire_unix_ms - now_ms > 30_000 {
         return;
     }
-    match control_session.send_refresh_gateway_grant_request(gateway_sessions, false) {
+    match control_session.send_refresh_gateway_grant_request(
+        gateway_sessions,
+        false,
+    ) {
         Err(e) => {
             log::warn!("gateway grant refresh send failed: {:?}", e);
         }

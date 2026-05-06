@@ -146,6 +146,7 @@ impl Sdl {
         let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
+        let gateway_grant_policy_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let route_table = Arc::new(RouteTable::new(
             config.use_channel_type,
             config.latency_first,
@@ -169,6 +170,7 @@ impl Sdl {
                 peer_crypto: peer_crypto.clone(),
                 peer_state: peer_state.clone(),
                 gateway_sessions: gateway_sessions.clone(),
+                gateway_grant_policy_rev: gateway_grant_policy_rev.clone(),
                 route_manager: route_manager.clone(),
             },
             data_plane_stats.clone(),
@@ -244,6 +246,7 @@ impl Sdl {
                 config: runtime_config.clone(),
                 dns_profile: Arc::new(RwLock::new(None::<DnsProfile>)),
                 dns_query_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                gateway_grant_policy_rev: gateway_grant_policy_rev.clone(),
                 pending_dns_queries: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 rename_request_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 pending_rename_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),

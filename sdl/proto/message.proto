@@ -53,6 +53,7 @@ message RegistrationResponse {
     string error_message = 11;
     DnsProfile dns_profile = 12;
     repeated GatewayAccessGrant gateway_access_grants = 13;
+    uint64 gateway_policy_rev = 14;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
@@ -93,6 +94,7 @@ message RefreshGatewayGrantResponse {
     GatewayAccessGrant gateway_access_grant = 2;
     string reason = 3;
     repeated GatewayAccessGrant gateway_access_grants = 4;
+    uint64 gateway_policy_rev = 5;
 }
 message GatewayTicketClaims {
     string ticket_id = 1;
@@ -245,6 +247,7 @@ message DeviceList {
     uint32 epoch = 1;
     repeated DeviceInfo device_info_list = 2;
     repeated GatewayAccessGrant gateway_access_grants = 3;
+    uint64 gateway_policy_rev = 4;
 }
 
 message PunchInfo {

@@ -1093,6 +1093,8 @@ pub struct RegistrationResponse {
     pub dns_profile: ::protobuf::MessageField<DnsProfile>,
     // @@protoc_insertion_point(field:RegistrationResponse.gateway_access_grants)
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
+    // @@protoc_insertion_point(field:RegistrationResponse.gateway_policy_rev)
+    pub gateway_policy_rev: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RegistrationResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1110,7 +1112,7 @@ impl RegistrationResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(13);
+        let mut fields = ::std::vec::Vec::with_capacity(14);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "virtual_ip",
@@ -1177,6 +1179,11 @@ impl RegistrationResponse {
             |m: &RegistrationResponse| { &m.gateway_access_grants },
             |m: &mut RegistrationResponse| { &mut m.gateway_access_grants },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_rev",
+            |m: &RegistrationResponse| { &m.gateway_policy_rev },
+            |m: &mut RegistrationResponse| { &mut m.gateway_policy_rev },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RegistrationResponse>(
             "RegistrationResponse",
             fields,
@@ -1234,6 +1241,9 @@ impl ::protobuf::Message for RegistrationResponse {
                 106 => {
                     self.gateway_access_grants.push(is.read_message()?);
                 },
+                112 => {
+                    self.gateway_policy_rev = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1289,6 +1299,9 @@ impl ::protobuf::Message for RegistrationResponse {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         };
+        if self.gateway_policy_rev != 0 {
+            my_size += ::protobuf::rt::uint64_size(14, self.gateway_policy_rev);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1334,6 +1347,9 @@ impl ::protobuf::Message for RegistrationResponse {
         for v in &self.gateway_access_grants {
             ::protobuf::rt::write_message_field_with_cached_size(13, v, os)?;
         };
+        if self.gateway_policy_rev != 0 {
+            os.write_uint64(14, self.gateway_policy_rev)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1364,6 +1380,7 @@ impl ::protobuf::Message for RegistrationResponse {
         self.error_message.clear();
         self.dns_profile.clear();
         self.gateway_access_grants.clear();
+        self.gateway_policy_rev = 0;
         self.special_fields.clear();
     }
 
@@ -1382,6 +1399,7 @@ impl ::protobuf::Message for RegistrationResponse {
             error_message: ::std::string::String::new(),
             dns_profile: ::protobuf::MessageField::none(),
             gateway_access_grants: ::std::vec::Vec::new(),
+            gateway_policy_rev: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -2108,6 +2126,8 @@ pub struct RefreshGatewayGrantResponse {
     pub reason: ::std::string::String,
     // @@protoc_insertion_point(field:RefreshGatewayGrantResponse.gateway_access_grants)
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
+    // @@protoc_insertion_point(field:RefreshGatewayGrantResponse.gateway_policy_rev)
+    pub gateway_policy_rev: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RefreshGatewayGrantResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -2125,7 +2145,7 @@ impl RefreshGatewayGrantResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "has_update",
@@ -2146,6 +2166,11 @@ impl RefreshGatewayGrantResponse {
             "gateway_access_grants",
             |m: &RefreshGatewayGrantResponse| { &m.gateway_access_grants },
             |m: &mut RefreshGatewayGrantResponse| { &mut m.gateway_access_grants },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_rev",
+            |m: &RefreshGatewayGrantResponse| { &m.gateway_policy_rev },
+            |m: &mut RefreshGatewayGrantResponse| { &mut m.gateway_policy_rev },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RefreshGatewayGrantResponse>(
             "RefreshGatewayGrantResponse",
@@ -2177,6 +2202,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
                 34 => {
                     self.gateway_access_grants.push(is.read_message()?);
                 },
+                40 => {
+                    self.gateway_policy_rev = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2203,6 +2231,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         };
+        if self.gateway_policy_rev != 0 {
+            my_size += ::protobuf::rt::uint64_size(5, self.gateway_policy_rev);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2221,6 +2252,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
         for v in &self.gateway_access_grants {
             ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
         };
+        if self.gateway_policy_rev != 0 {
+            os.write_uint64(5, self.gateway_policy_rev)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2242,6 +2276,7 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
         self.gateway_access_grant.clear();
         self.reason.clear();
         self.gateway_access_grants.clear();
+        self.gateway_policy_rev = 0;
         self.special_fields.clear();
     }
 
@@ -2251,6 +2286,7 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
             gateway_access_grant: ::protobuf::MessageField::none(),
             reason: ::std::string::String::new(),
             gateway_access_grants: ::std::vec::Vec::new(),
+            gateway_policy_rev: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -6254,6 +6290,8 @@ pub struct DeviceList {
     pub device_info_list: ::std::vec::Vec<DeviceInfo>,
     // @@protoc_insertion_point(field:DeviceList.gateway_access_grants)
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
+    // @@protoc_insertion_point(field:DeviceList.gateway_policy_rev)
+    pub gateway_policy_rev: u64,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceList.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -6271,7 +6309,7 @@ impl DeviceList {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut fields = ::std::vec::Vec::with_capacity(4);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "epoch",
@@ -6287,6 +6325,11 @@ impl DeviceList {
             "gateway_access_grants",
             |m: &DeviceList| { &m.gateway_access_grants },
             |m: &mut DeviceList| { &mut m.gateway_access_grants },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_rev",
+            |m: &DeviceList| { &m.gateway_policy_rev },
+            |m: &mut DeviceList| { &mut m.gateway_policy_rev },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceList>(
             "DeviceList",
@@ -6315,6 +6358,9 @@ impl ::protobuf::Message for DeviceList {
                 26 => {
                     self.gateway_access_grants.push(is.read_message()?);
                 },
+                32 => {
+                    self.gateway_policy_rev = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -6338,6 +6384,9 @@ impl ::protobuf::Message for DeviceList {
             let len = value.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         };
+        if self.gateway_policy_rev != 0 {
+            my_size += ::protobuf::rt::uint64_size(4, self.gateway_policy_rev);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -6353,6 +6402,9 @@ impl ::protobuf::Message for DeviceList {
         for v in &self.gateway_access_grants {
             ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
         };
+        if self.gateway_policy_rev != 0 {
+            os.write_uint64(4, self.gateway_policy_rev)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -6373,6 +6425,7 @@ impl ::protobuf::Message for DeviceList {
         self.epoch = 0;
         self.device_info_list.clear();
         self.gateway_access_grants.clear();
+        self.gateway_policy_rev = 0;
         self.special_fields.clear();
     }
 
@@ -6381,6 +6434,7 @@ impl ::protobuf::Message for DeviceList {
             epoch: 0,
             device_info_list: ::std::vec::Vec::new(),
             gateway_access_grants: ::std::vec::Vec::new(),
+            gateway_policy_rev: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8732,7 +8786,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x18\x02\x20\x01(\x0cR\x05query\"c\n\x10DnsQueryResponse\x12\x1d\n\nrequ\
     est_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08response\x18\x02\
     \x20\x01(\x0cR\x08response\x12\x14\n\x05error\x18\x03\x20\x01(\tR\x05err\
-    or\"\xb5\x04\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
+    or\"\xe3\x04\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
     \x01(\x07R\tvirtualIp\x12'\n\x0fvirtual_gateway\x18\x02\x20\x01(\x07R\
     \x0evirtualGateway\x12'\n\x0fvirtual_netmask\x18\x03\x20\x01(\x07R\x0evi\
     rtualNetmask\x12\x14\n\x05epoch\x18\x04\x20\x01(\rR\x05epoch\x125\n\x10d\
@@ -8744,8 +8798,9 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     r_code\x18\n\x20\x01(\rR\terrorCode\x12#\n\rerror_message\x18\x0b\x20\
     \x01(\tR\x0cerrorMessage\x12,\n\x0bdns_profile\x18\x0c\x20\x01(\x0b2\x0b\
     .DnsProfileR\ndnsProfile\x12G\n\x15gateway_access_grants\x18\r\x20\x03(\
-    \x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\"t\n\x0eGatewayChan\
-    nel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayChannelKindR\x04kind\
+    \x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gateway_p\
+    olicy_rev\x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\"t\n\x0eGatewayChann\
+    el\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayChannelKindR\x04kind\
     \x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\n\x0bserver_name\
     \x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\x05\"\xc2\x04\n\x12Gat\
     ewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\
@@ -8765,11 +8820,12 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     e_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_session_id\x18\x03\
     \x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\x18\x04\x20\x01(\
     \x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\x01(\x08R\x0cforc\
-    eReissue\"\xe4\x01\n\x1bRefreshGatewayGrantResponse\x12\x1d\n\nhas_updat\
+    eReissue\"\x92\x02\n\x1bRefreshGatewayGrantResponse\x12\x1d\n\nhas_updat\
     e\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_access_grant\x18\
     \x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x16\
     \n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15gateway_access_gran\
     ts\x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\
+    \x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\x10gatewayPolicyRev\
     \"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticket_id\x18\x01\x20\x01\
     (\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\
     \x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsessi\
@@ -8862,12 +8918,13 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     device_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1b\n\tdevice_id\
     \x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\
     \x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\
-    \x0bonlineKxPub\"\xa2\x01\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\
+    \x0bonlineKxPub\"\xd0\x01\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\
     \x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.D\
     eviceInfoR\x0edeviceInfoList\x12G\n\x15gateway_access_grants\x18\x03\x20\
-    \x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\"\xe6\x02\n\tP\
-    unchInfo\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRa\
-    nge\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\
+    \x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gate\
+    way_policy_rev\x18\x04\x20\x01(\x04R\x10gatewayPolicyRev\"\xe6\x02\n\tPu\
+    nchInfo\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRan\
+    ge\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\
     \x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12/\n\x0bpunch_model\
     \x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\x12@\n\x14public_u\
     dp_endpoints\x18\x10\x20\x03(\x0b2\x0e.PunchEndpointR\x12publicUdpEndpoi\

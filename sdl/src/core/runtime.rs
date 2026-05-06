@@ -86,6 +86,7 @@ pub struct SdlRuntime {
     pub config: RuntimeConfig,
     pub dns_profile: Arc<RwLock<Option<DnsProfile>>>,
     pub dns_query_seq: Arc<AtomicU64>,
+    pub gateway_grant_policy_rev: Arc<AtomicU64>,
     pub pending_dns_queries: Arc<Mutex<HashMap<u64, PendingDnsQuery>>>,
     pub rename_request_seq: Arc<AtomicU64>,
     pub pending_rename_requests: Arc<Mutex<HashMap<u64, PendingRenameRequest>>>,
