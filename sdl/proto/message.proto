@@ -39,6 +39,15 @@ message DnsQueryResponse {
     string error = 3;
 }
 
+enum RegistrationErrorReason {
+    REGISTRATION_ERROR_REASON_UNSPECIFIED = 0;
+    REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN = 1;
+    REGISTRATION_ERROR_REASON_NOT_AUTHED = 2;
+    REGISTRATION_ERROR_REASON_INVALID_REQUEST = 3;
+    REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY = 4;
+    REGISTRATION_ERROR_REASON_INTERNAL = 100;
+}
+
 message RegistrationResponse {
     fixed32 virtual_ip = 1;
     fixed32 virtual_gateway = 2;
@@ -54,6 +63,7 @@ message RegistrationResponse {
     DnsProfile dns_profile = 12;
     repeated GatewayAccessGrant gateway_access_grants = 13;
     uint64 gateway_policy_rev = 14;
+    RegistrationErrorReason error_reason = 15;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
@@ -168,6 +178,15 @@ message DeviceAuthProof {
     bytes device_pub_key = 3;
     bytes signature = 4;
 }
+
+enum DeviceAuthErrorReason {
+    DEVICE_AUTH_ERROR_REASON_UNSPECIFIED = 0;
+    DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED = 1;
+    DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH = 2;
+    DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE = 3;
+    DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED = 4;
+}
+
 message DeviceAuthAck {
     bool ok = 1;
     string reason = 2;
@@ -176,6 +195,7 @@ message DeviceAuthAck {
     string device_id = 5;
     int64 auth_expire_unix_ms = 6;
     bool reauth_required = 7;
+    DeviceAuthErrorReason error_reason = 8;
 }
 message DeviceRenameRequest {
     uint64 request_id = 1;

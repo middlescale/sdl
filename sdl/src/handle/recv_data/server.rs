@@ -23,10 +23,10 @@ use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
     DebugCollectRequest, DebugCollectResponse, DebugWatchStartRequest, DebugWatchStartResponse,
-    DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge, DeviceList,
-    DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck, HandshakeResponse, PunchAck,
-    PunchEndpoint, PunchResult, PunchResultCode, PunchSessionPhase, PunchStart,
-    RefreshGatewayGrantResponse, RegistrationResponse,
+    DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge,
+    DeviceAuthErrorReason, DeviceList, DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck,
+    HandshakeResponse, PunchAck, PunchEndpoint, PunchResult, PunchResultCode, PunchSessionPhase,
+    PunchStart, RefreshGatewayGrantResponse, RegistrationErrorReason, RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -603,6 +603,40 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             response.error_code, reason
                         ),
                     ));
+                    if should_retry_registration_with_fresh_handshake(
+                        response.error_code,
+                        response.error_reason.enum_value_or_default(),
+                        &reason,
+                    ) {
+                        match self
+                            .runtime
+                            .control_session
+                            .try_send_registration_reject_recovery_handshake()
+                        {
+                            Ok(true) => {
+                                log::warn!(
+                                    "registration rejected due to stale/missing handshake state, requesting fresh handshake before retry: code={}, route={:?}, reason={}",
+                                    response.error_code,
+                                    route_key,
+                                    reason
+                                );
+                            }
+                            Ok(false) => {
+                                log::debug!(
+                                    "registration reject recovery handshake suppressed by cooldown: code={}, route={:?}, reason={}",
+                                    response.error_code,
+                                    route_key,
+                                    reason
+                                );
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "fresh handshake request after registration reject failed: {:?}",
+                                    err
+                                );
+                            }
+                        }
+                    }
                     return Ok(());
                 }
                 let virtual_ip = Ipv4Addr::from(response.virtual_ip);
@@ -786,6 +820,37 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         ErrorType::Unknown,
                         format!("auth device failed: {}", ack.reason),
                     ));
+                    if should_retry_device_auth_after_challenge_expired(
+                        ack.error_reason.enum_value_or_default(),
+                        &ack.reason,
+                    ) {
+                        match self
+                            .runtime
+                            .control_session
+                            .try_retry_device_auth_after_challenge_expired()
+                        {
+                            Ok(true) => {
+                                log::warn!(
+                                    "device auth challenge expired, retrying auth request with cooldown: route={:?}, reason={}",
+                                    route_key,
+                                    ack.reason
+                                );
+                            }
+                            Ok(false) => {
+                                log::debug!(
+                                    "device auth retry suppressed by cooldown: route={:?}, reason={}",
+                                    route_key,
+                                    ack.reason
+                                );
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "device auth retry after challenge_expired failed: {:?}",
+                                    err
+                                );
+                            }
+                        }
+                    }
                     return Ok(());
                 }
                 self.device_auth_ok.store(true);
@@ -1611,6 +1676,35 @@ fn should_refresh_gateway_grant_after_registration(
     was_offline && !registration_has_gateway_grant
 }
 
+fn should_retry_registration_with_fresh_handshake(
+    error_code: u32,
+    error_reason: RegistrationErrorReason,
+    reason: &str,
+) -> bool {
+    if error_reason
+        == RegistrationErrorReason::REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY
+    {
+        return true;
+    }
+    if error_code == 0 {
+        return false;
+    }
+    reason
+        .trim()
+        .to_ascii_lowercase()
+        .contains("missing required handshake capability")
+}
+
+fn should_retry_device_auth_after_challenge_expired(
+    error_reason: DeviceAuthErrorReason,
+    reason: &str,
+) -> bool {
+    if error_reason == DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED {
+        return true;
+    }
+    reason.trim().eq_ignore_ascii_case("challenge_expired")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1619,13 +1713,16 @@ mod tests {
         log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
         punch_endpoint_from_route, selected_endpoint_for_result,
         should_apply_gateway_policy_rev, should_refresh_gateway_grant_after_registration,
-        try_commit_device_list_state, ActivePunchSession, ActivePunchState,
+        should_retry_device_auth_after_challenge_expired,
+        should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
+        ActivePunchSession, ActivePunchState,
     };
     use crate::data_plane::route::Route;
     use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{
-        GatewayAccessGrant, PunchEndpoint, PunchResultCode, PunchSessionPhase, PunchStart,
+        DeviceAuthErrorReason, GatewayAccessGrant, PunchEndpoint, PunchResultCode,
+        PunchSessionPhase, PunchStart, RegistrationErrorReason,
     };
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
@@ -1925,6 +2022,45 @@ mod tests {
         assert!(!should_refresh_gateway_grant_after_registration(true, true));
         assert!(!should_refresh_gateway_grant_after_registration(
             false, false
+        ));
+    }
+
+    #[test]
+    fn registration_reject_retries_only_for_stale_handshake_state() {
+        assert!(should_retry_registration_with_fresh_handshake(
+            1999,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY,
+            "client 203.0.113.10:443 missing required handshake capability \"udp_endpoint_report_v1\""
+        ));
+        assert!(!should_retry_registration_with_fresh_handshake(
+            1002,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED,
+            "device auth check failed"
+        ));
+        assert!(!should_retry_registration_with_fresh_handshake(
+            1999,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_INTERNAL,
+            "address exhausted"
+        ));
+    }
+
+    #[test]
+    fn device_auth_retries_only_for_challenge_expired() {
+        assert!(should_retry_device_auth_after_challenge_expired(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED,
+            "challenge_expired"
+        ));
+        assert!(should_retry_device_auth_after_challenge_expired(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED,
+            " CHALLENGE_EXPIRED "
+        ));
+        assert!(!should_retry_device_auth_after_challenge_expired(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH,
+            "device_key_mismatch"
+        ));
+        assert!(!should_retry_device_auth_after_challenge_expired(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE,
+            "invalid_signature"
         ));
     }
 

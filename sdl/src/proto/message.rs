@@ -1095,6 +1095,8 @@ pub struct RegistrationResponse {
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
     // @@protoc_insertion_point(field:RegistrationResponse.gateway_policy_rev)
     pub gateway_policy_rev: u64,
+    // @@protoc_insertion_point(field:RegistrationResponse.error_reason)
+    pub error_reason: ::protobuf::EnumOrUnknown<RegistrationErrorReason>,
     // special fields
     // @@protoc_insertion_point(special_field:RegistrationResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1112,7 +1114,7 @@ impl RegistrationResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(14);
+        let mut fields = ::std::vec::Vec::with_capacity(15);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "virtual_ip",
@@ -1184,6 +1186,11 @@ impl RegistrationResponse {
             |m: &RegistrationResponse| { &m.gateway_policy_rev },
             |m: &mut RegistrationResponse| { &mut m.gateway_policy_rev },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "error_reason",
+            |m: &RegistrationResponse| { &m.error_reason },
+            |m: &mut RegistrationResponse| { &mut m.error_reason },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RegistrationResponse>(
             "RegistrationResponse",
             fields,
@@ -1244,6 +1251,9 @@ impl ::protobuf::Message for RegistrationResponse {
                 112 => {
                     self.gateway_policy_rev = is.read_uint64()?;
                 },
+                120 => {
+                    self.error_reason = is.read_enum_or_unknown()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1302,6 +1312,9 @@ impl ::protobuf::Message for RegistrationResponse {
         if self.gateway_policy_rev != 0 {
             my_size += ::protobuf::rt::uint64_size(14, self.gateway_policy_rev);
         }
+        if self.error_reason != ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(15, self.error_reason.value());
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1350,6 +1363,9 @@ impl ::protobuf::Message for RegistrationResponse {
         if self.gateway_policy_rev != 0 {
             os.write_uint64(14, self.gateway_policy_rev)?;
         }
+        if self.error_reason != ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED) {
+            os.write_enum(15, ::protobuf::EnumOrUnknown::value(&self.error_reason))?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1381,6 +1397,7 @@ impl ::protobuf::Message for RegistrationResponse {
         self.dns_profile.clear();
         self.gateway_access_grants.clear();
         self.gateway_policy_rev = 0;
+        self.error_reason = ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED);
         self.special_fields.clear();
     }
 
@@ -1400,6 +1417,7 @@ impl ::protobuf::Message for RegistrationResponse {
             dns_profile: ::protobuf::MessageField::none(),
             gateway_access_grants: ::std::vec::Vec::new(),
             gateway_policy_rev: 0,
+            error_reason: ::protobuf::EnumOrUnknown::from_i32(0),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -4218,6 +4236,8 @@ pub struct DeviceAuthAck {
     pub auth_expire_unix_ms: i64,
     // @@protoc_insertion_point(field:DeviceAuthAck.reauth_required)
     pub reauth_required: bool,
+    // @@protoc_insertion_point(field:DeviceAuthAck.error_reason)
+    pub error_reason: ::protobuf::EnumOrUnknown<DeviceAuthErrorReason>,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceAuthAck.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -4235,7 +4255,7 @@ impl DeviceAuthAck {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut fields = ::std::vec::Vec::with_capacity(8);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "ok",
@@ -4271,6 +4291,11 @@ impl DeviceAuthAck {
             "reauth_required",
             |m: &DeviceAuthAck| { &m.reauth_required },
             |m: &mut DeviceAuthAck| { &mut m.reauth_required },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "error_reason",
+            |m: &DeviceAuthAck| { &m.error_reason },
+            |m: &mut DeviceAuthAck| { &mut m.error_reason },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceAuthAck>(
             "DeviceAuthAck",
@@ -4311,6 +4336,9 @@ impl ::protobuf::Message for DeviceAuthAck {
                 56 => {
                     self.reauth_required = is.read_bool()?;
                 },
+                64 => {
+                    self.error_reason = is.read_enum_or_unknown()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -4344,6 +4372,9 @@ impl ::protobuf::Message for DeviceAuthAck {
         if self.reauth_required != false {
             my_size += 1 + 1;
         }
+        if self.error_reason != ::protobuf::EnumOrUnknown::new(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED) {
+            my_size += ::protobuf::rt::int32_size(8, self.error_reason.value());
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -4371,6 +4402,9 @@ impl ::protobuf::Message for DeviceAuthAck {
         if self.reauth_required != false {
             os.write_bool(7, self.reauth_required)?;
         }
+        if self.error_reason != ::protobuf::EnumOrUnknown::new(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED) {
+            os.write_enum(8, ::protobuf::EnumOrUnknown::value(&self.error_reason))?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -4395,6 +4429,7 @@ impl ::protobuf::Message for DeviceAuthAck {
         self.device_id.clear();
         self.auth_expire_unix_ms = 0;
         self.reauth_required = false;
+        self.error_reason = ::protobuf::EnumOrUnknown::new(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED);
         self.special_fields.clear();
     }
 
@@ -4407,6 +4442,7 @@ impl ::protobuf::Message for DeviceAuthAck {
             device_id: ::std::string::String::new(),
             auth_expire_unix_ms: 0,
             reauth_required: false,
+            error_reason: ::protobuf::EnumOrUnknown::from_i32(0),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8308,6 +8344,83 @@ impl ::protobuf::reflect::ProtobufValue for RouteItem {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:RegistrationErrorReason)
+pub enum RegistrationErrorReason {
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_UNSPECIFIED)
+    REGISTRATION_ERROR_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN)
+    REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN = 1,
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_NOT_AUTHED)
+    REGISTRATION_ERROR_REASON_NOT_AUTHED = 2,
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_INVALID_REQUEST)
+    REGISTRATION_ERROR_REASON_INVALID_REQUEST = 3,
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY)
+    REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY = 4,
+    // @@protoc_insertion_point(enum_value:RegistrationErrorReason.REGISTRATION_ERROR_REASON_INTERNAL)
+    REGISTRATION_ERROR_REASON_INTERNAL = 100,
+}
+
+impl ::protobuf::Enum for RegistrationErrorReason {
+    const NAME: &'static str = "RegistrationErrorReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<RegistrationErrorReason> {
+        match value {
+            0 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN),
+            2 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED),
+            3 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_REQUEST),
+            4 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY),
+            100 => ::std::option::Option::Some(RegistrationErrorReason::REGISTRATION_ERROR_REASON_INTERNAL),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [RegistrationErrorReason] = &[
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED,
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN,
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED,
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_REQUEST,
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY,
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_INTERNAL,
+    ];
+}
+
+impl ::protobuf::EnumFull for RegistrationErrorReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("RegistrationErrorReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = match self {
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED => 0,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN => 1,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED => 2,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_INVALID_REQUEST => 3,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY => 4,
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_INTERNAL => 5,
+        };
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for RegistrationErrorReason {
+    fn default() -> Self {
+        RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED
+    }
+}
+
+impl RegistrationErrorReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<RegistrationErrorReason>("RegistrationErrorReason")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
 // @@protoc_insertion_point(enum:GatewayChannelKind)
 pub enum GatewayChannelKind {
     // @@protoc_insertion_point(enum_value:GatewayChannelKind.GATEWAY_CHANNEL_UNKNOWN)
@@ -8366,6 +8479,72 @@ impl ::std::default::Default for GatewayChannelKind {
 impl GatewayChannelKind {
     fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
         ::protobuf::reflect::GeneratedEnumDescriptorData::new::<GatewayChannelKind>("GatewayChannelKind")
+    }
+}
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug,Hash)]
+// @@protoc_insertion_point(enum:DeviceAuthErrorReason)
+pub enum DeviceAuthErrorReason {
+    // @@protoc_insertion_point(enum_value:DeviceAuthErrorReason.DEVICE_AUTH_ERROR_REASON_UNSPECIFIED)
+    DEVICE_AUTH_ERROR_REASON_UNSPECIFIED = 0,
+    // @@protoc_insertion_point(enum_value:DeviceAuthErrorReason.DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED)
+    DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED = 1,
+    // @@protoc_insertion_point(enum_value:DeviceAuthErrorReason.DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH)
+    DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH = 2,
+    // @@protoc_insertion_point(enum_value:DeviceAuthErrorReason.DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE)
+    DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE = 3,
+    // @@protoc_insertion_point(enum_value:DeviceAuthErrorReason.DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED)
+    DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED = 4,
+}
+
+impl ::protobuf::Enum for DeviceAuthErrorReason {
+    const NAME: &'static str = "DeviceAuthErrorReason";
+
+    fn value(&self) -> i32 {
+        *self as i32
+    }
+
+    fn from_i32(value: i32) -> ::std::option::Option<DeviceAuthErrorReason> {
+        match value {
+            0 => ::std::option::Option::Some(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED),
+            1 => ::std::option::Option::Some(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED),
+            2 => ::std::option::Option::Some(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH),
+            3 => ::std::option::Option::Some(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE),
+            4 => ::std::option::Option::Some(DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED),
+            _ => ::std::option::Option::None
+        }
+    }
+
+    const VALUES: &'static [DeviceAuthErrorReason] = &[
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED,
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED,
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH,
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE,
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED,
+    ];
+}
+
+impl ::protobuf::EnumFull for DeviceAuthErrorReason {
+    fn enum_descriptor() -> ::protobuf::reflect::EnumDescriptor {
+        static descriptor: ::protobuf::rt::Lazy<::protobuf::reflect::EnumDescriptor> = ::protobuf::rt::Lazy::new();
+        descriptor.get(|| file_descriptor().enum_by_package_relative_name("DeviceAuthErrorReason").unwrap()).clone()
+    }
+
+    fn descriptor(&self) -> ::protobuf::reflect::EnumValueDescriptor {
+        let index = *self as usize;
+        Self::enum_descriptor().value_by_index(index)
+    }
+}
+
+impl ::std::default::Default for DeviceAuthErrorReason {
+    fn default() -> Self {
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED
+    }
+}
+
+impl DeviceAuthErrorReason {
+    fn generated_enum_descriptor_data() -> ::protobuf::reflect::GeneratedEnumDescriptorData {
+        ::protobuf::reflect::GeneratedEnumDescriptorData::new::<DeviceAuthErrorReason>("DeviceAuthErrorReason")
     }
 }
 
@@ -8786,7 +8965,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x18\x02\x20\x01(\x0cR\x05query\"c\n\x10DnsQueryResponse\x12\x1d\n\nrequ\
     est_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08response\x18\x02\
     \x20\x01(\x0cR\x08response\x12\x14\n\x05error\x18\x03\x20\x01(\tR\x05err\
-    or\"\xe3\x04\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
+    or\"\xa0\x05\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
     \x01(\x07R\tvirtualIp\x12'\n\x0fvirtual_gateway\x18\x02\x20\x01(\x07R\
     \x0evirtualGateway\x12'\n\x0fvirtual_netmask\x18\x03\x20\x01(\x07R\x0evi\
     rtualNetmask\x12\x14\n\x05epoch\x18\x04\x20\x01(\rR\x05epoch\x125\n\x10d\
@@ -8799,210 +8978,222 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x01(\tR\x0cerrorMessage\x12,\n\x0bdns_profile\x18\x0c\x20\x01(\x0b2\x0b\
     .DnsProfileR\ndnsProfile\x12G\n\x15gateway_access_grants\x18\r\x20\x03(\
     \x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gateway_p\
-    olicy_rev\x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\"t\n\x0eGatewayChann\
-    el\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayChannelKindR\x04kind\
-    \x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\n\x0bserver_name\
-    \x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\x05\"\xc2\x04\n\x12Gat\
-    ewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\
-    \n\x15ticket_expire_unix_ms\x18\x02\x20\x01(\x03R\x12ticketExpireUnixMs\
-    \x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x1d\n\npolic\
-    y_rev\x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14gateway_capabilities\
-    \x18\x05\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\nlease_secs\x18\
-    \x06\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\x07\x20\x01(\rR\tg\
-    raceSecs\x12(\n\x10gateway_group_id\x18\x08\x20\x01(\tR\x0egatewayGroupI\
-    d\x12:\n\x10gateway_channels\x18\t\x20\x03(\x0b2\x0f.GatewayChannelR\x0f\
-    gatewayChannels\x12K\n\x17default_gateway_channel\x18\n\x20\x01(\x0e2\
-    \x13.GatewayChannelKindR\x15defaultGatewayChannel\x123\n\x16gateway_udp_\
-    public_key\x18\x0b\x20\x01(\x0cR\x13gatewayUdpPublicKey\x12+\n\x12gatewa\
-    y_udp_key_id\x18\x0c\x20\x01(\tR\x0fgatewayUdpKeyId\x12\x1d\n\ngateway_i\
-    d\x18\r\x20\x01(\tR\tgatewayId\"\xcd\x01\n\x1aRefreshGatewayGrantRequest\
-    \x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\x12\x1b\n\tdevic\
-    e_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_session_id\x18\x03\
-    \x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\x18\x04\x20\x01(\
-    \x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\x01(\x08R\x0cforc\
-    eReissue\"\x92\x02\n\x1bRefreshGatewayGrantResponse\x12\x1d\n\nhas_updat\
-    e\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_access_grant\x18\
-    \x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x16\
-    \n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15gateway_access_gran\
-    ts\x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\
-    \x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\x10gatewayPolicyRev\
-    \"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticket_id\x18\x01\x20\x01\
-    (\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\
-    \x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsessi\
-    on_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpolicy_revision\x18\x05\
-    \x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgateway_ids\x18\x06\x20\
-    \x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\x20\x01(\tR\x0eg\
-    atewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\x01(\x03R\x0eissue\
-    dAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\x03R\x0fnotBeforeU\
-    nixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\x0cexpireUnixMs\x12$\
-    \n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCapSecs\x12$\n\x0egrace\
-    _cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\x13SignedGatewayTicke\
-    t\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\x15\n\x06key_id\x18\
-    \x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\x03\x20\x01(\x0cR\x06c\
-    laims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xa1\x01\n\
-    \x14GatewayReportRequest\x12\x1d\n\ngateway_id\x18\x01\x20\x01(\tR\tgate\
-    wayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\tR\x08endpoint\x12\"\n\x0cc\
-    apabilities\x18\x04\x20\x03(\tR\x0ccapabilities\x12$\n\x0ereport_unix_ms\
-    \x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\x08\x03\x10\x04\"\x7f\n\x10G\
-    atewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\
-    \x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\ngateway_id\x18\x03\
-    \x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_ms\x18\x04\x20\x01(\x03R\
-    \x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHello\x12\x1b\n\tdevice_id\
-    \x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\
-    \x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\
-    \x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06ticket\x12\x14\n\x05nonce\
-    \x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client_time_unix_ms\x18\x06\
-    \x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06reauth\x18\n\x20\x01(\
-    \x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\x0e\n\x02ok\x18\x01\
-    \x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\
-    \x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12%\n\x0enegoti\
-    ated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0ekeepalive_secs\x18\
-    \x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire_unix_ms\x18\x06\
-    \x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expire_unix_ms\x18\
-    \x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_required\x18\
-    \x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAuthRequest\
-    \x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\x05group\
-    \x18\x02\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x03\x20\x01(\tR\
-    \x08deviceId\x12\x16\n\x06ticket\x18\x04\x20\x01(\tR\x06ticket\x12$\n\
-    \x0edevice_pub_key\x18\x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\x01\n\x13\
-    DeviceAuthChallenge\x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\x0bchalle\
-    ngeId\x12\x14\n\x05nonce\x18\x02\x20\x01(\x0cR\x05nonce\x12$\n\x0eexpire\
-    _unix_ms\x18\x03\x20\x01(\x03R\x0cexpireUnixMs\x12'\n\x0freauth_required\
-    \x18\x04\x20\x01(\x08R\x0ereauthRequired\x12\x16\n\x06reason\x18\x05\x20\
-    \x01(\tR\x06reason\"\x95\x01\n\x0fDeviceAuthProof\x12!\n\x0cchallenge_id\
-    \x18\x01\x20\x01(\tR\x0bchallengeId\x12\x1b\n\tdevice_id\x18\x02\x20\x01\
-    (\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x03\x20\x01(\x0cR\x0cdevic\
-    ePubKey\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xdb\x01\
-    \n\rDeviceAuthAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\
-    \x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x17\n\x07user_id\x18\x03\
-    \x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x04\x20\x01(\tR\x05group\
-    \x12\x1b\n\tdevice_id\x18\x05\x20\x01(\tR\x08deviceId\x12-\n\x13auth_exp\
-    ire_unix_ms\x18\x06\x20\x01(\x03R\x10authExpireUnixMs\x12'\n\x0freauth_r\
-    equired\x18\x07\x20\x01(\x08R\x0ereauthRequired\"l\n\x13DeviceRenameRequ\
-    est\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1b\n\tde\
-    vice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x19\n\x08new_name\x18\x03\
-    \x20\x01(\tR\x07newName\"\xab\x01\n\x14DeviceRenameResponse\x12\x1d\n\nr\
-    equest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\x02ok\x18\x02\x20\
-    \x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12!\
-    \n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\x12)\n\x10pending_\
-    approval\x18\x05\x20\x01(\x08R\x0fpendingApproval\"h\n\x13DebugCollectRe\
-    quest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\
-    \x08sections\x18\x02\x20\x03(\tR\x08sections\x12\x16\n\x06reason\x18\x03\
-    \x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugCollectResponse\x12\x1d\n\nre\
-    quest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\x02ok\x18\x02\x20\
-    \x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12/\
-    \n\x14collected_at_unix_ms\x18\x04\x20\x01(\x03R\x11collectedAtUnixMs\
-    \x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0csnapshotJson\"\x8e\x01\n\
-    \x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\t\
-    requestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\x12!\n\
-    \x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSec\x12\x16\n\x06reason\
-    \x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17DebugWatchStartResponse\
-    \x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\x02ok\
-    \x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06\
-    reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchId\x12+\n\x12\
-    started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstartedAtUnixMs\x12)\n\x11ex\
-    pire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtUnixMs\"i\n\x15DebugWat\
-    chStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
-    \x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07watchId\x12\x16\n\x06reason\
-    \x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16DebugWatchStopResponse\x12\
-    \x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\x02ok\x18\
-    \x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reas\
-    on\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchId\x12+\n\x12stop\
-    ped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppedAtUnixMs\"\xac\x01\n\x0fD\
-    ebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\x20\x01(\x04R\x07watchId\
-    \x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\x12\x1d\n\nevent_ty\
-    pe\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_unix_ms\x18\x04\x20\x01\
-    (\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\x20\x01(\tR\x0bpayl\
-    oadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\x01\x20\x01(\tR\
-    \x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12#\n\r\
-    device_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\x1b\n\tdevice_id\
-    \x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x08\x20\
-    \x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\x20\x01(\x0cR\
-    \x0bonlineKxPub\"\xd0\x01\n\nDeviceList\x12\x14\n\x05epoch\x18\x01\x20\
-    \x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03(\x0b2\x0b.D\
-    eviceInfoR\x0edeviceInfoList\x12G\n\x15gateway_access_grants\x18\x03\x20\
-    \x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gate\
-    way_policy_rev\x18\x04\x20\x01(\x04R\x10gatewayPolicyRev\"\xe6\x02\n\tPu\
-    nchInfo\x12*\n\x11public_port_range\x18\x04\x20\x01(\rR\x0fpublicPortRan\
-    ge\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\
-    \x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12/\n\x0bpunch_model\
-    \x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\x12@\n\x14public_u\
-    dp_endpoints\x18\x10\x20\x03(\x0b2\x0e.PunchEndpointR\x12publicUdpEndpoi\
-    nts\x12>\n\x13local_udp_endpoints\x18\x11\x20\x03(\x0b2\x0e.PunchEndpoin\
-    tR\x11localUdpEndpointsJ\x04\x08\x02\x10\x03J\x04\x08\x03\x10\x04J\x04\
-    \x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\nJ\x04\x08\n\x10\x0bJ\
-    \x04\x08\x0b\x10\x0cJ\x04\x08\x0c\x10\rJ\x04\x08\r\x10\x0eJ\x04\x08\x0e\
-    \x10\x0f\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\
-    \x12\x12\n\x04port\x18\x02\x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\
-    \x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\
-    \xe2\x04\n\x0cPunchRequest\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\t\
-    sessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\
-    \x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\x0fsource_nat_type\x18\
-    \x04\x20\x01(\x0e2\r.PunchNatTypeR\rsourceNatType\x125\n\x0ftarget_nat_t\
-    ype\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\rtargetNatType\x129\n\x10sourc\
-    e_endpoints\x18\x06\x20\x03(\x0b2\x0e.PunchEndpointR\x0fsourceEndpoints\
-    \x129\n\x10target_endpoints\x18\x07\x20\x03(\x0b2\x0e.PunchEndpointR\x0f\
-    targetEndpoints\x12\x18\n\x07attempt\x18\x08\x20\x01(\rR\x07attempt\x12\
-    \x1d\n\ntimeout_ms\x18\t\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_\
-    ms\x18\n\x20\x01(\x03R\x0edeadlineUnixMs\x12:\n\x0etrigger_reason\x18\
-    \x0b\x20\x01(\x0e2\x13.PunchTriggerReasonR\rtriggerReason\x12%\n\x0eatte\
-    mpt_budget\x18\x0c\x20\x01(\rR\rattemptBudget\x12Y\n\x19endpoint_selecti\
-    on_policy\x18\r\x20\x01(\x0e2\x1d.PunchEndpointSelectionPolicyR\x17endpo\
-    intSelectionPolicy\"\xb9\x01\n\x08PunchAck\x12\x1d\n\nsession_id\x18\x01\
-    \x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06s\
-    ource\x12\x18\n\x07attempt\x18\x03\x20\x01(\rR\x07attempt\x12\x1a\n\x08a\
-    ccepted\x18\x04\x20\x01(\x08R\x08accepted\x12\x16\n\x06reason\x18\x05\
-    \x20\x01(\tR\x06reason\x12(\n\x05phase\x18\x06\x20\x01(\x0e2\x12.PunchSe\
-    ssionPhaseR\x05phase\"\xb3\x03\n\nPunchStart\x12\x1d\n\nsession_id\x18\
-    \x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\
-    \x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x125\n\
-    \x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.PunchEndpointR\rpeerEndpoin\
-    ts\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\x07attempt\x12\x1d\n\ntimeou\
-    t_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\x10deadline_unix_ms\x18\x07\
-    \x20\x01(\x03R\x0edeadlineUnixMs\x12:\n\x0etrigger_reason\x18\x08\x20\
-    \x01(\x0e2\x13.PunchTriggerReasonR\rtriggerReason\x12%\n\x0eattempt_budg\
-    et\x18\t\x20\x01(\rR\rattemptBudget\x12Y\n\x19endpoint_selection_policy\
-    \x18\n\x20\x01(\x0e2\x1d.PunchEndpointSelectionPolicyR\x17endpointSelect\
-    ionPolicy\"\x9b\x02\n\x0bPunchResult\x12\x1d\n\nsession_id\x18\x01\x20\
-    \x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01(\x07R\x06sourc\
-    e\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x12\x18\n\x07attem\
-    pt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\
-    \x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\x18\x06\x20\x01(\tR\
-    \x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEn\
-    dpointR\x10selectedEndpoint\x12(\n\x05phase\x18\x08\x20\x01(\x0e2\x12.Pu\
-    nchSessionPhaseR\x05phase\"\x9a\x03\n\x10ClientStatusInfo\x12\x16\n\x06s\
-    ource\x18\x01\x20\x01(\x07R\x06source\x12%\n\x08p2p_list\x18\x02\x20\x03\
-    (\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04\
-    R\x08upStream\x12\x1f\n\x0bdown_stream\x18\x04\x20\x01(\x04R\ndownStream\
-    \x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\
-    @\n\x14public_udp_endpoints\x18\n\x20\x03(\x0b2\x0e.PunchEndpointR\x12pu\
-    blicUdpEndpoints\x12E\n\x14punch_trigger_reason\x18\x0b\x20\x01(\x0e2\
-    \x13.PunchTriggerReasonR\x12punchTriggerReason\x12>\n\x13local_udp_endpo\
-    ints\x18\x0c\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\
-    \x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\
-    \n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*\
-    \x7f\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\
-    \x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_Q\
-    UIC\x10\x02\x12\x19\n\x15GATEWAY_CHANNEL_HTTPS\x10\x03*'\n\x0cPunchNatTy\
-    pe\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchNatModel\
-    \x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IPv6\x10\
-    \x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\xab\x01\
-    \n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\x12\x1c\
-    \n\x18PunchTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchTriggerRouteTim\
-    eout\x10\x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\x1d\n\
-    \x19PunchTriggerManualRequest\x10\x04*\xb5\x01\n\x11PunchSessionPhase\
-    \x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhaseScheduled\
-    \x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11PunchPhaseW\
-    aiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11Punch\
-    PhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\
-    \x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\
-    \x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpo\
-    intSelectionPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\
-    \x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\
-    \x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\
-    \x03\x12\x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchResultRe\
-    jected\x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15P\
-    unchResultSuperseded\x10\x07b\x06proto3\
+    olicy_rev\x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\x12;\n\x0cerror_reas\
+    on\x18\x0f\x20\x01(\x0e2\x18.RegistrationErrorReasonR\x0berrorReason\"t\
+    \n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayCha\
+    nnelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\
+    \n\x0bserver_name\x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\x05\"\
+    \xc2\x04\n\x12GatewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\
+    \x0cR\x06ticket\x121\n\x15ticket_expire_unix_ms\x18\x02\x20\x01(\x03R\
+    \x12ticketExpireUnixMs\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsess\
+    ionId\x12\x1d\n\npolicy_rev\x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14g\
+    ateway_capabilities\x18\x05\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\
+    \nlease_secs\x18\x06\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\
+    \x07\x20\x01(\rR\tgraceSecs\x12(\n\x10gateway_group_id\x18\x08\x20\x01(\
+    \tR\x0egatewayGroupId\x12:\n\x10gateway_channels\x18\t\x20\x03(\x0b2\x0f\
+    .GatewayChannelR\x0fgatewayChannels\x12K\n\x17default_gateway_channel\
+    \x18\n\x20\x01(\x0e2\x13.GatewayChannelKindR\x15defaultGatewayChannel\
+    \x123\n\x16gateway_udp_public_key\x18\x0b\x20\x01(\x0cR\x13gatewayUdpPub\
+    licKey\x12+\n\x12gateway_udp_key_id\x18\x0c\x20\x01(\tR\x0fgatewayUdpKey\
+    Id\x12\x1d\n\ngateway_id\x18\r\x20\x01(\tR\tgatewayId\"\xcd\x01\n\x1aRef\
+    reshGatewayGrantRequest\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvir\
+    tualIp\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0fla\
+    st_session_id\x18\x03\x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy\
+    _rev\x18\x04\x20\x01(\x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\
+    \x20\x01(\x08R\x0cforceReissue\"\x92\x02\n\x1bRefreshGatewayGrantRespons\
+    e\x12\x1d\n\nhas_update\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gatew\
+    ay_access_grant\x18\x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gateway\
+    AccessGrant\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15\
+    gateway_access_grants\x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13g\
+    atewayAccessGrants\x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\
+    \x10gatewayPolicyRev\"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticke\
+    t_id\x18\x01\x20\x01(\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\
+    \x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtua\
+    lIp\x12\x1d\n\nsession_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpol\
+    icy_revision\x18\x05\x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgatewa\
+    y_ids\x18\x06\x20\x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\
+    \x20\x01(\tR\x0egatewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\
+    \x01(\x03R\x0eissuedAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\
+    \x03R\x0fnotBeforeUnixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\
+    \x0cexpireUnixMs\x12$\n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCa\
+    pSecs\x12$\n\x0egrace_cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\
+    \x13SignedGatewayTicket\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\
+    \x15\n\x06key_id\x18\x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\
+    \x03\x20\x01(\x0cR\x06claims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\
+    \tsignature\"\xa1\x01\n\x14GatewayReportRequest\x12\x1d\n\ngateway_id\
+    \x18\x01\x20\x01(\tR\tgatewayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\t\
+    R\x08endpoint\x12\"\n\x0ccapabilities\x18\x04\x20\x03(\tR\x0ccapabilitie\
+    s\x12$\n\x0ereport_unix_ms\x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\
+    \x08\x03\x10\x04\"\x7f\n\x10GatewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\
+    \x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\
+    \x1d\n\ngateway_id\x18\x03\x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_\
+    ms\x18\x04\x20\x01(\x03R\x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHe\
+    llo\x12\x1b\n\tdevice_id\x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirt\
+    ual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\
+    \x20\x01(\x04R\tsessionId\x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06t\
+    icket\x12\x14\n\x05nonce\x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client\
+    _time_unix_ms\x18\x06\x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06rea\
+    uth\x18\n\x20\x01(\x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\
+    \x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\
+    \x01(\tR\x06reason\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionI\
+    d\x12%\n\x0enegotiated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0e\
+    keepalive_secs\x18\x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire\
+    _unix_ms\x18\x06\x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expi\
+    re_unix_ms\x18\x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_r\
+    equired\x18\x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAut\
+    hRequest\x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\
+    \x05group\x18\x02\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x03\x20\
+    \x01(\tR\x08deviceId\x12\x16\n\x06ticket\x18\x04\x20\x01(\tR\x06ticket\
+    \x12$\n\x0edevice_pub_key\x18\x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\
+    \x01\n\x13DeviceAuthChallenge\x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\
+    \x0bchallengeId\x12\x14\n\x05nonce\x18\x02\x20\x01(\x0cR\x05nonce\x12$\n\
+    \x0eexpire_unix_ms\x18\x03\x20\x01(\x03R\x0cexpireUnixMs\x12'\n\x0freaut\
+    h_required\x18\x04\x20\x01(\x08R\x0ereauthRequired\x12\x16\n\x06reason\
+    \x18\x05\x20\x01(\tR\x06reason\"\x95\x01\n\x0fDeviceAuthProof\x12!\n\x0c\
+    challenge_id\x18\x01\x20\x01(\tR\x0bchallengeId\x12\x1b\n\tdevice_id\x18\
+    \x02\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x03\x20\x01(\
+    \x0cR\x0cdevicePubKey\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignat\
+    ure\"\x96\x02\n\rDeviceAuthAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02\
+    ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x17\n\x07user_i\
+    d\x18\x03\x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x04\x20\x01(\tR\
+    \x05group\x12\x1b\n\tdevice_id\x18\x05\x20\x01(\tR\x08deviceId\x12-\n\
+    \x13auth_expire_unix_ms\x18\x06\x20\x01(\x03R\x10authExpireUnixMs\x12'\n\
+    \x0freauth_required\x18\x07\x20\x01(\x08R\x0ereauthRequired\x129\n\x0cer\
+    ror_reason\x18\x08\x20\x01(\x0e2\x16.DeviceAuthErrorReasonR\x0berrorReas\
+    on\"l\n\x13DeviceRenameRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
+    \x04R\trequestId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\
+    \x12\x19\n\x08new_name\x18\x03\x20\x01(\tR\x07newName\"\xab\x01\n\x14Dev\
+    iceRenameResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
+    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
+    \x20\x01(\tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bapp\
+    liedName\x12)\n\x10pending_approval\x18\x05\x20\x01(\x08R\x0fpendingAppr\
+    oval\"h\n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
+    \x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\
+    \x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugC\
+    ollectResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
+    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
+    \x20\x01(\tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\
+    \x03R\x11collectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0c\
+    snapshotJson\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\
+    \x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\
+    \tR\x08sections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSe\
+    c\x12\x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17Debug\
+    WatchStartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestI\
+    d\x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\
+    \x03\x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\
+    \x07watchId\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstarte\
+    dAtUnixMs\x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtU\
+    nixMs\"i\n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\
+    \x01(\x04R\trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07wat\
+    chId\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16De\
+    bugWatchStopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\treques\
+    tId\x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\
+    \x03\x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\
+    \x07watchId\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppe\
+    dAtUnixMs\"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\
+    \x20\x01(\x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07se\
+    ction\x12\x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\reven\
+    t_unix_ms\x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\
+    \x18\x05\x20\x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\
+    \x04name\x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\
+    \x01(\x07R\tvirtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdevic\
+    eStatus\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0ed\
+    evice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_p\
+    ub\x18\t\x20\x01(\x0cR\x0bonlineKxPub\"\xd0\x01\n\nDeviceList\x12\x14\n\
+    \x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\
+    \x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12G\n\x15gateway_a\
+    ccess_grants\x18\x03\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAcc\
+    essGrants\x12,\n\x12gateway_policy_rev\x18\x04\x20\x01(\x04R\x10gatewayP\
+    olicyRev\"\xe6\x02\n\tPunchInfo\x12*\n\x11public_port_range\x18\x04\x20\
+    \x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.P\
+    unchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05repl\
+    y\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchM\
+    odel\x12@\n\x14public_udp_endpoints\x18\x10\x20\x03(\x0b2\x0e.PunchEndpo\
+    intR\x12publicUdpEndpoints\x12>\n\x13local_udp_endpoints\x18\x11\x20\x03\
+    (\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\x08\x02\x10\x03J\x04\
+    \x08\x03\x10\x04J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\
+    \nJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\x0c\x10\rJ\x04\x08\r\
+    \x10\x0eJ\x04\x08\x0e\x10\x0f\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\
+    \x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\x01(\rR\x04port\
+    \x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\n\x03tcp\x18\
+    \x04\x20\x01(\x08R\x03tcp\"\xe2\x04\n\x0cPunchRequest\x12\x1d\n\nsession\
+    _id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\x20\x01\
+    (\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06target\x12\
+    5\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\r.PunchNatTypeR\rsourceNatT\
+    ype\x125\n\x0ftarget_nat_type\x18\x05\x20\x01(\x0e2\r.PunchNatTypeR\rtar\
+    getNatType\x129\n\x10source_endpoints\x18\x06\x20\x03(\x0b2\x0e.PunchEnd\
+    pointR\x0fsourceEndpoints\x129\n\x10target_endpoints\x18\x07\x20\x03(\
+    \x0b2\x0e.PunchEndpointR\x0ftargetEndpoints\x12\x18\n\x07attempt\x18\x08\
+    \x20\x01(\rR\x07attempt\x12\x1d\n\ntimeout_ms\x18\t\x20\x01(\rR\ttimeout\
+    Ms\x12(\n\x10deadline_unix_ms\x18\n\x20\x01(\x03R\x0edeadlineUnixMs\x12:\
+    \n\x0etrigger_reason\x18\x0b\x20\x01(\x0e2\x13.PunchTriggerReasonR\rtrig\
+    gerReason\x12%\n\x0eattempt_budget\x18\x0c\x20\x01(\rR\rattemptBudget\
+    \x12Y\n\x19endpoint_selection_policy\x18\r\x20\x01(\x0e2\x1d.PunchEndpoi\
+    ntSelectionPolicyR\x17endpointSelectionPolicy\"\xb9\x01\n\x08PunchAck\
+    \x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06sou\
+    rce\x18\x02\x20\x01(\x07R\x06source\x12\x18\n\x07attempt\x18\x03\x20\x01\
+    (\rR\x07attempt\x12\x1a\n\x08accepted\x18\x04\x20\x01(\x08R\x08accepted\
+    \x12\x16\n\x06reason\x18\x05\x20\x01(\tR\x06reason\x12(\n\x05phase\x18\
+    \x06\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\xb3\x03\n\nPunchSta\
+    rt\x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06s\
+    ource\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\
+    \x01(\x07R\x06target\x125\n\x0epeer_endpoints\x18\x04\x20\x03(\x0b2\x0e.\
+    PunchEndpointR\rpeerEndpoints\x12\x18\n\x07attempt\x18\x05\x20\x01(\rR\
+    \x07attempt\x12\x1d\n\ntimeout_ms\x18\x06\x20\x01(\rR\ttimeoutMs\x12(\n\
+    \x10deadline_unix_ms\x18\x07\x20\x01(\x03R\x0edeadlineUnixMs\x12:\n\x0et\
+    rigger_reason\x18\x08\x20\x01(\x0e2\x13.PunchTriggerReasonR\rtriggerReas\
+    on\x12%\n\x0eattempt_budget\x18\t\x20\x01(\rR\rattemptBudget\x12Y\n\x19e\
+    ndpoint_selection_policy\x18\n\x20\x01(\x0e2\x1d.PunchEndpointSelectionP\
+    olicyR\x17endpointSelectionPolicy\"\x9b\x02\n\x0bPunchResult\x12\x1d\n\n\
+    session_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\x18\x02\
+    \x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\x07R\x06ta\
+    rget\x12\x18\n\x07attempt\x18\x04\x20\x01(\rR\x07attempt\x12$\n\x04code\
+    \x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\x12\x16\n\x06reason\
+    \x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_endpoint\x18\x07\x20\
+    \x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\x12(\n\x05phase\x18\
+    \x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\x9a\x03\n\x10Client\
+    StatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06source\x12%\n\
+    \x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\x12\x1b\n\tup\
+    _stream\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdown_stream\x18\
+    \x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\
+    \r.PunchNatTypeR\x07natType\x12@\n\x14public_udp_endpoints\x18\n\x20\x03\
+    (\x0b2\x0e.PunchEndpointR\x12publicUdpEndpoints\x12E\n\x14punch_trigger_\
+    reason\x18\x0b\x20\x01(\x0e2\x13.PunchTriggerReasonR\x12punchTriggerReas\
+    on\x12>\n\x13local_udp_endpoints\x18\x0c\x20\x03(\x0b2\x0e.PunchEndpoint\
+    R\x11localUdpEndpointsJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\
+    \x08\x08\x10\tJ\x04\x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\
+    \x01\x20\x01(\x07R\x06nextIp*\xb5\x02\n\x17RegistrationErrorReason\x12)\
+    \n%REGISTRATION_ERROR_REASON_UNSPECIFIED\x10\0\x122\n.REGISTRATION_ERROR\
+    _REASON_INVALID_GROUP_DOMAIN\x10\x01\x12(\n$REGISTRATION_ERROR_REASON_NO\
+    T_AUTHED\x10\x02\x12-\n)REGISTRATION_ERROR_REASON_INVALID_REQUEST\x10\
+    \x03\x12:\n6REGISTRATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY\x10\
+    \x04\x12&\n\"REGISTRATION_ERROR_REASON_INTERNAL\x10d*\x7f\n\x12GatewayCh\
+    annelKind\x12\x1b\n\x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWA\
+    Y_CHANNEL_UDP\x10\x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02\x12\x19\
+    \n\x15GATEWAY_CHANNEL_HTTPS\x10\x03*\x83\x02\n\x15DeviceAuthErrorReason\
+    \x12(\n$DEVICE_AUTH_ERROR_REASON_UNSPECIFIED\x10\0\x12.\n*DEVICE_AUTH_ER\
+    ROR_REASON_CHALLENGE_EXPIRED\x10\x01\x120\n,DEVICE_AUTH_ERROR_REASON_DEV\
+    ICE_KEY_MISMATCH\x10\x02\x12.\n*DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATU\
+    RE\x10\x03\x12.\n*DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED\x10\x04*'\n\
+    \x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\
+    \rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\
+    \n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\
+    \x04*\xab\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\
+    \x10\0\x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchT\
+    riggerRouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\
+    \x03\x12\x1d\n\x19PunchTriggerManualRequest\x10\x04*\xb5\x01\n\x11PunchS\
+    essionPhase\x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhase\
+    Scheduled\x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11Pu\
+    nchPhaseWaiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\
+    \x11PunchPhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\
+    \x01\n\x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionD\
+    efault\x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"Punc\
+    hEndpointSelectionPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\
+    \x16\n\x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\
+    \x01\x12\x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTime\
+    out\x10\x03\x12\x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchR\
+    esultRejected\x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\
+    \n\x15PunchResultSuperseded\x10\x07b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file
@@ -9061,8 +9252,10 @@ pub fn file_descriptor() -> &'static ::protobuf::reflect::FileDescriptor {
             messages.push(PunchResult::generated_message_descriptor_data());
             messages.push(ClientStatusInfo::generated_message_descriptor_data());
             messages.push(RouteItem::generated_message_descriptor_data());
-            let mut enums = ::std::vec::Vec::with_capacity(7);
+            let mut enums = ::std::vec::Vec::with_capacity(9);
+            enums.push(RegistrationErrorReason::generated_enum_descriptor_data());
             enums.push(GatewayChannelKind::generated_enum_descriptor_data());
+            enums.push(DeviceAuthErrorReason::generated_enum_descriptor_data());
             enums.push(PunchNatType::generated_enum_descriptor_data());
             enums.push(PunchNatModel::generated_enum_descriptor_data());
             enums.push(PunchTriggerReason::generated_enum_descriptor_data());

@@ -39,6 +39,8 @@ const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
 const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
 const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const RELAY_REPUNCH_INTERVAL: Duration = Duration::from_secs(60);
+const REGISTRATION_REJECT_HANDSHAKE_COOLDOWN: Duration = Duration::from_secs(3);
+const DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
 
 /// Shared data-plane objects that are owned jointly by the control session and
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
@@ -61,6 +63,8 @@ pub struct ControlSession {
     nat_test: NatTest,
     negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
     last_control_packet_at_ms: Arc<AtomicU64>,
+    last_registration_reject_handshake_at_ms: Arc<AtomicU64>,
+    last_device_auth_retry_at_ms: Arc<AtomicU64>,
 }
 
 impl ControlSession {
@@ -80,6 +84,8 @@ impl ControlSession {
             nat_test,
             negotiated_capabilities,
             last_control_packet_at_ms: Arc::new(AtomicU64::new(0)),
+            last_registration_reject_handshake_at_ms: Arc::new(AtomicU64::new(0)),
+            last_device_auth_retry_at_ms: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -110,6 +116,77 @@ impl ControlSession {
         self.clear_negotiated_capabilities();
         let request_packet = handshake_request_packet()?;
         self.send_packet(&request_packet)
+    }
+
+    pub fn try_send_registration_reject_recovery_handshake(&self) -> io::Result<bool> {
+        let now_ms = crate::handle::now_time() as u64;
+        if !retry_cooldown_elapsed(
+            self.last_registration_reject_handshake_at_ms
+                .load(Ordering::Relaxed),
+            now_ms,
+            REGISTRATION_REJECT_HANDSHAKE_COOLDOWN,
+        ) {
+            return Ok(false);
+        }
+        loop {
+            let last_attempt_at = self
+                .last_registration_reject_handshake_at_ms
+                .load(Ordering::Relaxed);
+            if !retry_cooldown_elapsed(
+                last_attempt_at,
+                now_ms,
+                REGISTRATION_REJECT_HANDSHAKE_COOLDOWN,
+            ) {
+                return Ok(false);
+            }
+            if self
+                .last_registration_reject_handshake_at_ms
+                .compare_exchange(last_attempt_at, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
+        if let Err(err) = self.send_handshake() {
+            self.last_registration_reject_handshake_at_ms
+                .store(0, Ordering::Relaxed);
+            return Err(err);
+        }
+        Ok(true)
+    }
+
+    pub fn try_retry_device_auth_after_challenge_expired(&self) -> anyhow::Result<bool> {
+        let now_ms = crate::handle::now_time() as u64;
+        if !retry_cooldown_elapsed(
+            self.last_device_auth_retry_at_ms.load(Ordering::Relaxed),
+            now_ms,
+            DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN,
+        ) {
+            return Ok(false);
+        }
+        loop {
+            let last_attempt_at = self.last_device_auth_retry_at_ms.load(Ordering::Relaxed);
+            if !retry_cooldown_elapsed(
+                last_attempt_at,
+                now_ms,
+                DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN,
+            ) {
+                return Ok(false);
+            }
+            if self
+                .last_device_auth_retry_at_ms
+                .compare_exchange(last_attempt_at, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
+        }
+        if let Err(err) = self.send_device_auth_request() {
+            self.last_device_auth_retry_at_ms
+                .store(0, Ordering::Relaxed);
+            return Err(err);
+        }
+        Ok(true)
     }
 
     pub fn start<Call: SdlCallback, F>(
@@ -710,5 +787,39 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
             gateway_sessions.mark_refresh_requested();
             log::info!("gateway grant nearing expiration, requested dedicated refresh");
         }
+    }
+}
+
+fn retry_cooldown_elapsed(last_attempt_at_ms: u64, now_ms: u64, cooldown: Duration) -> bool {
+    last_attempt_at_ms == 0
+        || now_ms.saturating_sub(last_attempt_at_ms) >= cooldown.as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry_cooldown_elapsed;
+    use std::time::Duration;
+
+    #[test]
+    fn retry_cooldown_elapsed_allows_first_attempt() {
+        assert!(retry_cooldown_elapsed(0, 1_000, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn retry_cooldown_elapsed_blocks_attempt_inside_window() {
+        assert!(!retry_cooldown_elapsed(
+            1_000,
+            3_999,
+            Duration::from_secs(3)
+        ));
+    }
+
+    #[test]
+    fn retry_cooldown_elapsed_allows_attempt_at_boundary() {
+        assert!(retry_cooldown_elapsed(
+            1_000,
+            4_000,
+            Duration::from_secs(3)
+        ));
     }
 }
