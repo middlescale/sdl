@@ -41,6 +41,7 @@ const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const RELAY_REPUNCH_INTERVAL: Duration = Duration::from_secs(60);
 const REGISTRATION_REJECT_HANDSHAKE_COOLDOWN: Duration = Duration::from_secs(3);
 const DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
+const GATEWAY_GRANT_REFRESH_RETRY_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// Shared data-plane objects that are owned jointly by the control session and
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
@@ -141,7 +142,12 @@ impl ControlSession {
             }
             if self
                 .last_registration_reject_handshake_at_ms
-                .compare_exchange(last_attempt_at, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange(
+                    last_attempt_at,
+                    now_ms,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 break;
@@ -175,7 +181,12 @@ impl ControlSession {
             }
             if self
                 .last_device_auth_retry_at_ms
-                .compare_exchange(last_attempt_at, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+                .compare_exchange(
+                    last_attempt_at,
+                    now_ms,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
                 .is_ok()
             {
                 break;
@@ -536,7 +547,10 @@ impl ControlSession {
             virtual_ip,
             device_id: self.config.device_id.clone(),
             last_session_id: snapshot.as_ref().map(|v| v.session_id).unwrap_or(0),
-            last_policy_rev: self.data_plane.gateway_grant_policy_rev.load(Ordering::Relaxed),
+            last_policy_rev: self
+                .data_plane
+                .gateway_grant_policy_rev
+                .load(Ordering::Relaxed),
             force_reissue,
             ..Default::default()
         };
@@ -768,26 +782,52 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
     if !current_device.status.online() {
         return;
     }
-    let expire_unix_ms = gateway_sessions.ticket_expire_unix_ms();
-    if expire_unix_ms <= 0 {
+    let Some(snapshot) = gateway_sessions.current_grant_snapshot() else {
         return;
-    }
+    };
     let now_ms = crate::handle::now_time() as i64;
-    if expire_unix_ms - now_ms > 30_000 {
+    let Some(force_reissue) = gateway_grant_refresh_mode(
+        snapshot.ticket_expire_unix_ms,
+        gateway_sessions.last_refresh_requested_at_ms(),
+        now_ms,
+    ) else {
         return;
-    }
-    match control_session.send_refresh_gateway_grant_request(
-        gateway_sessions,
-        false,
-    ) {
+    };
+    match control_session.send_refresh_gateway_grant_request(gateway_sessions, force_reissue) {
         Err(e) => {
             log::warn!("gateway grant refresh send failed: {:?}", e);
         }
         Ok(_) => {
             gateway_sessions.mark_refresh_requested();
-            log::info!("gateway grant nearing expiration, requested dedicated refresh");
+            if force_reissue {
+                log::warn!(
+                    "gateway grant ticket missing or expired, requested force reissue refresh"
+                );
+            } else {
+                log::info!("gateway grant nearing expiration, requested dedicated refresh");
+            }
         }
     }
+}
+
+fn gateway_grant_refresh_mode(
+    ticket_expire_unix_ms: i64,
+    last_refresh_requested_at_ms: i64,
+    now_ms: i64,
+) -> Option<bool> {
+    if last_refresh_requested_at_ms > 0
+        && now_ms.saturating_sub(last_refresh_requested_at_ms)
+            < GATEWAY_GRANT_REFRESH_RETRY_COOLDOWN.as_millis() as i64
+    {
+        return None;
+    }
+    if ticket_expire_unix_ms <= 0 {
+        return Some(true);
+    }
+    if ticket_expire_unix_ms - now_ms > 30_000 {
+        return None;
+    }
+    Some(false)
 }
 
 fn retry_cooldown_elapsed(last_attempt_at_ms: u64, now_ms: u64, cooldown: Duration) -> bool {
@@ -797,7 +837,7 @@ fn retry_cooldown_elapsed(last_attempt_at_ms: u64, now_ms: u64, cooldown: Durati
 
 #[cfg(test)]
 mod tests {
-    use super::retry_cooldown_elapsed;
+    use super::{gateway_grant_refresh_mode, retry_cooldown_elapsed};
     use std::time::Duration;
 
     #[test]
@@ -816,10 +856,21 @@ mod tests {
 
     #[test]
     fn retry_cooldown_elapsed_allows_attempt_at_boundary() {
-        assert!(retry_cooldown_elapsed(
-            1_000,
-            4_000,
-            Duration::from_secs(3)
-        ));
+        assert!(retry_cooldown_elapsed(1_000, 4_000, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn gateway_grant_refresh_mode_requests_refresh_near_expiry() {
+        assert_eq!(gateway_grant_refresh_mode(25_000, 0, 0), Some(false));
+    }
+
+    #[test]
+    fn gateway_grant_refresh_mode_forces_reissue_when_ticket_missing() {
+        assert_eq!(gateway_grant_refresh_mode(0, 0, 10_000), Some(true));
+    }
+
+    #[test]
+    fn gateway_grant_refresh_mode_respects_retry_cooldown() {
+        assert_eq!(gateway_grant_refresh_mode(10_000, 6_000, 10_000), None);
     }
 }

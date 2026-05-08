@@ -258,10 +258,6 @@ impl GatewaySession {
         Ok(())
     }
 
-    fn ticket_expire_unix_ms(&self) -> i64 {
-        self.state.lock().ticket_expire_unix_ms
-    }
-
     fn grant_snapshot(&self) -> GatewayGrantSnapshot {
         let guard = self.state.lock();
         GatewayGrantSnapshot {
@@ -284,10 +280,6 @@ impl GatewaySession {
             rt_ms: guard.last_rtt_ms,
             active: false,
         }
-    }
-
-    fn mark_refresh_requested(&self) {
-        self.state.lock().ticket_expire_unix_ms = 0;
     }
 
     fn matches_addr(&self, addr: SocketAddr) -> bool {
@@ -529,6 +521,7 @@ pub struct GatewaySessions {
     runtime: Arc<OnceLock<(StopManager, PacketCallback)>>,
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     selection: Arc<Mutex<GatewaySelectionState>>,
+    refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
     stats: DataPlaneStats,
@@ -545,6 +538,7 @@ impl GatewaySessions {
             runtime: Arc::new(OnceLock::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
+            refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
             debug_watch,
             stats,
@@ -676,6 +670,7 @@ impl GatewaySessions {
             );
             return;
         }
+        self.refresh_requested_at_ms.store(0);
         log::info!(
             "gateway grants applied for virtual ip {} with endpoints {:?}, gateways={:?}",
             virtual_ip,
@@ -751,6 +746,7 @@ impl GatewaySessions {
     pub fn clear_gateway_grant(&self) {
         self.sessions.lock().clear();
         *self.selection.lock() = GatewaySelectionState::default();
+        self.refresh_requested_at_ms.store(0);
     }
 
     pub fn set_manual_endpoint(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
@@ -765,15 +761,6 @@ impl GatewaySessions {
         selection.selected_endpoint = endpoint;
         selection.last_switch_unix_ms = now_time() as i64;
         Ok(())
-    }
-
-    pub fn ticket_expire_unix_ms(&self) -> i64 {
-        self.sessions
-            .lock()
-            .values()
-            .map(GatewaySession::ticket_expire_unix_ms)
-            .max()
-            .unwrap_or(0)
     }
 
     pub fn current_grant_snapshot(&self) -> Option<GatewayGrantSnapshot> {
@@ -827,9 +814,11 @@ impl GatewaySessions {
     }
 
     pub fn mark_refresh_requested(&self) {
-        for session in self.sessions.lock().values() {
-            session.mark_refresh_requested();
-        }
+        self.refresh_requested_at_ms.store(now_time() as i64);
+    }
+
+    pub fn last_refresh_requested_at_ms(&self) -> i64 {
+        self.refresh_requested_at_ms.load()
     }
 
     pub fn is_gateway_addr(&self, addr: SocketAddr) -> bool {
@@ -1135,9 +1124,14 @@ fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
 mod tests {
     use super::{
         gateway_http2_idle_timeout, parse_https_transport_target, parse_transport_endpoint,
+        GatewaySessions,
     };
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
+
+    use protobuf::EnumOrUnknown;
+
+    use crate::proto::message::{GatewayAccessGrant, GatewayChannel, GatewayChannelKind};
 
     #[test]
     fn parse_transport_endpoint_accepts_socket_addr() {
@@ -1188,5 +1182,37 @@ mod tests {
     #[test]
     fn gateway_http2_idle_timeout_tracks_keepalive_window() {
         assert_eq!(gateway_http2_idle_timeout(7), Duration::from_secs(14));
+    }
+
+    #[test]
+    fn mark_refresh_requested_keeps_existing_ticket_expiry() {
+        let sessions = GatewaySessions::default();
+        let ticket_expire_unix_ms = 12_345;
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-1".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                ticket_expire_unix_ms,
+                gateway_channels: vec![GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                    addr: "quic://127.0.0.1:29900".into(),
+                    ..Default::default()
+                }],
+                default_gateway_channel: EnumOrUnknown::new(
+                    GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                ),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        sessions.mark_refresh_requested();
+
+        let snapshot = sessions.current_grant_snapshot().expect("grant snapshot");
+        assert_eq!(snapshot.ticket_expire_unix_ms, ticket_expire_unix_ms);
+        assert!(sessions.last_refresh_requested_at_ms() > 0);
     }
 }

@@ -763,8 +763,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         match self
                             .runtime
                             .control_session
-                            .send_refresh_gateway_grant_request(&self.runtime.gateway_sessions, false)
-                        {
+                            .send_refresh_gateway_grant_request(
+                                &self.runtime.gateway_sessions,
+                                false,
+                            ) {
                             Ok(_) => {
                                 log::info!(
                                     "registration recovered from offline without gateway grant, requested dedicated gateway grant refresh"
@@ -1711,8 +1713,8 @@ mod tests {
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
         log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
-        punch_endpoint_from_route, selected_endpoint_for_result,
-        should_apply_gateway_policy_rev, should_refresh_gateway_grant_after_registration,
+        punch_endpoint_from_route, selected_endpoint_for_result, should_apply_gateway_policy_rev,
+        should_refresh_gateway_grant_after_registration,
         should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
         ActivePunchSession, ActivePunchState,
