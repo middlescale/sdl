@@ -26,7 +26,8 @@ use crate::proto::message::{
     DebugWatchStopRequest, DebugWatchStopResponse, DeviceAuthAck, DeviceAuthChallenge,
     DeviceAuthErrorReason, DeviceList, DeviceRenameResponse, DnsQueryResponse, GatewayConnectAck,
     HandshakeResponse, PunchAck, PunchEndpoint, PunchResult, PunchResultCode, PunchSessionPhase,
-    PunchStart, RefreshGatewayGrantResponse, RegistrationErrorReason, RegistrationResponse,
+    PunchStart, RefreshGatewayGrantResponse, RefreshGatewayGrantResult, RegistrationErrorReason,
+    RegistrationResponse,
 };
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
@@ -302,6 +303,21 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             return;
         }
         if effective_grants.is_empty() {
+            if self
+                .runtime
+                .gateway_sessions
+                .current_grant_snapshot()
+                .is_some()
+            {
+                self.runtime
+                    .gateway_grant_policy_rev
+                    .store(incoming_policy_rev, Ordering::Relaxed);
+                log::warn!(
+                    "gateway grant update omitted grants; retaining cached gateway grant policy_rev={}",
+                    incoming_policy_rev
+                );
+                return;
+            }
             self.runtime.gateway_sessions.clear_gateway_grant();
             self.runtime
                 .gateway_grant_policy_rev
@@ -1158,8 +1174,39 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     .map_err(|e| {
                         io::Error::other(format!("RefreshGatewayGrantResponse {:?}", e))
                     })?;
+                if should_clear_gateway_grants_from_refresh_response(&response) {
+                    self.runtime.gateway_sessions.clear_gateway_grant();
+                    self.runtime
+                        .gateway_grant_policy_rev
+                        .store(response.gateway_policy_rev, Ordering::Relaxed);
+                    log::warn!(
+                        "gateway grant revoked by refresh response: {}",
+                        response.reason
+                    );
+                    return Ok(());
+                }
                 if !response.has_update {
-                    log::info!("gateway grant refresh skipped: {}", response.reason);
+                    if response.result.enum_value_or_default()
+                        == RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE
+                    {
+                        let current_policy_rev = self
+                            .runtime
+                            .gateway_grant_policy_rev
+                            .load(Ordering::Relaxed);
+                        if should_apply_gateway_policy_rev(
+                            current_policy_rev,
+                            response.gateway_policy_rev,
+                        ) {
+                            self.runtime
+                                .gateway_grant_policy_rev
+                                .store(response.gateway_policy_rev, Ordering::Relaxed);
+                        }
+                    }
+                    log::info!(
+                        "gateway grant refresh skipped: {} (result={:?})",
+                        response.reason,
+                        response.result.enum_value_or_default()
+                    );
                     return Ok(());
                 }
                 self.apply_gateway_grants(
@@ -1707,6 +1754,24 @@ fn should_retry_device_auth_after_challenge_expired(
     reason.trim().eq_ignore_ascii_case("challenge_expired")
 }
 
+fn should_clear_gateway_grants_from_refresh_response(
+    response: &RefreshGatewayGrantResponse,
+) -> bool {
+    let result = response.result.enum_value_or_default();
+    if result == RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_REVOKED {
+        return true;
+    }
+    response.has_update
+        && !has_gateway_grants(
+            &response.gateway_access_grants,
+            response.gateway_access_grant.as_ref(),
+        )
+        && response
+            .reason
+            .trim()
+            .eq_ignore_ascii_case("gateway policy cleared")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1714,6 +1779,7 @@ mod tests {
         effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
         log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
         punch_endpoint_from_route, selected_endpoint_for_result, should_apply_gateway_policy_rev,
+        should_clear_gateway_grants_from_refresh_response,
         should_refresh_gateway_grant_after_registration,
         should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
@@ -1724,7 +1790,8 @@ mod tests {
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{
         DeviceAuthErrorReason, GatewayAccessGrant, PunchEndpoint, PunchResultCode,
-        PunchSessionPhase, PunchStart, RegistrationErrorReason,
+        PunchSessionPhase, PunchStart, RefreshGatewayGrantResponse, RefreshGatewayGrantResult,
+        RegistrationErrorReason,
     };
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
@@ -2064,6 +2131,33 @@ mod tests {
             DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE,
             "invalid_signature"
         ));
+    }
+
+    #[test]
+    fn refresh_response_only_clears_gateway_on_revoke() {
+        let mut temporary = RefreshGatewayGrantResponse::new();
+        temporary.has_update = false;
+        temporary.reason = "no gateway available".into();
+        temporary.result =
+            RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE.into();
+        assert!(!should_clear_gateway_grants_from_refresh_response(
+            &temporary
+        ));
+
+        let mut no_change = RefreshGatewayGrantResponse::new();
+        no_change.has_update = false;
+        no_change.reason = "gateway grant unchanged".into();
+        no_change.result =
+            RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE.into();
+        assert!(!should_clear_gateway_grants_from_refresh_response(
+            &no_change
+        ));
+
+        let mut revoked = RefreshGatewayGrantResponse::new();
+        revoked.has_update = true;
+        revoked.reason = "gateway policy cleared".into();
+        revoked.result = RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_REVOKED.into();
+        assert!(should_clear_gateway_grants_from_refresh_response(&revoked));
     }
 
     #[test]

@@ -112,7 +112,11 @@ where
                         .unwrap_or_else(|e| format!("error {:?}", e))
                 } else if let Some(value) = cmd.strip_prefix("gateway_set:") {
                     let gateway = value.trim();
-                    let gateway = if gateway.is_empty() { None } else { Some(gateway) };
+                    let gateway = if gateway.is_empty() {
+                        None
+                    } else {
+                        Some(gateway)
+                    };
                     serde_yaml::to_string(&handler.gateway_set(gateway)?)
                         .unwrap_or_else(|e| format!("error {:?}", e))
                 } else if let Some(value) = cmd.strip_prefix("auth:") {
@@ -238,6 +242,7 @@ mod tests {
                     virtual_gateway: String::new(),
                     virtual_netmask: String::new(),
                     gateway_session_status: String::new(),
+                    gateway_grant_state: String::new(),
                     gateway_endpoint: String::new(),
                     gateway_channel: String::new(),
                     connect_status: String::new(),

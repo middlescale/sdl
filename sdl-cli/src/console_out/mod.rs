@@ -5,6 +5,14 @@ use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSu
 
 pub mod table;
 
+fn gateway_grant_state_rank(state: &str) -> u8 {
+    match state {
+        "active" => 1,
+        "needs-refresh" => 0,
+        _ => 0,
+    }
+}
+
 pub fn console_info(status: Info) {
     println!("Name: {}", style(status.name).green());
     if !status.runtime_name.is_empty() {
@@ -45,6 +53,17 @@ pub fn console_info(status: Info) {
         println!(
             "Gateway endpoint: {}",
             style(status.gateway_endpoint).green()
+        );
+    }
+    if !status.gateway_grant_state.is_empty() {
+        let grant_style = if status.gateway_grant_state == "active" {
+            style(status.gateway_grant_state.clone()).green()
+        } else {
+            style(status.gateway_grant_state.clone()).yellow()
+        };
+        println!(
+            "Gateway grant: {}",
+            grant_style
         );
     }
     if !status.gateway_channel.is_empty() {
@@ -188,6 +207,7 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
         (
             !item.active,
             item.status != "connected",
+            std::cmp::Reverse(gateway_grant_state_rank(&item.grant_state)),
             item.rt_ms.parse::<i64>().unwrap_or(i64::MAX),
             item.gateway_id.clone(),
         )
@@ -198,6 +218,7 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
         ("Endpoint".to_string(), Style::new()),
         ("Channel".to_string(), Style::new()),
         ("Status".to_string(), Style::new()),
+        ("Grant".to_string(), Style::new()),
         ("Rt(ms)".to_string(), Style::new()),
         ("Active".to_string(), Style::new()),
     ]);
@@ -214,6 +235,7 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
             (item.endpoint, style.clone()),
             (item.channel, style.clone()),
             (item.status, style.clone()),
+            (item.grant_state, style.clone()),
             (
                 if item.rt_ms.is_empty() {
                     "-".to_string()

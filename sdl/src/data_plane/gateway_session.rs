@@ -28,6 +28,45 @@ use crate::util::{DebugWatch, StopManager};
 const GATEWAY_SWITCH_BETTER_RT_MS: i64 = 15;
 const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
+const GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS: i64 = 120_000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GatewayGrantPhase {
+    #[default]
+    Missing,
+    Active,
+    RefreshDue,
+    Grace,
+    Expired,
+}
+
+impl GatewayGrantPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Active => "active",
+            Self::RefreshDue => "refresh-due",
+            Self::Grace => "grace",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GatewayGrantState {
+    Active,
+    #[default]
+    NeedsRefresh,
+}
+
+impl GatewayGrantState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::NeedsRefresh => "needs-refresh",
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 struct GatewaySessionState {
@@ -35,6 +74,8 @@ struct GatewaySessionState {
     ticket: Vec<u8>,
     session_id: u64,
     policy_rev: u64,
+    soft_refresh_after_unix_ms: i64,
+    hard_expire_unix_ms: i64,
     ticket_expire_unix_ms: i64,
     device_id: String,
     channel_name: String,
@@ -67,11 +108,64 @@ enum GatewayTransport {
 }
 
 impl GatewaySession {
+    fn default_soft_refresh_after_unix_ms(hard_expire_unix_ms: i64) -> i64 {
+        if hard_expire_unix_ms <= 0 {
+            return 0;
+        }
+        if hard_expire_unix_ms <= GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS {
+            return hard_expire_unix_ms;
+        }
+        hard_expire_unix_ms - GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS
+    }
+
+    fn hard_expire_unix_ms(guard: &GatewaySessionState) -> i64 {
+        guard.hard_expire_unix_ms.max(guard.ticket_expire_unix_ms)
+    }
+
+    fn soft_refresh_after_unix_ms(guard: &GatewaySessionState) -> i64 {
+        if guard.soft_refresh_after_unix_ms > 0 {
+            guard.soft_refresh_after_unix_ms
+        } else {
+            Self::default_soft_refresh_after_unix_ms(Self::hard_expire_unix_ms(guard))
+        }
+    }
+
+    fn grant_phase(guard: &GatewaySessionState, now_ms: i64) -> GatewayGrantPhase {
+        let hard_expire_unix_ms = Self::hard_expire_unix_ms(guard);
+        if guard.ticket.is_empty() || hard_expire_unix_ms <= 0 {
+            return GatewayGrantPhase::Missing;
+        }
+        if now_ms > hard_expire_unix_ms {
+            return GatewayGrantPhase::Expired;
+        }
+        if guard.authenticated
+            && guard.lease_expire_unix_ms > 0
+            && now_ms > guard.lease_expire_unix_ms
+            && now_ms <= guard.grace_expire_unix_ms
+        {
+            return GatewayGrantPhase::Grace;
+        }
+        if now_ms >= Self::soft_refresh_after_unix_ms(guard) {
+            return GatewayGrantPhase::RefreshDue;
+        }
+        GatewayGrantPhase::Active
+    }
+
+    fn grant_state(phase: GatewayGrantPhase) -> GatewayGrantState {
+        match phase {
+            GatewayGrantPhase::Active => GatewayGrantState::Active,
+            GatewayGrantPhase::RefreshDue
+            | GatewayGrantPhase::Grace
+            | GatewayGrantPhase::Missing
+            | GatewayGrantPhase::Expired => GatewayGrantState::NeedsRefresh,
+        }
+    }
+
     fn is_available(guard: &GatewaySessionState, now_ms: i64) -> bool {
         let expire_unix_ms = guard
             .grace_expire_unix_ms
             .max(guard.lease_expire_unix_ms)
-            .max(guard.ticket_expire_unix_ms);
+            .max(Self::hard_expire_unix_ms(guard));
         guard.authenticated && now_ms <= expire_unix_ms
     }
 
@@ -180,7 +274,13 @@ impl GatewaySession {
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
         guard.policy_rev = grant.policy_rev;
-        guard.ticket_expire_unix_ms = grant.ticket_expire_unix_ms;
+        guard.hard_expire_unix_ms = grant.hard_expire_unix_ms.max(grant.ticket_expire_unix_ms);
+        guard.soft_refresh_after_unix_ms = if grant.soft_refresh_after_unix_ms > 0 {
+            grant.soft_refresh_after_unix_ms
+        } else {
+            Self::default_soft_refresh_after_unix_ms(guard.hard_expire_unix_ms)
+        };
+        guard.ticket_expire_unix_ms = guard.hard_expire_unix_ms;
         guard.device_id = device_id;
         guard.channel_name = match &self.channel {
             GatewayTransport::Quic(_) => "quic".to_string(),
@@ -263,22 +363,31 @@ impl GatewaySession {
         GatewayGrantSnapshot {
             session_id: guard.session_id,
             policy_rev: guard.policy_rev,
-            ticket_expire_unix_ms: guard.ticket_expire_unix_ms,
+            soft_refresh_after_unix_ms: Self::soft_refresh_after_unix_ms(&guard),
+            hard_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
+            ticket_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
         }
     }
 
     fn summary(&self) -> GatewaySessionSummary {
         let guard = self.state.lock();
         let now_ms = now_time() as i64;
+        let grant_phase = Self::grant_phase(&guard, now_ms);
         GatewaySessionSummary {
             configured: true,
             authenticated: Self::is_available(&guard, now_ms),
             endpoint: Some(self.endpoint),
             gateway_id: guard.gateway_id.clone(),
             channel_name: guard.channel_name.clone(),
+            grant_state: Self::grant_state(grant_phase),
+            soft_refresh_after_unix_ms: Self::soft_refresh_after_unix_ms(&guard),
+            hard_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
+            lease_expire_unix_ms: guard.lease_expire_unix_ms,
+            grace_expire_unix_ms: guard.grace_expire_unix_ms,
             reauth_required: guard.reauth_required,
             rt_ms: guard.last_rtt_ms,
             active: false,
+            grant_phase,
         }
     }
 
@@ -493,6 +602,8 @@ impl GatewaySession {
 pub struct GatewayGrantSnapshot {
     pub session_id: u64,
     pub policy_rev: u64,
+    pub soft_refresh_after_unix_ms: i64,
+    pub hard_expire_unix_ms: i64,
     pub ticket_expire_unix_ms: i64,
 }
 
@@ -503,9 +614,15 @@ pub struct GatewaySessionSummary {
     pub endpoint: Option<SocketAddr>,
     pub gateway_id: String,
     pub channel_name: String,
+    pub grant_state: GatewayGrantState,
+    pub soft_refresh_after_unix_ms: i64,
+    pub hard_expire_unix_ms: i64,
+    pub lease_expire_unix_ms: i64,
+    pub grace_expire_unix_ms: i64,
     pub reauth_required: bool,
     pub rt_ms: Option<i64>,
     pub active: bool,
+    grant_phase: GatewayGrantPhase,
 }
 
 #[derive(Default)]
@@ -768,7 +885,11 @@ impl GatewaySessions {
             .lock()
             .values()
             .map(GatewaySession::grant_snapshot)
-            .max_by_key(|snapshot| snapshot.ticket_expire_unix_ms)
+            .max_by_key(|snapshot| {
+                snapshot
+                    .hard_expire_unix_ms
+                    .max(snapshot.ticket_expire_unix_ms)
+            })
     }
 
     pub fn session_summary(&self) -> GatewaySessionSummary {
@@ -1077,12 +1198,14 @@ fn gateway_summary_sort_key(
     summary: &GatewaySessionSummary,
 ) -> (
     bool,
+    u8,
     std::cmp::Reverse<i64>,
     bool,
     std::cmp::Reverse<String>,
 ) {
     (
         summary.authenticated,
+        gateway_grant_phase_rank(summary.grant_phase),
         std::cmp::Reverse(summary.rt_ms.unwrap_or(i64::MAX)),
         !summary.reauth_required,
         std::cmp::Reverse(summary.gateway_id.clone()),
@@ -1105,14 +1228,25 @@ fn gateway_summary_is_clearly_better(
 fn gateway_session_order_key(
     session: &GatewaySession,
     active: Option<SocketAddr>,
-) -> (bool, bool, i64, String) {
+) -> (bool, bool, std::cmp::Reverse<u8>, i64, String) {
     let summary = session.summary();
     (
         Some(session.endpoint) != active,
         !summary.authenticated,
+        std::cmp::Reverse(gateway_grant_phase_rank(summary.grant_phase)),
         summary.rt_ms.unwrap_or(i64::MAX),
         summary.gateway_id,
     )
+}
+
+fn gateway_grant_phase_rank(phase: GatewayGrantPhase) -> u8 {
+    match phase {
+        GatewayGrantPhase::Active => 4,
+        GatewayGrantPhase::RefreshDue => 3,
+        GatewayGrantPhase::Grace => 2,
+        GatewayGrantPhase::Missing => 1,
+        GatewayGrantPhase::Expired => 0,
+    }
 }
 
 fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
@@ -1123,8 +1257,9 @@ fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::{
-        gateway_http2_idle_timeout, parse_https_transport_target, parse_transport_endpoint,
-        GatewaySessions,
+        gateway_http2_idle_timeout, gateway_session_order_key, now_time,
+        parse_https_transport_target, parse_transport_endpoint, GatewayGrantPhase,
+        GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
     };
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
@@ -1185,8 +1320,138 @@ mod tests {
     }
 
     #[test]
+    fn grant_phase_distinguishes_active_refresh_due_grace_and_expired() {
+        let mut state = GatewaySessionState {
+            ticket: vec![1, 2, 3],
+            soft_refresh_after_unix_ms: 100,
+            hard_expire_unix_ms: 200,
+            ticket_expire_unix_ms: 200,
+            ..Default::default()
+        };
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 99),
+            GatewayGrantPhase::Active
+        );
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 100),
+            GatewayGrantPhase::RefreshDue
+        );
+
+        state.authenticated = true;
+        state.lease_expire_unix_ms = 120;
+        state.grace_expire_unix_ms = 150;
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 130),
+            GatewayGrantPhase::Grace
+        );
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 201),
+            GatewayGrantPhase::Expired
+        );
+    }
+
+    #[test]
+    fn grant_state_collapse_keeps_only_active_and_needs_refresh() {
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Active),
+            GatewayGrantState::Active
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::RefreshDue),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Grace),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Missing),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Expired),
+            GatewayGrantState::NeedsRefresh
+        );
+    }
+
+    #[test]
+    fn fallback_soft_refresh_after_clamps_invalid_early_expiry() {
+        assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(0), 0);
+        assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(1_000), 1_000);
+        assert_eq!(
+            GatewaySession::default_soft_refresh_after_unix_ms(500_000),
+            380_000
+        );
+    }
+
+    #[test]
+    fn gateway_session_order_key_prefers_active_grants() {
+        let sessions = GatewaySessions::default();
+        let now_ms = now_time() as i64;
+        sessions.set_gateway_grants(
+            &[
+                GatewayAccessGrant {
+                    gateway_id: "gw-active".into(),
+                    ticket: vec![1, 2, 3],
+                    session_id: 1,
+                    policy_rev: 1,
+                    soft_refresh_after_unix_ms: now_ms + 30_000,
+                    hard_expire_unix_ms: now_ms + 60_000,
+                    ticket_expire_unix_ms: now_ms + 60_000,
+                    gateway_channels: vec![GatewayChannel {
+                        kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                        addr: "quic://127.0.0.1:29910".into(),
+                        ..Default::default()
+                    }],
+                    default_gateway_channel: EnumOrUnknown::new(
+                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                    ),
+                    ..Default::default()
+                },
+                GatewayAccessGrant {
+                    gateway_id: "gw-expired".into(),
+                    ticket: vec![4, 5, 6],
+                    session_id: 2,
+                    policy_rev: 1,
+                    soft_refresh_after_unix_ms: now_ms - 60_000,
+                    hard_expire_unix_ms: now_ms - 1,
+                    ticket_expire_unix_ms: now_ms - 1,
+                    gateway_channels: vec![GatewayChannel {
+                        kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                        addr: "quic://127.0.0.1:29911".into(),
+                        ..Default::default()
+                    }],
+                    default_gateway_channel: EnumOrUnknown::new(
+                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                    ),
+                    ..Default::default()
+                },
+            ],
+            Ipv4Addr::new(10, 0, 0, 1),
+            "device-1".into(),
+        );
+
+        let guard = sessions.sessions.lock();
+        let active = guard
+            .get(&"127.0.0.1:29910".parse().unwrap())
+            .expect("active session")
+            .clone();
+        let expired = guard
+            .get(&"127.0.0.1:29911".parse().unwrap())
+            .expect("expired session")
+            .clone();
+        drop(guard);
+
+        assert!(
+            gateway_session_order_key(&active, None) < gateway_session_order_key(&expired, None)
+        );
+    }
+
+    #[test]
     fn mark_refresh_requested_keeps_existing_ticket_expiry() {
         let sessions = GatewaySessions::default();
+        let soft_refresh_after_unix_ms = 9_000;
+        let hard_expire_unix_ms = 12_345;
         let ticket_expire_unix_ms = 12_345;
         sessions.set_gateway_grants(
             &[GatewayAccessGrant {
@@ -1194,6 +1459,8 @@ mod tests {
                 ticket: vec![1, 2, 3],
                 session_id: 7,
                 policy_rev: 8,
+                soft_refresh_after_unix_ms,
+                hard_expire_unix_ms,
                 ticket_expire_unix_ms,
                 gateway_channels: vec![GatewayChannel {
                     kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
@@ -1212,6 +1479,11 @@ mod tests {
         sessions.mark_refresh_requested();
 
         let snapshot = sessions.current_grant_snapshot().expect("grant snapshot");
+        assert_eq!(
+            snapshot.soft_refresh_after_unix_ms,
+            soft_refresh_after_unix_ms
+        );
+        assert_eq!(snapshot.hard_expire_unix_ms, hard_expire_unix_ms);
         assert_eq!(snapshot.ticket_expire_unix_ms, ticket_expire_unix_ms);
         assert!(sessions.last_refresh_requested_at_ms() > 0);
     }

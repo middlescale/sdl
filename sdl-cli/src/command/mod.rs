@@ -16,6 +16,14 @@ mod ipc;
 pub mod server;
 pub mod service_state;
 
+fn gateway_grant_state_label(summary: &GatewaySessionSummary) -> String {
+    if !summary.configured {
+        "not-configured".to_string()
+    } else {
+        summary.grant_state.as_str().to_string()
+    }
+}
+
 const CONTROL_DESTINATION: &str = "CONTROL";
 const CONTROL_VIP_STR: &str = "0.0.0.1";
 
@@ -279,10 +287,11 @@ pub fn command_info(vnt: &Sdl) -> Info {
         .map(|endpoint| endpoint.to_string())
         .unwrap_or_default();
     let gateway_channel = if gateway_summary.configured {
-        gateway_summary.channel_name
+        gateway_summary.channel_name.clone()
     } else {
         String::new()
     };
+    let gateway_grant_state = gateway_grant_state_label(&gateway_summary);
     let connect_status = format!("{:?}", vnt.connection_status());
     let data_plane_status = if gateway_summary.authenticated {
         "gateway-available".to_string()
@@ -331,6 +340,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
         virtual_gateway,
         virtual_netmask,
         gateway_session_status,
+        gateway_grant_state,
         gateway_endpoint,
         gateway_channel,
         connect_status,
@@ -353,30 +363,34 @@ pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
     vnt.gateway_session_summaries()
         .into_iter()
         .enumerate()
-        .map(|(index, summary)| GatewayItem {
-            gateway_id: if summary.gateway_id.is_empty() {
-                format!("gateway-{}", index + 1)
-            } else {
-                summary.gateway_id
-            },
-            endpoint: summary
-                .endpoint
-                .map(|endpoint| endpoint.to_string())
-                .unwrap_or_default(),
-            channel: summary.channel_name,
-            status: if !summary.configured {
-                "not-configured".to_string()
-            } else if summary.authenticated {
-                if summary.reauth_required {
-                    "reauth-required".to_string()
+        .map(|(index, summary)| {
+            let grant_state = gateway_grant_state_label(&summary);
+            GatewayItem {
+                gateway_id: if summary.gateway_id.is_empty() {
+                    format!("gateway-{}", index + 1)
                 } else {
-                    "connected".to_string()
-                }
-            } else {
-                "disconnected".to_string()
-            },
-            rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
-            active: summary.active,
+                    summary.gateway_id
+                },
+                endpoint: summary
+                    .endpoint
+                    .map(|endpoint| endpoint.to_string())
+                    .unwrap_or_default(),
+                channel: summary.channel_name,
+                status: if !summary.configured {
+                    "not-configured".to_string()
+                } else if summary.authenticated {
+                    if summary.reauth_required {
+                        "reauth-required".to_string()
+                    } else {
+                        "connected".to_string()
+                    }
+                } else {
+                    "disconnected".to_string()
+                },
+                grant_state,
+                rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
+                active: summary.active,
+            }
         })
         .collect()
 }

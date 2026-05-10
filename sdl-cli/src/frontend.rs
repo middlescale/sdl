@@ -250,7 +250,10 @@ fn handle_gateway(args: &[String]) -> i32 {
                     if json {
                         println!(
                             "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message})).unwrap()
+                            serde_json::to_string_pretty(
+                                &serde_json::json!({"ok": false, "error": message})
+                            )
+                            .unwrap()
                         );
                     } else {
                         eprintln!("{}", message);
@@ -267,7 +270,8 @@ fn handle_gateway(args: &[String]) -> i32 {
         if json {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message})).unwrap()
+                serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message}))
+                    .unwrap()
             );
         } else {
             eprintln!("{}", message);
@@ -280,7 +284,10 @@ fn handle_gateway(args: &[String]) -> i32 {
                 if json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({"ok": true, "result": result})).unwrap()
+                        serde_json::to_string_pretty(
+                            &serde_json::json!({"ok": true, "result": result})
+                        )
+                        .unwrap()
                     );
                 } else {
                     println!("{}", result);
@@ -291,7 +298,10 @@ fn handle_gateway(args: &[String]) -> i32 {
                 if json {
                     println!(
                         "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": e.to_string()})).unwrap()
+                        serde_json::to_string_pretty(
+                            &serde_json::json!({"ok": false, "error": e.to_string()})
+                        )
+                        .unwrap()
                     );
                 } else {
                     eprintln!("gateway error: {}", e);

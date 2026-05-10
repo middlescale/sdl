@@ -11,6 +11,7 @@ pub struct Info {
     pub virtual_gateway: String,
     pub virtual_netmask: String,
     pub gateway_session_status: String,
+    pub gateway_grant_state: String,
     pub gateway_endpoint: String,
     pub gateway_channel: String,
     pub connect_status: String,
@@ -34,6 +35,7 @@ pub struct GatewayItem {
     pub endpoint: String,
     pub channel: String,
     pub status: String,
+    pub grant_state: String,
     pub rt_ms: String,
     pub active: bool,
 }
