@@ -19,6 +19,12 @@ use crate::transport::quic_channel::PacketCallback;
 use crate::transport::udp_channel::UdpSocketDriver;
 use crate::util::StopManager;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecvSequenceDropKind {
+    Duplicate,
+    Reordered,
+}
+
 #[derive(Clone)]
 pub struct GatewayUdpChannel {
     server_addr: Arc<Mutex<SocketAddr>>,
@@ -36,6 +42,8 @@ struct GatewayUdpCrypto {
     header_key: [u8; 32],
     send_sequence: u64,
     last_recv_sequence: u64,
+    duplicate_drop_count: u64,
+    reordered_drop_count: u64,
     bootstrap_pending: bool,
 }
 
@@ -86,7 +94,27 @@ impl GatewayUdpChannel {
                     }
                 };
                 let mut crypto_guard = crypto.lock();
-                if packet.session_id == 0 || packet.sequence <= crypto_guard.last_recv_sequence {
+                if packet.session_id == 0 {
+                    return;
+                }
+                if let Some(drop_kind) =
+                    classify_recv_sequence_drop(crypto_guard.last_recv_sequence, packet.sequence)
+                {
+                    let drop_count = crypto_guard.record_recv_sequence_drop(drop_kind);
+                    if should_log_recv_sequence_drop(drop_count) {
+                        log::debug!(
+                            "drop {} gateway udp packet {} sequence={} last_recv_sequence={} duplicate_drops={} reordered_drops={}",
+                            match drop_kind {
+                                RecvSequenceDropKind::Duplicate => "duplicate",
+                                RecvSequenceDropKind::Reordered => "reordered",
+                            },
+                            from,
+                            packet.sequence,
+                            crypto_guard.last_recv_sequence,
+                            crypto_guard.duplicate_drop_count,
+                            crypto_guard.reordered_drop_count
+                        );
+                    }
                     return;
                 }
                 let header = match open_gateway_udp_header(
@@ -182,6 +210,15 @@ impl GatewayUdpChannel {
 }
 
 impl GatewayUdpCrypto {
+    fn record_recv_sequence_drop(&mut self, drop_kind: RecvSequenceDropKind) -> u64 {
+        let counter = match drop_kind {
+            RecvSequenceDropKind::Duplicate => &mut self.duplicate_drop_count,
+            RecvSequenceDropKind::Reordered => &mut self.reordered_drop_count,
+        };
+        *counter = counter.saturating_add(1);
+        *counter
+    }
+
     fn new(
         gateway_udp_public_key: [u8; 32],
         gateway_udp_key_id: &str,
@@ -205,7 +242,84 @@ impl GatewayUdpCrypto {
             header_key,
             send_sequence: 0,
             last_recv_sequence: 0,
+            duplicate_drop_count: 0,
+            reordered_drop_count: 0,
             bootstrap_pending: true,
         })
+    }
+}
+
+fn classify_recv_sequence_drop(
+    last_recv_sequence: u64,
+    sequence: u64,
+) -> Option<RecvSequenceDropKind> {
+    if sequence > last_recv_sequence {
+        None
+    } else if sequence == last_recv_sequence {
+        Some(RecvSequenceDropKind::Duplicate)
+    } else {
+        Some(RecvSequenceDropKind::Reordered)
+    }
+}
+
+fn should_log_recv_sequence_drop(drop_count: u64) -> bool {
+    drop_count == 1 || drop_count.is_power_of_two()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_recv_sequence_drop, should_log_recv_sequence_drop, GatewayUdpCrypto,
+        RecvSequenceDropKind,
+    };
+
+    #[test]
+    fn recv_sequence_drop_classifies_duplicate_and_reordered_packets() {
+        assert_eq!(classify_recv_sequence_drop(10, 11), None);
+        assert_eq!(
+            classify_recv_sequence_drop(10, 10),
+            Some(RecvSequenceDropKind::Duplicate)
+        );
+        assert_eq!(
+            classify_recv_sequence_drop(10, 9),
+            Some(RecvSequenceDropKind::Reordered)
+        );
+    }
+
+    #[test]
+    fn recv_sequence_drop_counters_track_duplicate_and_reordered_packets_separately() {
+        let mut crypto = GatewayUdpCrypto {
+            session_id: 1,
+            client_public_key: [0; 32],
+            header_key: [0; 32],
+            send_sequence: 0,
+            last_recv_sequence: 10,
+            duplicate_drop_count: 0,
+            reordered_drop_count: 0,
+            bootstrap_pending: false,
+        };
+
+        assert_eq!(
+            crypto.record_recv_sequence_drop(RecvSequenceDropKind::Duplicate),
+            1
+        );
+        assert_eq!(
+            crypto.record_recv_sequence_drop(RecvSequenceDropKind::Duplicate),
+            2
+        );
+        assert_eq!(
+            crypto.record_recv_sequence_drop(RecvSequenceDropKind::Reordered),
+            1
+        );
+        assert_eq!(crypto.duplicate_drop_count, 2);
+        assert_eq!(crypto.reordered_drop_count, 1);
+    }
+
+    #[test]
+    fn recv_sequence_drop_logging_is_sampled() {
+        assert!(should_log_recv_sequence_drop(1));
+        assert!(should_log_recv_sequence_drop(2));
+        assert!(!should_log_recv_sequence_drop(3));
+        assert!(should_log_recv_sequence_drop(4));
     }
 }

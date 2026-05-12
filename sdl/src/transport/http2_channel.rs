@@ -1,9 +1,11 @@
 use anyhow::Context;
 use bytes::Bytes;
-use h2::client::{self, SendRequest};
+use h2::client;
 use h2::RecvStream;
+use h2::SendStream;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
+use std::future::poll_fn;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,7 +27,7 @@ use crate::transport::quic_channel::{consume_pending_frames, frame_packet, Packe
 use crate::util::StopManager;
 
 enum Http2Command {
-    Send(Vec<u8>),
+    Send(Bytes),
 }
 
 const GATEWAY_HTTP2_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -37,8 +39,7 @@ struct ActiveConnection {
     addr: SocketAddr,
     config_rev: u64,
     healthy: Arc<AtomicBool>,
-    request_uri: String,
-    send_request: SendRequest<Bytes>,
+    uplink_send: SendStream<Bytes>,
     connection_task: JoinHandle<()>,
     read_task: JoinHandle<()>,
 }
@@ -165,7 +166,9 @@ impl Http2Channel {
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         self.sender
-            .try_send(Http2Command::Send(packet.buffer().to_vec()))
+            .try_send(Http2Command::Send(Bytes::from(frame_packet(
+                packet.buffer(),
+            ))))
             .map_err(|e| match e {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => {
                     io::Error::new(io::ErrorKind::WouldBlock, "gateway http2 queue full")
@@ -187,12 +190,8 @@ async fn run_http2_worker(
     on_packet: PacketCallback,
 ) {
     let mut active: Option<ActiveConnection> = None;
-    let mut ping_task: Option<JoinHandle<()>> = None;
     let mut maintain_connection = false;
     loop {
-        if ping_task.as_ref().is_some_and(|task| task.is_finished()) {
-            ping_task = None;
-        }
         if active.is_some() {
             let ping_interval = transport_ping_interval(Duration::from_millis(
                 idle_timeout_ms.load(Ordering::Relaxed).max(1),
@@ -212,9 +211,8 @@ async fn run_http2_worker(
                                 &idle_timeout_ms,
                                 &config_rev,
                                 &on_packet,
-                                &mut ping_task,
                                 &mut maintain_connection,
-                                &data,
+                                data,
                             ).await;
                         }
                     }
@@ -234,12 +232,13 @@ async fn run_http2_worker(
                         current_rev,
                     );
                     if !active_matches {
-                        drop_active_connection(&mut active, &mut ping_task);
+                        drop_active_connection(&mut active);
                         continue;
                     }
-                    if ping_task.is_none() {
-                        if let Some(connection) = active.as_ref() {
-                            ping_task = Some(spawn_transport_ping(connection, addr));
+                    if let Some(connection) = active.as_mut() {
+                        if let Err(err) = send_transport_ping(connection).await {
+                            log::warn!("gateway http2 transport ping failed {}: {:?}", addr, err);
+                            connection.healthy.store(false, Ordering::Relaxed);
                         }
                     }
                 }
@@ -258,12 +257,11 @@ async fn run_http2_worker(
                                     &server_addr,
                                     &server_name,
                                     &request_uri,
-                                    &idle_timeout_ms,
-                                    &config_rev,
-                                    &on_packet,
-                                    &mut ping_task,
-                                    &mut maintain_connection,
-                                    &data,
+                                &idle_timeout_ms,
+                                &config_rev,
+                                &on_packet,
+                                &mut maintain_connection,
+                                data,
                                 )
                                 .await;
                             }
@@ -305,9 +303,8 @@ async fn run_http2_worker(
                             &idle_timeout_ms,
                             &config_rev,
                             &on_packet,
-                            &mut ping_task,
                             &mut maintain_connection,
-                            &data,
+                            data,
                         )
                         .await;
                     }
@@ -315,7 +312,7 @@ async fn run_http2_worker(
             }
         }
     }
-    drop_active_connection(&mut active, &mut ping_task);
+    drop_active_connection(&mut active);
 }
 
 async fn handle_send_command(
@@ -326,9 +323,8 @@ async fn handle_send_command(
     idle_timeout_ms: &Arc<AtomicU64>,
     config_rev: &Arc<AtomicU64>,
     on_packet: &PacketCallback,
-    ping_task: &mut Option<JoinHandle<()>>,
     maintain_connection: &mut bool,
-    data: &[u8],
+    data: Bytes,
 ) {
     let addr = server_addr.load();
     let current_rev = config_rev.load(Ordering::Relaxed);
@@ -344,7 +340,7 @@ async fn handle_send_command(
         current_rev,
     );
     if !active_matches {
-        drop_active_connection(active, ping_task);
+        drop_active_connection(active);
     }
     if active.is_none() {
         let uri = request_uri.lock().clone();
@@ -370,14 +366,13 @@ async fn handle_send_command(
         }
     }
     let send_result = if let Some(connection) = active.as_mut() {
-        let request_uri = connection.request_uri.clone();
-        send_packet(connection, &request_uri, data).await
+        send_packet(connection, data.clone()).await
     } else {
         return;
     };
     if let Err(e) = send_result {
         log::warn!("gateway http2 send failed {}: {:?}", addr, e);
-        drop_active_connection(active, ping_task);
+        drop_active_connection(active);
         let current_rev = config_rev.load(Ordering::Relaxed);
         let uri = request_uri.lock().clone();
         let name = server_name.lock().clone();
@@ -392,7 +387,7 @@ async fn handle_send_command(
         .await
         {
             Ok(mut connection) => {
-                if let Err(e) = send_packet(&mut connection, &uri, data).await {
+                if let Err(e) = send_packet(&mut connection, data).await {
                     log::warn!("gateway http2 resend failed {}: {:?}", addr, e);
                     connection.close();
                 } else {
@@ -410,7 +405,7 @@ async fn handle_send_command(
 struct Http2ClientConnection {
     addr: SocketAddr,
     healthy: Arc<AtomicBool>,
-    send_request: SendRequest<Bytes>,
+    uplink_send: SendStream<Bytes>,
     connection_task: JoinHandle<()>,
     read_task: JoinHandle<()>,
 }
@@ -484,10 +479,46 @@ async fn connect(
         }
         read_health.store(false, Ordering::Relaxed);
     });
+    let uplink_request = http::Request::builder()
+        .method(http::Method::POST)
+        .uri(request_uri)
+        .header(http::header::CONTENT_TYPE, "application/octet-stream")
+        .header("x-sdl-http2-role", "uplink")
+        .body(())?;
+    let (uplink_response, uplink_send) = match sender.send_request(uplink_request, false) {
+        Ok(value) => value,
+        Err(e) => {
+            connection_task.abort();
+            read_task.abort();
+            return Err(e.into());
+        }
+    };
+    let uplink_response =
+        match tokio::time::timeout(GATEWAY_HTTP2_RESPONSE_TIMEOUT, uplink_response).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => {
+                connection_task.abort();
+                read_task.abort();
+                return Err(e.into());
+            }
+            Err(e) => {
+                connection_task.abort();
+                read_task.abort();
+                return Err(e.into());
+            }
+        };
+    if !uplink_response.status().is_success() {
+        connection_task.abort();
+        read_task.abort();
+        anyhow::bail!(
+            "gateway http2 uplink response status {}",
+            uplink_response.status()
+        );
+    }
     Ok(Http2ClientConnection {
         addr,
         healthy,
-        send_request: sender,
+        uplink_send,
         connection_task,
         read_task,
     })
@@ -506,41 +537,54 @@ async fn connect_active_connection(
         addr: connection.addr,
         config_rev,
         healthy: connection.healthy,
-        request_uri: request_uri.to_string(),
-        send_request: connection.send_request,
+        uplink_send: connection.uplink_send,
         connection_task: connection.connection_task,
         read_task: connection.read_task,
     })
 }
 
-async fn send_packet(
-    connection: &mut ActiveConnection,
-    request_uri: &str,
-    data: &[u8],
-) -> anyhow::Result<()> {
-    send_framed_data(
-        &mut connection.send_request,
-        request_uri,
-        frame_packet(data),
-    )
-    .await
+async fn send_packet(connection: &mut ActiveConnection, data: Bytes) -> anyhow::Result<()> {
+    if !connection.healthy.load(Ordering::Relaxed) {
+        anyhow::bail!("gateway http2 connection is unhealthy");
+    }
+    wait_for_send_capacity(&mut connection.uplink_send, data.len()).await?;
+    connection.uplink_send.send_data(data, false)?;
+    Ok(())
 }
 
-async fn send_framed_data(
-    send_request: &mut SendRequest<Bytes>,
-    request_uri: &str,
-    framed: Vec<u8>,
+async fn send_transport_ping(connection: &mut ActiveConnection) -> anyhow::Result<()> {
+    if !connection.healthy.load(Ordering::Relaxed) {
+        anyhow::bail!("gateway http2 connection is unhealthy");
+    }
+    let payload = Bytes::from(frame_packet(GATEWAY_HTTP2_TRANSPORT_PING));
+    wait_for_send_capacity(&mut connection.uplink_send, payload.len()).await?;
+    connection.uplink_send.send_data(payload, false)?;
+    Ok(())
+}
+
+async fn wait_for_send_capacity(
+    send: &mut SendStream<Bytes>,
+    required: usize,
 ) -> anyhow::Result<()> {
-    let request = http::Request::builder()
-        .method(http::Method::POST)
-        .uri(request_uri)
-        .header(http::header::CONTENT_TYPE, "application/octet-stream")
-        .body(())?;
-    let (response, mut send) = send_request.send_request(request, false)?;
-    send.send_data(Bytes::from(framed), true)?;
-    let response = tokio::time::timeout(GATEWAY_HTTP2_RESPONSE_TIMEOUT, response).await??;
-    if !response.status().is_success() {
-        anyhow::bail!("gateway http2 uplink response status {}", response.status());
+    if required == 0 {
+        return Ok(());
+    }
+    while send.capacity() < required {
+        send.reserve_capacity(required);
+        tokio::time::timeout(
+            GATEWAY_HTTP2_RESPONSE_TIMEOUT,
+            poll_fn(|cx| match send.poll_capacity(cx) {
+                std::task::Poll::Ready(Some(Ok(_))) => std::task::Poll::Ready(Ok(())),
+                std::task::Poll::Ready(Some(Err(err))) => {
+                    std::task::Poll::Ready(Err(anyhow::Error::from(err)))
+                }
+                std::task::Poll::Ready(None) => {
+                    std::task::Poll::Ready(Err(anyhow::anyhow!("gateway http2 uplink closed")))
+                }
+                std::task::Poll::Pending => std::task::Poll::Pending,
+            }),
+        )
+        .await??;
     }
     Ok(())
 }
@@ -579,31 +623,7 @@ fn transport_ping_interval(idle_timeout: Duration) -> Duration {
     half_idle.max(Duration::from_secs(3))
 }
 
-fn spawn_transport_ping(connection: &ActiveConnection, addr: SocketAddr) -> JoinHandle<()> {
-    let mut send_request = connection.send_request.clone();
-    let request_uri = connection.request_uri.clone();
-    let healthy = connection.healthy.clone();
-    tokio::spawn(async move {
-        if let Err(err) = send_framed_data(
-            &mut send_request,
-            &request_uri,
-            frame_packet(GATEWAY_HTTP2_TRANSPORT_PING),
-        )
-        .await
-        {
-            log::warn!("gateway http2 transport ping failed {}: {:?}", addr, err);
-            healthy.store(false, Ordering::Relaxed);
-        }
-    })
-}
-
-fn drop_active_connection(
-    active: &mut Option<ActiveConnection>,
-    ping_task: &mut Option<JoinHandle<()>>,
-) {
-    if let Some(task) = ping_task.take() {
-        task.abort();
-    }
+fn drop_active_connection(active: &mut Option<ActiveConnection>) {
     if let Some(connection) = active.take() {
         connection.close();
     }

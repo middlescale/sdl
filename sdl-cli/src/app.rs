@@ -325,9 +325,9 @@ impl CommandHandler for ServiceCommandHandler {
             .map(|item| item.endpoint.clone())
             .filter(|endpoint| !endpoint.is_empty())
             .ok_or_else(|| io::Error::other(format!("gateway '{}' not found", gateway)))?;
-        let endpoint = endpoint
-            .parse()
-            .map_err(|e| io::Error::other(format!("invalid gateway endpoint '{}': {e}", endpoint)))?;
+        let endpoint = endpoint.parse().map_err(|e| {
+            io::Error::other(format!("invalid gateway endpoint '{}': {e}", endpoint))
+        })?;
         vnt.set_gateway_selection(Some(endpoint))
             .map_err(|e| io::Error::other(format!("gateway selection failed: {e:?}")))?;
         Ok(format!("gateway selection changed to {}", gateway))

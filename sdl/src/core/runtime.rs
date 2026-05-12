@@ -515,7 +515,8 @@ impl SdlRuntime {
                 "gateway".into(),
                 json!({
                     "configured": summary.configured,
-                    "authenticated": summary.authenticated,
+                    "available": summary.available,
+                    "phase": summary.phase.as_str(),
                     "endpoint": summary.endpoint.map(|endpoint| endpoint.to_string()),
                     "channel_name": summary.channel_name,
                     "reauth_required": summary.reauth_required,
