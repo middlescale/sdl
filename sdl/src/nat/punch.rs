@@ -323,34 +323,21 @@ impl Punch {
         if !self.punch_model.use_udp() || !nat_info.punch_model.use_udp() {
             return Ok(false);
         }
-        if self.punch_model.use_ipv6() && nat_info.punch_model.use_ipv6() {
-            if let Some(ipv6_addr) = nat_info.local_udp_ipv6addr() {
-                if !self.nat_test.is_local_address(false, ipv6_addr) {
-                    self.peer_probe_tracker.record_punch_probe(id, ipv6_addr);
-                    sent = true;
-                    let rs = self.udp_channel.send_to(buf, ipv6_addr);
-                    log::info!("发送到ipv6地址:{:?},rs={:?} {}", ipv6_addr, rs, id);
-                }
+        for addr in
+            ordered_explicit_probe_endpoints(&nat_info, self.punch_model, nat_info.punch_model)
+        {
+            if self.nat_test.is_local_address(false, addr) {
+                continue;
             }
+            self.peer_probe_tracker.record_punch_probe(id, addr);
+            sent = true;
+            let rs = self.udp_channel.send_to(buf, addr);
+            log::info!("发送到打洞地址:{:?},rs={:?} {}", addr, rs, id);
+            thread::sleep(Duration::from_millis(3));
         }
         let has_explicit_public_endpoints = !nat_info.public_udp_endpoints.is_empty();
-        for addr in &nat_info.public_udp_endpoints {
-            if !self.nat_test.is_local_address(false, *addr) {
-                self.peer_probe_tracker.record_punch_probe(id, *addr);
-                sent = true;
-                let _ = self.udp_channel.send_to(buf, *addr);
-                thread::sleep(Duration::from_millis(3));
-            }
-        }
         if !self.punch_model.use_ipv4() || !nat_info.punch_model.use_ipv4() {
             return Ok(sent);
-        }
-        if let Some(ipv4_addr) = nat_info.local_udp_ipv4addr() {
-            if !self.nat_test.is_local_address(false, ipv4_addr) {
-                self.peer_probe_tracker.record_punch_probe(id, ipv4_addr);
-                sent = true;
-                let _ = self.udp_channel.send_to(buf, ipv4_addr);
-            }
         }
         if !has_explicit_public_endpoints {
             // 可能是开放了端口的，需要打洞
@@ -485,5 +472,77 @@ impl Punch {
             }
         }
         Ok(ports.len())
+    }
+}
+
+fn ordered_explicit_probe_endpoints(
+    nat_info: &NatInfo,
+    local_punch_model: PunchModel,
+    peer_punch_model: PunchModel,
+) -> Vec<SocketAddr> {
+    let mut endpoints = Vec::new();
+    if local_punch_model.use_ipv4() && peer_punch_model.use_ipv4() {
+        if let Some(addr) = nat_info.local_udp_ipv4addr() {
+            endpoints.push(addr);
+        }
+    }
+    if local_punch_model.use_ipv6() && peer_punch_model.use_ipv6() {
+        if let Some(addr) = nat_info.local_udp_ipv6addr() {
+            if !endpoints.contains(&addr) {
+                endpoints.push(addr);
+            }
+        }
+    }
+    for addr in &nat_info.public_udp_endpoints {
+        let allowed = match addr {
+            SocketAddr::V4(_) => local_punch_model.use_ipv4() && peer_punch_model.use_ipv4(),
+            SocketAddr::V6(_) => local_punch_model.use_ipv6() && peer_punch_model.use_ipv6(),
+        };
+        if allowed && !endpoints.contains(addr) {
+            endpoints.push(*addr);
+        }
+    }
+    endpoints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ordered_explicit_probe_endpoints, NatInfo, NatType, PunchModel};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+
+    #[test]
+    fn explicit_probe_endpoints_prioritize_local_ipv4() {
+        let shared_ipv6 = "2409:8a55:30dd:5124:4c71:69a7:f266:3444"
+            .parse::<Ipv6Addr>()
+            .unwrap();
+        let nat_info = NatInfo::new(
+            vec![Ipv4Addr::new(223, 74, 148, 93)],
+            vec![14699],
+            vec![
+                SocketAddr::V6(SocketAddrV6::new(shared_ipv6, 51425, 0, 0)),
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(223, 74, 148, 93), 14699)),
+            ],
+            0,
+            Some(Ipv4Addr::new(192, 168, 31, 5)),
+            Some(shared_ipv6),
+            vec![51425],
+            NatType::Cone,
+            PunchModel::All,
+        );
+
+        let endpoints =
+            ordered_explicit_probe_endpoints(&nat_info, PunchModel::All, PunchModel::All);
+
+        assert_eq!(
+            endpoints.first().copied(),
+            Some(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::new(192, 168, 31, 5),
+                51425
+            )))
+        );
+        assert_eq!(
+            endpoints.get(1).copied(),
+            Some(SocketAddr::V6(SocketAddrV6::new(shared_ipv6, 51425, 0, 0)))
+        );
     }
 }
