@@ -86,6 +86,7 @@ pub struct SdlRuntime {
     pub config: RuntimeConfig,
     pub dns_profile: Arc<RwLock<Option<DnsProfile>>>,
     pub dns_query_seq: Arc<AtomicU64>,
+    pub gateway_grant_policy_epoch: Arc<AtomicU64>,
     pub gateway_grant_policy_rev: Arc<AtomicU64>,
     pub pending_dns_queries: Arc<Mutex<HashMap<u64, PendingDnsQuery>>>,
     pub rename_request_seq: Arc<AtomicU64>,
@@ -522,6 +523,7 @@ impl SdlRuntime {
                     "reauth_required": summary.reauth_required,
                     "grant": grant.as_ref().map(|grant| json!({
                         "session_id": grant.session_id,
+                        "policy_epoch": grant.policy_epoch,
                         "policy_rev": grant.policy_rev,
                         "ticket_expire_unix_ms": grant.ticket_expire_unix_ms,
                     })).unwrap_or(Value::Null),

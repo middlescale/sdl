@@ -62,6 +62,7 @@ struct GatewaySessionState {
     gateway_id: String,
     ticket: Vec<u8>,
     session_id: u64,
+    policy_epoch: u64,
     policy_rev: u64,
     ticket_expire_unix_ms: i64,
     device_id: String,
@@ -250,6 +251,7 @@ impl GatewaySession {
         guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
+        guard.policy_epoch = grant.policy_epoch;
         guard.policy_rev = grant.policy_rev;
         guard.ticket_expire_unix_ms = grant.ticket_expire_unix_ms;
         guard.device_id = device_id;
@@ -335,6 +337,7 @@ impl GatewaySession {
         let guard = self.state.lock();
         GatewayGrantSnapshot {
             session_id: guard.session_id,
+            policy_epoch: guard.policy_epoch,
             policy_rev: guard.policy_rev,
             ticket_expire_unix_ms: guard.ticket_expire_unix_ms,
         }
@@ -590,6 +593,7 @@ impl GatewaySession {
 #[derive(Clone)]
 pub struct GatewayGrantSnapshot {
     pub session_id: u64,
+    pub policy_epoch: u64,
     pub policy_rev: u64,
     pub ticket_expire_unix_ms: i64,
 }

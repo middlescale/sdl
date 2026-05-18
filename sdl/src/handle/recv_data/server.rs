@@ -283,20 +283,34 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         grants: &[proto::message::GatewayAccessGrant],
         legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+        gateway_policy_epoch: u64,
         gateway_policy_rev: u64,
         virtual_ip: Ipv4Addr,
     ) {
         let effective_grants = collect_gateway_grants(grants, legacy_grant);
+        let incoming_policy_epoch =
+            effective_gateway_policy_epoch(gateway_policy_epoch, &effective_grants, legacy_grant);
         let incoming_policy_rev =
             effective_gateway_policy_rev(gateway_policy_rev, &effective_grants, legacy_grant);
+        let current_policy_epoch = self
+            .runtime
+            .gateway_grant_policy_epoch
+            .load(Ordering::Relaxed);
         let current_policy_rev = self
             .runtime
             .gateway_grant_policy_rev
             .load(Ordering::Relaxed);
-        if !should_apply_gateway_policy_rev(current_policy_rev, incoming_policy_rev) {
+        if !should_apply_gateway_policy_version(
+            current_policy_epoch,
+            current_policy_rev,
+            incoming_policy_epoch,
+            incoming_policy_rev,
+        ) {
             log::info!(
-                "ignore stale gateway grants: current_policy_rev={}, incoming_policy_rev={}",
+                "ignore stale gateway grants: current_policy_epoch={}, current_policy_rev={}, incoming_policy_epoch={}, incoming_policy_rev={}",
+                current_policy_epoch,
                 current_policy_rev,
+                incoming_policy_epoch,
                 incoming_policy_rev
             );
             return;
@@ -304,9 +318,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         if effective_grants.is_empty() {
             self.runtime.gateway_sessions.clear_gateway_grant();
             self.runtime
+                .gateway_grant_policy_epoch
+                .store(incoming_policy_epoch, Ordering::Relaxed);
+            self.runtime
                 .gateway_grant_policy_rev
                 .store(incoming_policy_rev, Ordering::Relaxed);
-            log::info!("gateway grant cleared");
+            log::info!(
+                "gateway grant cleared policy_epoch={} policy_rev={}",
+                incoming_policy_epoch,
+                incoming_policy_rev
+            );
             return;
         }
         self.runtime.gateway_sessions.set_gateway_grants(
@@ -315,10 +336,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             self.runtime.config.device_id.clone(),
         );
         self.runtime
+            .gateway_grant_policy_epoch
+            .store(incoming_policy_epoch, Ordering::Relaxed);
+        self.runtime
             .gateway_grant_policy_rev
             .store(incoming_policy_rev, Ordering::Relaxed);
         log::info!(
-            "gateway grants applied policy_rev={} count={} gateways={:?}",
+            "gateway grants applied policy_epoch={} policy_rev={} count={} gateways={:?}",
+            incoming_policy_epoch,
             incoming_policy_rev,
             effective_grants.len(),
             effective_grants
@@ -662,6 +687,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
+                    response.gateway_policy_epoch,
                     response.gateway_policy_rev,
                     virtual_ip,
                 );
@@ -794,6 +820,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     None,
+                    response.gateway_policy_epoch,
                     response.gateway_policy_rev,
                     current_device.virtual_ip,
                 );
@@ -1165,6 +1192,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.apply_gateway_grants(
                     &response.gateway_access_grants,
                     response.gateway_access_grant.as_ref(),
+                    response.gateway_policy_epoch,
                     response.gateway_policy_rev,
                     current_device.virtual_ip,
                 );
@@ -1660,7 +1688,39 @@ fn effective_gateway_policy_rev(
         .unwrap_or(0)
 }
 
-fn should_apply_gateway_policy_rev(current_policy_rev: u64, incoming_policy_rev: u64) -> bool {
+fn effective_gateway_policy_epoch(
+    gateway_policy_epoch: u64,
+    grants: &[proto::message::GatewayAccessGrant],
+    legacy_grant: Option<&proto::message::GatewayAccessGrant>,
+) -> u64 {
+    if gateway_policy_epoch != 0 {
+        return gateway_policy_epoch;
+    }
+    collect_gateway_grants(grants, legacy_grant)
+        .into_iter()
+        .map(|grant| grant.policy_epoch)
+        .max()
+        .unwrap_or(0)
+}
+
+fn should_apply_gateway_policy_version(
+    current_policy_epoch: u64,
+    current_policy_rev: u64,
+    incoming_policy_epoch: u64,
+    incoming_policy_rev: u64,
+) -> bool {
+    if incoming_policy_epoch != 0 {
+        if current_policy_epoch == 0 {
+            return true;
+        }
+        if incoming_policy_epoch != current_policy_epoch {
+            return incoming_policy_epoch > current_policy_epoch;
+        }
+        return incoming_policy_rev == 0 || incoming_policy_rev >= current_policy_rev;
+    }
+    if current_policy_epoch != 0 {
+        return false;
+    }
     incoming_policy_rev == 0 || incoming_policy_rev >= current_policy_rev
 }
 
@@ -1711,9 +1771,10 @@ fn should_retry_device_auth_after_challenge_expired(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
-        log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
-        punch_endpoint_from_route, selected_endpoint_for_result, should_apply_gateway_policy_rev,
+        effective_gateway_policy_epoch, effective_gateway_policy_rev, format_punch_endpoint,
+        is_stale_epoch, log_sampled_unauthorized_server_source_drop,
+        observed_udp_port_from_registration, punch_endpoint_from_route,
+        selected_endpoint_for_result, should_apply_gateway_policy_version,
         should_refresh_gateway_grant_after_registration,
         should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
@@ -1959,10 +2020,43 @@ mod tests {
     }
 
     #[test]
-    fn should_apply_gateway_policy_rev_rejects_older_policy() {
-        assert!(!should_apply_gateway_policy_rev(9, 8));
-        assert!(should_apply_gateway_policy_rev(9, 9));
-        assert!(should_apply_gateway_policy_rev(9, 10));
+    fn effective_gateway_policy_epoch_prefers_message_level_value() {
+        let mut grant = GatewayAccessGrant::new();
+        grant.policy_epoch = 7;
+
+        assert_eq!(effective_gateway_policy_epoch(11, &[grant], None), 11);
+    }
+
+    #[test]
+    fn effective_gateway_policy_epoch_falls_back_to_grant_policy_epoch() {
+        let mut grant1 = GatewayAccessGrant::new();
+        grant1.policy_epoch = 3;
+        let mut grant2 = GatewayAccessGrant::new();
+        grant2.policy_epoch = 5;
+
+        assert_eq!(
+            effective_gateway_policy_epoch(0, &[grant1, grant2], None),
+            5
+        );
+    }
+
+    #[test]
+    fn should_apply_gateway_policy_version_rejects_older_policy_in_same_epoch() {
+        assert!(!should_apply_gateway_policy_version(4, 9, 4, 8));
+        assert!(should_apply_gateway_policy_version(4, 9, 4, 9));
+        assert!(should_apply_gateway_policy_version(4, 9, 4, 10));
+    }
+
+    #[test]
+    fn should_apply_gateway_policy_version_accepts_newer_epoch_even_with_lower_rev() {
+        assert!(should_apply_gateway_policy_version(8, 14, 9, 4));
+        assert!(!should_apply_gateway_policy_version(9, 4, 8, 14));
+    }
+
+    #[test]
+    fn should_apply_gateway_policy_version_rejects_epoch_zero_once_epoch_mode_seen() {
+        assert!(!should_apply_gateway_policy_version(9, 4, 0, 100));
+        assert!(should_apply_gateway_policy_version(0, 4, 0, 100));
     }
 
     #[test]

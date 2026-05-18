@@ -1097,6 +1097,8 @@ pub struct RegistrationResponse {
     pub gateway_policy_rev: u64,
     // @@protoc_insertion_point(field:RegistrationResponse.error_reason)
     pub error_reason: ::protobuf::EnumOrUnknown<RegistrationErrorReason>,
+    // @@protoc_insertion_point(field:RegistrationResponse.gateway_policy_epoch)
+    pub gateway_policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RegistrationResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1114,7 +1116,7 @@ impl RegistrationResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(15);
+        let mut fields = ::std::vec::Vec::with_capacity(16);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "virtual_ip",
@@ -1191,6 +1193,11 @@ impl RegistrationResponse {
             |m: &RegistrationResponse| { &m.error_reason },
             |m: &mut RegistrationResponse| { &mut m.error_reason },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_epoch",
+            |m: &RegistrationResponse| { &m.gateway_policy_epoch },
+            |m: &mut RegistrationResponse| { &mut m.gateway_policy_epoch },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RegistrationResponse>(
             "RegistrationResponse",
             fields,
@@ -1254,6 +1261,9 @@ impl ::protobuf::Message for RegistrationResponse {
                 120 => {
                     self.error_reason = is.read_enum_or_unknown()?;
                 },
+                128 => {
+                    self.gateway_policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1315,6 +1325,9 @@ impl ::protobuf::Message for RegistrationResponse {
         if self.error_reason != ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED) {
             my_size += ::protobuf::rt::int32_size(15, self.error_reason.value());
         }
+        if self.gateway_policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(16, self.gateway_policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1366,6 +1379,9 @@ impl ::protobuf::Message for RegistrationResponse {
         if self.error_reason != ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED) {
             os.write_enum(15, ::protobuf::EnumOrUnknown::value(&self.error_reason))?;
         }
+        if self.gateway_policy_epoch != 0 {
+            os.write_uint64(16, self.gateway_policy_epoch)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1398,6 +1414,7 @@ impl ::protobuf::Message for RegistrationResponse {
         self.gateway_access_grants.clear();
         self.gateway_policy_rev = 0;
         self.error_reason = ::protobuf::EnumOrUnknown::new(RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED);
+        self.gateway_policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -1418,6 +1435,7 @@ impl ::protobuf::Message for RegistrationResponse {
             gateway_access_grants: ::std::vec::Vec::new(),
             gateway_policy_rev: 0,
             error_reason: ::protobuf::EnumOrUnknown::from_i32(0),
+            gateway_policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1629,6 +1647,8 @@ pub struct GatewayAccessGrant {
     pub gateway_udp_key_id: ::std::string::String,
     // @@protoc_insertion_point(field:GatewayAccessGrant.gateway_id)
     pub gateway_id: ::std::string::String,
+    // @@protoc_insertion_point(field:GatewayAccessGrant.policy_epoch)
+    pub policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:GatewayAccessGrant.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1646,7 +1666,7 @@ impl GatewayAccessGrant {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(13);
+        let mut fields = ::std::vec::Vec::with_capacity(14);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "ticket",
@@ -1713,6 +1733,11 @@ impl GatewayAccessGrant {
             |m: &GatewayAccessGrant| { &m.gateway_id },
             |m: &mut GatewayAccessGrant| { &mut m.gateway_id },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "policy_epoch",
+            |m: &GatewayAccessGrant| { &m.policy_epoch },
+            |m: &mut GatewayAccessGrant| { &mut m.policy_epoch },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GatewayAccessGrant>(
             "GatewayAccessGrant",
             fields,
@@ -1770,6 +1795,9 @@ impl ::protobuf::Message for GatewayAccessGrant {
                 106 => {
                     self.gateway_id = is.read_string()?;
                 },
+                112 => {
+                    self.policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1822,6 +1850,9 @@ impl ::protobuf::Message for GatewayAccessGrant {
         if !self.gateway_id.is_empty() {
             my_size += ::protobuf::rt::string_size(13, &self.gateway_id);
         }
+        if self.policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(14, self.policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1867,6 +1898,9 @@ impl ::protobuf::Message for GatewayAccessGrant {
         if !self.gateway_id.is_empty() {
             os.write_string(13, &self.gateway_id)?;
         }
+        if self.policy_epoch != 0 {
+            os.write_uint64(14, self.policy_epoch)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -1897,6 +1931,7 @@ impl ::protobuf::Message for GatewayAccessGrant {
         self.gateway_udp_public_key.clear();
         self.gateway_udp_key_id.clear();
         self.gateway_id.clear();
+        self.policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -1915,6 +1950,7 @@ impl ::protobuf::Message for GatewayAccessGrant {
             gateway_udp_public_key: ::std::vec::Vec::new(),
             gateway_udp_key_id: ::std::string::String::new(),
             gateway_id: ::std::string::String::new(),
+            policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1952,6 +1988,8 @@ pub struct RefreshGatewayGrantRequest {
     pub last_policy_rev: u64,
     // @@protoc_insertion_point(field:RefreshGatewayGrantRequest.force_reissue)
     pub force_reissue: bool,
+    // @@protoc_insertion_point(field:RefreshGatewayGrantRequest.last_policy_epoch)
+    pub last_policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RefreshGatewayGrantRequest.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1969,7 +2007,7 @@ impl RefreshGatewayGrantRequest {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut fields = ::std::vec::Vec::with_capacity(6);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "virtual_ip",
@@ -1995,6 +2033,11 @@ impl RefreshGatewayGrantRequest {
             "force_reissue",
             |m: &RefreshGatewayGrantRequest| { &m.force_reissue },
             |m: &mut RefreshGatewayGrantRequest| { &mut m.force_reissue },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "last_policy_epoch",
+            |m: &RefreshGatewayGrantRequest| { &m.last_policy_epoch },
+            |m: &mut RefreshGatewayGrantRequest| { &mut m.last_policy_epoch },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RefreshGatewayGrantRequest>(
             "RefreshGatewayGrantRequest",
@@ -2029,6 +2072,9 @@ impl ::protobuf::Message for RefreshGatewayGrantRequest {
                 40 => {
                     self.force_reissue = is.read_bool()?;
                 },
+                48 => {
+                    self.last_policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2056,6 +2102,9 @@ impl ::protobuf::Message for RefreshGatewayGrantRequest {
         if self.force_reissue != false {
             my_size += 1 + 1;
         }
+        if self.last_policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(6, self.last_policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2076,6 +2125,9 @@ impl ::protobuf::Message for RefreshGatewayGrantRequest {
         }
         if self.force_reissue != false {
             os.write_bool(5, self.force_reissue)?;
+        }
+        if self.last_policy_epoch != 0 {
+            os.write_uint64(6, self.last_policy_epoch)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -2099,6 +2151,7 @@ impl ::protobuf::Message for RefreshGatewayGrantRequest {
         self.last_session_id = 0;
         self.last_policy_rev = 0;
         self.force_reissue = false;
+        self.last_policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -2109,6 +2162,7 @@ impl ::protobuf::Message for RefreshGatewayGrantRequest {
             last_session_id: 0,
             last_policy_rev: 0,
             force_reissue: false,
+            last_policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -2146,6 +2200,8 @@ pub struct RefreshGatewayGrantResponse {
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
     // @@protoc_insertion_point(field:RefreshGatewayGrantResponse.gateway_policy_rev)
     pub gateway_policy_rev: u64,
+    // @@protoc_insertion_point(field:RefreshGatewayGrantResponse.gateway_policy_epoch)
+    pub gateway_policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:RefreshGatewayGrantResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -2163,7 +2219,7 @@ impl RefreshGatewayGrantResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(5);
+        let mut fields = ::std::vec::Vec::with_capacity(6);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "has_update",
@@ -2189,6 +2245,11 @@ impl RefreshGatewayGrantResponse {
             "gateway_policy_rev",
             |m: &RefreshGatewayGrantResponse| { &m.gateway_policy_rev },
             |m: &mut RefreshGatewayGrantResponse| { &mut m.gateway_policy_rev },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_epoch",
+            |m: &RefreshGatewayGrantResponse| { &m.gateway_policy_epoch },
+            |m: &mut RefreshGatewayGrantResponse| { &mut m.gateway_policy_epoch },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<RefreshGatewayGrantResponse>(
             "RefreshGatewayGrantResponse",
@@ -2223,6 +2284,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
                 40 => {
                     self.gateway_policy_rev = is.read_uint64()?;
                 },
+                48 => {
+                    self.gateway_policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2252,6 +2316,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
         if self.gateway_policy_rev != 0 {
             my_size += ::protobuf::rt::uint64_size(5, self.gateway_policy_rev);
         }
+        if self.gateway_policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(6, self.gateway_policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2272,6 +2339,9 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
         };
         if self.gateway_policy_rev != 0 {
             os.write_uint64(5, self.gateway_policy_rev)?;
+        }
+        if self.gateway_policy_epoch != 0 {
+            os.write_uint64(6, self.gateway_policy_epoch)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -2295,6 +2365,7 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
         self.reason.clear();
         self.gateway_access_grants.clear();
         self.gateway_policy_rev = 0;
+        self.gateway_policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -2305,6 +2376,7 @@ impl ::protobuf::Message for RefreshGatewayGrantResponse {
             reason: ::std::string::String::new(),
             gateway_access_grants: ::std::vec::Vec::new(),
             gateway_policy_rev: 0,
+            gateway_policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -2356,6 +2428,8 @@ pub struct GatewayTicketClaims {
     pub lease_cap_secs: u32,
     // @@protoc_insertion_point(field:GatewayTicketClaims.grace_cap_secs)
     pub grace_cap_secs: u32,
+    // @@protoc_insertion_point(field:GatewayTicketClaims.policy_epoch)
+    pub policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:GatewayTicketClaims.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -2373,7 +2447,7 @@ impl GatewayTicketClaims {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(12);
+        let mut fields = ::std::vec::Vec::with_capacity(13);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "ticket_id",
@@ -2435,6 +2509,11 @@ impl GatewayTicketClaims {
             |m: &GatewayTicketClaims| { &m.grace_cap_secs },
             |m: &mut GatewayTicketClaims| { &mut m.grace_cap_secs },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "policy_epoch",
+            |m: &GatewayTicketClaims| { &m.policy_epoch },
+            |m: &mut GatewayTicketClaims| { &mut m.policy_epoch },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<GatewayTicketClaims>(
             "GatewayTicketClaims",
             fields,
@@ -2489,6 +2568,9 @@ impl ::protobuf::Message for GatewayTicketClaims {
                 96 => {
                     self.grace_cap_secs = is.read_uint32()?;
                 },
+                104 => {
+                    self.policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2537,6 +2619,9 @@ impl ::protobuf::Message for GatewayTicketClaims {
         if self.grace_cap_secs != 0 {
             my_size += ::protobuf::rt::uint32_size(12, self.grace_cap_secs);
         }
+        if self.policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(13, self.policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2579,6 +2664,9 @@ impl ::protobuf::Message for GatewayTicketClaims {
         if self.grace_cap_secs != 0 {
             os.write_uint32(12, self.grace_cap_secs)?;
         }
+        if self.policy_epoch != 0 {
+            os.write_uint64(13, self.policy_epoch)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2608,6 +2696,7 @@ impl ::protobuf::Message for GatewayTicketClaims {
         self.expire_unix_ms = 0;
         self.lease_cap_secs = 0;
         self.grace_cap_secs = 0;
+        self.policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -2625,6 +2714,7 @@ impl ::protobuf::Message for GatewayTicketClaims {
             expire_unix_ms: 0,
             lease_cap_secs: 0,
             grace_cap_secs: 0,
+            policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -6328,6 +6418,8 @@ pub struct DeviceList {
     pub gateway_access_grants: ::std::vec::Vec<GatewayAccessGrant>,
     // @@protoc_insertion_point(field:DeviceList.gateway_policy_rev)
     pub gateway_policy_rev: u64,
+    // @@protoc_insertion_point(field:DeviceList.gateway_policy_epoch)
+    pub gateway_policy_epoch: u64,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceList.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -6345,7 +6437,7 @@ impl DeviceList {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(4);
+        let mut fields = ::std::vec::Vec::with_capacity(5);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "epoch",
@@ -6366,6 +6458,11 @@ impl DeviceList {
             "gateway_policy_rev",
             |m: &DeviceList| { &m.gateway_policy_rev },
             |m: &mut DeviceList| { &mut m.gateway_policy_rev },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "gateway_policy_epoch",
+            |m: &DeviceList| { &m.gateway_policy_epoch },
+            |m: &mut DeviceList| { &mut m.gateway_policy_epoch },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceList>(
             "DeviceList",
@@ -6397,6 +6494,9 @@ impl ::protobuf::Message for DeviceList {
                 32 => {
                     self.gateway_policy_rev = is.read_uint64()?;
                 },
+                40 => {
+                    self.gateway_policy_epoch = is.read_uint64()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -6423,6 +6523,9 @@ impl ::protobuf::Message for DeviceList {
         if self.gateway_policy_rev != 0 {
             my_size += ::protobuf::rt::uint64_size(4, self.gateway_policy_rev);
         }
+        if self.gateway_policy_epoch != 0 {
+            my_size += ::protobuf::rt::uint64_size(5, self.gateway_policy_epoch);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -6440,6 +6543,9 @@ impl ::protobuf::Message for DeviceList {
         };
         if self.gateway_policy_rev != 0 {
             os.write_uint64(4, self.gateway_policy_rev)?;
+        }
+        if self.gateway_policy_epoch != 0 {
+            os.write_uint64(5, self.gateway_policy_epoch)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -6462,6 +6568,7 @@ impl ::protobuf::Message for DeviceList {
         self.device_info_list.clear();
         self.gateway_access_grants.clear();
         self.gateway_policy_rev = 0;
+        self.gateway_policy_epoch = 0;
         self.special_fields.clear();
     }
 
@@ -6471,6 +6578,7 @@ impl ::protobuf::Message for DeviceList {
             device_info_list: ::std::vec::Vec::new(),
             gateway_access_grants: ::std::vec::Vec::new(),
             gateway_policy_rev: 0,
+            gateway_policy_epoch: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8965,7 +9073,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x18\x02\x20\x01(\x0cR\x05query\"c\n\x10DnsQueryResponse\x12\x1d\n\nrequ\
     est_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08response\x18\x02\
     \x20\x01(\x0cR\x08response\x12\x14\n\x05error\x18\x03\x20\x01(\tR\x05err\
-    or\"\xa0\x05\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
+    or\"\xd2\x05\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
     \x01(\x07R\tvirtualIp\x12'\n\x0fvirtual_gateway\x18\x02\x20\x01(\x07R\
     \x0evirtualGateway\x12'\n\x0fvirtual_netmask\x18\x03\x20\x01(\x07R\x0evi\
     rtualNetmask\x12\x14\n\x05epoch\x18\x04\x20\x01(\rR\x05epoch\x125\n\x10d\
@@ -8979,138 +9087,144 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     .DnsProfileR\ndnsProfile\x12G\n\x15gateway_access_grants\x18\r\x20\x03(\
     \x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gateway_p\
     olicy_rev\x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\x12;\n\x0cerror_reas\
-    on\x18\x0f\x20\x01(\x0e2\x18.RegistrationErrorReasonR\x0berrorReason\"t\
-    \n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayCha\
-    nnelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\
-    \n\x0bserver_name\x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\x05\"\
-    \xc2\x04\n\x12GatewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\
-    \x0cR\x06ticket\x121\n\x15ticket_expire_unix_ms\x18\x02\x20\x01(\x03R\
-    \x12ticketExpireUnixMs\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsess\
-    ionId\x12\x1d\n\npolicy_rev\x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14g\
-    ateway_capabilities\x18\x05\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\
-    \nlease_secs\x18\x06\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\
-    \x07\x20\x01(\rR\tgraceSecs\x12(\n\x10gateway_group_id\x18\x08\x20\x01(\
-    \tR\x0egatewayGroupId\x12:\n\x10gateway_channels\x18\t\x20\x03(\x0b2\x0f\
-    .GatewayChannelR\x0fgatewayChannels\x12K\n\x17default_gateway_channel\
-    \x18\n\x20\x01(\x0e2\x13.GatewayChannelKindR\x15defaultGatewayChannel\
-    \x123\n\x16gateway_udp_public_key\x18\x0b\x20\x01(\x0cR\x13gatewayUdpPub\
-    licKey\x12+\n\x12gateway_udp_key_id\x18\x0c\x20\x01(\tR\x0fgatewayUdpKey\
-    Id\x12\x1d\n\ngateway_id\x18\r\x20\x01(\tR\tgatewayId\"\xcd\x01\n\x1aRef\
-    reshGatewayGrantRequest\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvir\
-    tualIp\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0fla\
-    st_session_id\x18\x03\x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy\
-    _rev\x18\x04\x20\x01(\x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\
-    \x20\x01(\x08R\x0cforceReissue\"\x92\x02\n\x1bRefreshGatewayGrantRespons\
-    e\x12\x1d\n\nhas_update\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gatew\
-    ay_access_grant\x18\x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gateway\
-    AccessGrant\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15\
-    gateway_access_grants\x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13g\
-    atewayAccessGrants\x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\
-    \x10gatewayPolicyRev\"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticke\
-    t_id\x18\x01\x20\x01(\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\
-    \x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtua\
-    lIp\x12\x1d\n\nsession_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpol\
-    icy_revision\x18\x05\x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgatewa\
-    y_ids\x18\x06\x20\x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\
-    \x20\x01(\tR\x0egatewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\
-    \x01(\x03R\x0eissuedAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\
-    \x03R\x0fnotBeforeUnixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\
-    \x0cexpireUnixMs\x12$\n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCa\
-    pSecs\x12$\n\x0egrace_cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\
-    \x13SignedGatewayTicket\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\
-    \x15\n\x06key_id\x18\x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\
-    \x03\x20\x01(\x0cR\x06claims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\
-    \tsignature\"\xa1\x01\n\x14GatewayReportRequest\x12\x1d\n\ngateway_id\
-    \x18\x01\x20\x01(\tR\tgatewayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\t\
-    R\x08endpoint\x12\"\n\x0ccapabilities\x18\x04\x20\x03(\tR\x0ccapabilitie\
-    s\x12$\n\x0ereport_unix_ms\x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\
-    \x08\x03\x10\x04\"\x7f\n\x10GatewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\
-    \x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\
-    \x1d\n\ngateway_id\x18\x03\x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_\
-    ms\x18\x04\x20\x01(\x03R\x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHe\
-    llo\x12\x1b\n\tdevice_id\x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirt\
-    ual_ip\x18\x02\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\
-    \x20\x01(\x04R\tsessionId\x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06t\
-    icket\x12\x14\n\x05nonce\x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client\
-    _time_unix_ms\x18\x06\x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06rea\
-    uth\x18\n\x20\x01(\x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\
-    \x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\
-    \x01(\tR\x06reason\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionI\
-    d\x12%\n\x0enegotiated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0e\
-    keepalive_secs\x18\x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire\
-    _unix_ms\x18\x06\x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expi\
-    re_unix_ms\x18\x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_r\
-    equired\x18\x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAut\
-    hRequest\x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\
-    \x05group\x18\x02\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x03\x20\
-    \x01(\tR\x08deviceId\x12\x16\n\x06ticket\x18\x04\x20\x01(\tR\x06ticket\
-    \x12$\n\x0edevice_pub_key\x18\x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\
-    \x01\n\x13DeviceAuthChallenge\x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\
-    \x0bchallengeId\x12\x14\n\x05nonce\x18\x02\x20\x01(\x0cR\x05nonce\x12$\n\
-    \x0eexpire_unix_ms\x18\x03\x20\x01(\x03R\x0cexpireUnixMs\x12'\n\x0freaut\
-    h_required\x18\x04\x20\x01(\x08R\x0ereauthRequired\x12\x16\n\x06reason\
-    \x18\x05\x20\x01(\tR\x06reason\"\x95\x01\n\x0fDeviceAuthProof\x12!\n\x0c\
-    challenge_id\x18\x01\x20\x01(\tR\x0bchallengeId\x12\x1b\n\tdevice_id\x18\
-    \x02\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x03\x20\x01(\
-    \x0cR\x0cdevicePubKey\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignat\
-    ure\"\x96\x02\n\rDeviceAuthAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02\
-    ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x17\n\x07user_i\
-    d\x18\x03\x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x04\x20\x01(\tR\
-    \x05group\x12\x1b\n\tdevice_id\x18\x05\x20\x01(\tR\x08deviceId\x12-\n\
-    \x13auth_expire_unix_ms\x18\x06\x20\x01(\x03R\x10authExpireUnixMs\x12'\n\
-    \x0freauth_required\x18\x07\x20\x01(\x08R\x0ereauthRequired\x129\n\x0cer\
-    ror_reason\x18\x08\x20\x01(\x0e2\x16.DeviceAuthErrorReasonR\x0berrorReas\
-    on\"l\n\x13DeviceRenameRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
-    \x04R\trequestId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\
-    \x12\x19\n\x08new_name\x18\x03\x20\x01(\tR\x07newName\"\xab\x01\n\x14Dev\
-    iceRenameResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
-    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
-    \x20\x01(\tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bapp\
-    liedName\x12)\n\x10pending_approval\x18\x05\x20\x01(\x08R\x0fpendingAppr\
-    oval\"h\n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\
-    \x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\
-    \x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugC\
-    ollectResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\
-    \x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\
-    \x20\x01(\tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\
-    \x03R\x11collectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0c\
-    snapshotJson\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\
-    \x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\
-    \tR\x08sections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSe\
-    c\x12\x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17Debug\
-    WatchStartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestI\
-    d\x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\
-    \x03\x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\
-    \x07watchId\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstarte\
-    dAtUnixMs\x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtU\
-    nixMs\"i\n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\
-    \x01(\x04R\trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07wat\
-    chId\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16De\
-    bugWatchStopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\treques\
-    tId\x12\x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\
-    \x03\x20\x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\
-    \x07watchId\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppe\
-    dAtUnixMs\"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\
-    \x20\x01(\x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07se\
-    ction\x12\x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\reven\
-    t_unix_ms\x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\
-    \x18\x05\x20\x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\
-    \x04name\x18\x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\
-    \x01(\x07R\tvirtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdevic\
-    eStatus\x12\x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0ed\
-    evice_pub_key\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_p\
-    ub\x18\t\x20\x01(\x0cR\x0bonlineKxPub\"\xd0\x01\n\nDeviceList\x12\x14\n\
-    \x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\
-    \x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12G\n\x15gateway_a\
-    ccess_grants\x18\x03\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAcc\
-    essGrants\x12,\n\x12gateway_policy_rev\x18\x04\x20\x01(\x04R\x10gatewayP\
-    olicyRev\"\xe6\x02\n\tPunchInfo\x12*\n\x11public_port_range\x18\x04\x20\
-    \x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.P\
-    unchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05repl\
-    y\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchM\
-    odel\x12@\n\x14public_udp_endpoints\x18\x10\x20\x03(\x0b2\x0e.PunchEndpo\
-    intR\x12publicUdpEndpoints\x12>\n\x13local_udp_endpoints\x18\x11\x20\x03\
-    (\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\x08\x02\x10\x03J\x04\
+    on\x18\x0f\x20\x01(\x0e2\x18.RegistrationErrorReasonR\x0berrorReason\x12\
+    0\n\x14gateway_policy_epoch\x18\x10\x20\x01(\x04R\x12gatewayPolicyEpoch\
+    \"t\n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.Gateway\
+    ChannelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\
+    \x1f\n\x0bserver_name\x18\x03\x20\x01(\tR\nserverNameJ\x04\x08\x04\x10\
+    \x05\"\xe5\x04\n\x12GatewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\
+    \x01(\x0cR\x06ticket\x121\n\x15ticket_expire_unix_ms\x18\x02\x20\x01(\
+    \x03R\x12ticketExpireUnixMs\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\
+    \tsessionId\x12\x1d\n\npolicy_rev\x18\x04\x20\x01(\x04R\tpolicyRev\x121\
+    \n\x14gateway_capabilities\x18\x05\x20\x03(\tR\x13gatewayCapabilities\
+    \x12\x1d\n\nlease_secs\x18\x06\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_s\
+    ecs\x18\x07\x20\x01(\rR\tgraceSecs\x12(\n\x10gateway_group_id\x18\x08\
+    \x20\x01(\tR\x0egatewayGroupId\x12:\n\x10gateway_channels\x18\t\x20\x03(\
+    \x0b2\x0f.GatewayChannelR\x0fgatewayChannels\x12K\n\x17default_gateway_c\
+    hannel\x18\n\x20\x01(\x0e2\x13.GatewayChannelKindR\x15defaultGatewayChan\
+    nel\x123\n\x16gateway_udp_public_key\x18\x0b\x20\x01(\x0cR\x13gatewayUdp\
+    PublicKey\x12+\n\x12gateway_udp_key_id\x18\x0c\x20\x01(\tR\x0fgatewayUdp\
+    KeyId\x12\x1d\n\ngateway_id\x18\r\x20\x01(\tR\tgatewayId\x12!\n\x0cpolic\
+    y_epoch\x18\x0e\x20\x01(\x04R\x0bpolicyEpoch\"\xf9\x01\n\x1aRefreshGatew\
+    ayGrantRequest\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\
+    \x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_ses\
+    sion_id\x18\x03\x20\x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\
+    \x18\x04\x20\x01(\x04R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\
+    \x01(\x08R\x0cforceReissue\x12*\n\x11last_policy_epoch\x18\x06\x20\x01(\
+    \x04R\x0flastPolicyEpoch\"\xc4\x02\n\x1bRefreshGatewayGrantResponse\x12\
+    \x1d\n\nhas_update\x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_ac\
+    cess_grant\x18\x02\x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAcces\
+    sGrant\x12\x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15gatew\
+    ay_access_grants\x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewa\
+    yAccessGrants\x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\x10gate\
+    wayPolicyRev\x120\n\x14gateway_policy_epoch\x18\x06\x20\x01(\x04R\x12gat\
+    ewayPolicyEpoch\"\xee\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticket_id\
+    \x18\x01\x20\x01(\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\t\
+    R\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\
+    \x1d\n\nsession_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpolicy_rev\
+    ision\x18\x05\x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgateway_ids\
+    \x18\x06\x20\x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\x20\
+    \x01(\tR\x0egatewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\x01(\
+    \x03R\x0eissuedAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\x03R\
+    \x0fnotBeforeUnixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\x0cexpi\
+    reUnixMs\x12$\n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCapSecs\
+    \x12$\n\x0egrace_cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\x12!\n\x0c\
+    policy_epoch\x18\r\x20\x01(\x04R\x0bpolicyEpoch\"t\n\x13SignedGatewayTic\
+    ket\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\x15\n\x06key_id\x18\
+    \x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\x03\x20\x01(\x0cR\x06c\
+    laims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xa1\x01\n\
+    \x14GatewayReportRequest\x12\x1d\n\ngateway_id\x18\x01\x20\x01(\tR\tgate\
+    wayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\tR\x08endpoint\x12\"\n\x0cc\
+    apabilities\x18\x04\x20\x03(\tR\x0ccapabilities\x12$\n\x0ereport_unix_ms\
+    \x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\x08\x03\x10\x04\"\x7f\n\x10G\
+    atewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\
+    \x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\ngateway_id\x18\x03\
+    \x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_ms\x18\x04\x20\x01(\x03R\
+    \x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHello\x12\x1b\n\tdevice_id\
+    \x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\
+    \x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\
+    \x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06ticket\x12\x14\n\x05nonce\
+    \x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client_time_unix_ms\x18\x06\
+    \x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06reauth\x18\n\x20\x01(\
+    \x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\x0e\n\x02ok\x18\x01\
+    \x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\
+    \x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12%\n\x0enegoti\
+    ated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0ekeepalive_secs\x18\
+    \x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire_unix_ms\x18\x06\
+    \x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expire_unix_ms\x18\
+    \x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_required\x18\
+    \x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAuthRequest\
+    \x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\x05group\
+    \x18\x02\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x03\x20\x01(\tR\
+    \x08deviceId\x12\x16\n\x06ticket\x18\x04\x20\x01(\tR\x06ticket\x12$\n\
+    \x0edevice_pub_key\x18\x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\x01\n\x13\
+    DeviceAuthChallenge\x12!\n\x0cchallenge_id\x18\x01\x20\x01(\tR\x0bchalle\
+    ngeId\x12\x14\n\x05nonce\x18\x02\x20\x01(\x0cR\x05nonce\x12$\n\x0eexpire\
+    _unix_ms\x18\x03\x20\x01(\x03R\x0cexpireUnixMs\x12'\n\x0freauth_required\
+    \x18\x04\x20\x01(\x08R\x0ereauthRequired\x12\x16\n\x06reason\x18\x05\x20\
+    \x01(\tR\x06reason\"\x95\x01\n\x0fDeviceAuthProof\x12!\n\x0cchallenge_id\
+    \x18\x01\x20\x01(\tR\x0bchallengeId\x12\x1b\n\tdevice_id\x18\x02\x20\x01\
+    (\tR\x08deviceId\x12$\n\x0edevice_pub_key\x18\x03\x20\x01(\x0cR\x0cdevic\
+    ePubKey\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\x96\x02\
+    \n\rDeviceAuthAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\
+    \x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x17\n\x07user_id\x18\x03\
+    \x20\x01(\tR\x06userId\x12\x14\n\x05group\x18\x04\x20\x01(\tR\x05group\
+    \x12\x1b\n\tdevice_id\x18\x05\x20\x01(\tR\x08deviceId\x12-\n\x13auth_exp\
+    ire_unix_ms\x18\x06\x20\x01(\x03R\x10authExpireUnixMs\x12'\n\x0freauth_r\
+    equired\x18\x07\x20\x01(\x08R\x0ereauthRequired\x129\n\x0cerror_reason\
+    \x18\x08\x20\x01(\x0e2\x16.DeviceAuthErrorReasonR\x0berrorReason\"l\n\
+    \x13DeviceRenameRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\treq\
+    uestId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceId\x12\x19\n\
+    \x08new_name\x18\x03\x20\x01(\tR\x07newName\"\xab\x01\n\x14DeviceRenameR\
+    esponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
+    \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
+    \tR\x06reason\x12!\n\x0capplied_name\x18\x04\x20\x01(\tR\x0bappliedName\
+    \x12)\n\x10pending_approval\x18\x05\x20\x01(\x08R\x0fpendingApproval\"h\
+    \n\x13DebugCollectRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\tr\
+    equestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08sections\x12\x16\n\
+    \x06reason\x18\x03\x20\x01(\tR\x06reason\"\xb3\x01\n\x14DebugCollectResp\
+    onse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x0e\n\
+    \x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\x01(\
+    \tR\x06reason\x12/\n\x14collected_at_unix_ms\x18\x04\x20\x01(\x03R\x11co\
+    llectedAtUnixMs\x12#\n\rsnapshot_json\x18\x05\x20\x01(\tR\x0csnapshotJso\
+    n\"\x8e\x01\n\x16DebugWatchStartRequest\x12\x1d\n\nrequest_id\x18\x01\
+    \x20\x01(\x04R\trequestId\x12\x1a\n\x08sections\x18\x02\x20\x03(\tR\x08s\
+    ections\x12!\n\x0cduration_sec\x18\x03\x20\x01(\rR\x0bdurationSec\x12\
+    \x16\n\x06reason\x18\x04\x20\x01(\tR\x06reason\"\xd3\x01\n\x17DebugWatch\
+    StartResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
+    \x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\
+    \x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchI\
+    d\x12+\n\x12started_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstartedAtUnixMs\
+    \x12)\n\x11expire_at_unix_ms\x18\x06\x20\x01(\x03R\x0eexpireAtUnixMs\"i\
+    \n\x15DebugWatchStopRequest\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\
+    \trequestId\x12\x19\n\x08watch_id\x18\x02\x20\x01(\x04R\x07watchId\x12\
+    \x16\n\x06reason\x18\x03\x20\x01(\tR\x06reason\"\xa7\x01\n\x16DebugWatch\
+    StopResponse\x12\x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\
+    \x0e\n\x02ok\x18\x02\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x03\x20\
+    \x01(\tR\x06reason\x12\x19\n\x08watch_id\x18\x04\x20\x01(\x04R\x07watchI\
+    d\x12+\n\x12stopped_at_unix_ms\x18\x05\x20\x01(\x03R\x0fstoppedAtUnixMs\
+    \"\xac\x01\n\x0fDebugWatchEvent\x12\x19\n\x08watch_id\x18\x01\x20\x01(\
+    \x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\x12\
+    \x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_unix_ms\
+    \x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\x20\
+    \x01(\tR\x0bpayloadJson\"\xcb\x01\n\nDeviceInfo\x12\x12\n\x04name\x18\
+    \x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvi\
+    rtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\
+    \x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_k\
+    ey\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\
+    \x20\x01(\x0cR\x0bonlineKxPub\"\x82\x02\n\nDeviceList\x12\x14\n\x05epoch\
+    \x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_list\x18\x02\x20\x03\
+    (\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12G\n\x15gateway_access_grants\
+    \x18\x03\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\
+    \x12,\n\x12gateway_policy_rev\x18\x04\x20\x01(\x04R\x10gatewayPolicyRev\
+    \x120\n\x14gateway_policy_epoch\x18\x05\x20\x01(\x04R\x12gatewayPolicyEp\
+    och\"\xe6\x02\n\tPunchInfo\x12*\n\x11public_port_range\x18\x04\x20\x01(\
+    \rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\x01(\x0e2\r.PunchN\
+    atTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01(\x08R\x05reply\x12\
+    /\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModelR\npunchModel\
+    \x12@\n\x14public_udp_endpoints\x18\x10\x20\x03(\x0b2\x0e.PunchEndpointR\
+    \x12publicUdpEndpoints\x12>\n\x13local_udp_endpoints\x18\x11\x20\x03(\
+    \x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\x08\x02\x10\x03J\x04\
     \x08\x03\x10\x04J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\
     \nJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\x0c\x10\rJ\x04\x08\r\
     \x10\x0eJ\x04\x08\x0e\x10\x0f\"Y\n\rPunchEndpoint\x12\x0e\n\x02ip\x18\
