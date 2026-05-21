@@ -22,12 +22,20 @@ Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个
   - macOS `launchd`
 - 默认会把 `sdl` / `sdl-service` 安装到 `/opt/sdl`，并把命令链接到 `/usr/local/bin`
 - 安装时会尽量保留 `env/` 下的持久文件（如 `config.json`、`device-id`、`device.key`）
+- 如果目标机器已经存在 `env/config.json`，安装脚本默认**保留旧配置**；只有显式传 `--overwrite-config` 或交互确认后才会覆盖
+- `config.json` 现在带 `config_version`；当安装包配置与本机现有配置版本不一致时，安装脚本会中止并提示你确认是否覆盖，避免静默把不兼容配置带到新服务里
 
 示例：
 
 ```bash
 cd sdl
 sudo ./install.sh --source-dir ./target/release --user "$USER"
+```
+
+如需明确用安装包里的 `env/config.json` 覆盖本机旧配置：
+
+```bash
+sudo ./install.sh --source-dir ./target/release --user "$USER" --overwrite-config
 ```
 
 - Linux 安装后会启用 `systemd` unit：`sdl-service`

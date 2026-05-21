@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{channel, unbounded_channel, Receiver, Sender, UnboundedSender};
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
@@ -28,7 +28,12 @@ enum Http3Command {
     Send(Vec<u8>),
 }
 
+enum Http3ReadEvent {
+    Closed { connection_id: u64, reason: String },
+}
+
 struct ActiveConnection {
+    connection_id: u64,
     addr: SocketAddr,
     endpoint: quinn::Endpoint,
     _request_sender: SendRequest<h3_quinn::OpenStreams, Bytes>,
@@ -156,109 +161,108 @@ async fn run_http3_worker(
     on_packet: PacketCallback,
     on_transport_error: TransportErrorCallback,
 ) {
+    let (read_event_sender, mut read_event_receiver) = unbounded_channel();
     let mut active: Option<ActiveConnection> = None;
-    while let Some(command) = receiver.recv().await {
-        match command {
-            Http3Command::Send(data) => {
-                let addr = server_addr.load();
-                if active.as_ref().map(|conn| conn.addr) != Some(addr) {
-                    if let Some(connection) = active.take() {
-                        connection.close();
-                    }
-                }
-                if active.is_none() {
-                    let name = server_name.lock().clone();
-                    match connect(addr, &name, &request_uri).await {
-                        Ok(connection) => {
-                            let Http3ClientConnection {
-                                addr,
-                                route_key,
-                                endpoint,
-                                request_sender,
-                                send,
-                                recv,
-                            } = connection;
-                            let callback = on_packet.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = read_h3_packets(recv, route_key, callback).await {
-                                    log::warn!(
-                                        "control http3 read failed {:?}: {:?}",
-                                        route_key.addr,
-                                        e
-                                    );
-                                }
-                            });
-                            active = Some(ActiveConnection {
-                                addr,
-                                endpoint,
-                                _request_sender: request_sender,
-                                send,
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("control http3 connect failed {}: {:?}", addr, e);
-                            on_transport_error(format!(
-                                "control http3 connect failed {}: {:?}",
-                                addr, e
-                            ));
-                            continue;
-                        }
-                    }
-                }
-                let frame = Bytes::from(frame_packet(&data));
-                let send_result = if let Some(connection) = active.as_mut() {
-                    connection.send.send_data(frame).await
-                } else {
+    let mut next_connection_id = 1u64;
+    loop {
+        tokio::select! {
+            maybe_event = read_event_receiver.recv() => {
+                let Some(event) = maybe_event else {
                     continue;
                 };
-                if let Err(e) = send_result {
-                    log::warn!("control http3 send failed {}: {:?}", addr, e);
-                    if let Some(connection) = active.take() {
-                        connection.close();
-                    }
-                    let name = server_name.lock().clone();
-                    match connect(addr, &name, &request_uri).await {
-                        Ok(connection) => {
-                            let Http3ClientConnection {
-                                addr,
-                                route_key,
-                                endpoint,
-                                request_sender,
-                                mut send,
-                                recv,
-                            } = connection;
-                            let callback = on_packet.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = read_h3_packets(recv, route_key, callback).await {
-                                    log::warn!(
-                                        "control http3 read failed {:?}: {:?}",
-                                        route_key.addr,
-                                        e
-                                    );
-                                }
-                            });
-                            if let Err(e) = send.send_data(Bytes::from(frame_packet(&data))).await {
-                                log::warn!("control http3 resend failed {}: {:?}", addr, e);
-                                on_transport_error(format!(
-                                    "control http3 resend failed {}: {:?}",
-                                    addr, e
-                                ));
-                                endpoint.close(0u32.into(), &[]);
-                            } else {
-                                active = Some(ActiveConnection {
-                                    addr,
-                                    endpoint,
-                                    _request_sender: request_sender,
-                                    send,
-                                });
+                handle_read_event(&mut active, event, &on_transport_error);
+            }
+            maybe_command = receiver.recv() => {
+                let Some(command) = maybe_command else {
+                    break;
+                };
+                match command {
+                    Http3Command::Send(data) => {
+                        let addr = server_addr.load();
+                        if active.as_ref().map(|conn| conn.addr) != Some(addr) {
+                            if let Some(connection) = active.take() {
+                                connection.close();
                             }
                         }
-                        Err(e) => {
-                            log::warn!("control http3 reconnect failed {}: {:?}", addr, e);
-                            on_transport_error(format!(
-                                "control http3 reconnect failed {}: {:?}",
-                                addr, e
-                            ));
+                        if active.is_none() {
+                            let name = server_name.lock().clone();
+                            match connect(addr, &name, &request_uri).await {
+                                Ok(connection) => {
+                                    active = Some(register_active_connection(
+                                        connection,
+                                        &mut next_connection_id,
+                                        on_packet.clone(),
+                                        read_event_sender.clone(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    log::warn!("control http3 connect failed {}: {:?}", addr, e);
+                                    on_transport_error(format!(
+                                        "control http3 connect failed {}: {:?}",
+                                        addr, e
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
+                        let frame = Bytes::from(frame_packet(&data));
+                        let send_result = if let Some(connection) = active.as_mut() {
+                            connection.send.send_data(frame).await
+                        } else {
+                            continue;
+                        };
+                        if let Err(e) = send_result {
+                            log::warn!("control http3 send failed {}: {:?}", addr, e);
+                            if let Some(connection) = active.take() {
+                                connection.close();
+                            }
+                            let name = server_name.lock().clone();
+                            match connect(addr, &name, &request_uri).await {
+                                Ok(connection) => {
+                                    let connection_id = next_connection_id;
+                                    next_connection_id = next_connection_id.wrapping_add(1);
+                                    let Http3ClientConnection {
+                                        addr,
+                                        route_key,
+                                        endpoint,
+                                        request_sender,
+                                        mut send,
+                                        recv,
+                                    } = connection;
+                                    spawn_h3_reader(
+                                        connection_id,
+                                        recv,
+                                        route_key,
+                                        on_packet.clone(),
+                                        read_event_sender.clone(),
+                                    );
+                                    if let Err(e) =
+                                        send.send_data(Bytes::from(frame_packet(&data))).await
+                                    {
+                                        log::warn!("control http3 resend failed {}: {:?}", addr, e);
+                                        on_transport_error(format!(
+                                            "control http3 resend failed {}: {:?}",
+                                            addr, e
+                                        ));
+                                        endpoint.close(0u32.into(), &[]);
+                                    } else {
+                                        active = Some(ActiveConnection {
+                                            connection_id,
+                                            addr,
+                                            endpoint,
+                                            _request_sender: request_sender,
+                                            send,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("control http3 reconnect failed {}: {:?}", addr, e);
+                                    on_transport_error(format!(
+                                        "control http3 reconnect failed {}: {:?}",
+                                        addr, e
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -267,6 +271,75 @@ async fn run_http3_worker(
     }
     if let Some(connection) = active {
         connection.close();
+    }
+}
+
+fn register_active_connection(
+    connection: Http3ClientConnection,
+    next_connection_id: &mut u64,
+    on_packet: PacketCallback,
+    read_event_sender: UnboundedSender<Http3ReadEvent>,
+) -> ActiveConnection {
+    let connection_id = *next_connection_id;
+    *next_connection_id = next_connection_id.wrapping_add(1);
+    let Http3ClientConnection {
+        addr,
+        route_key,
+        endpoint,
+        request_sender,
+        send,
+        recv,
+    } = connection;
+    spawn_h3_reader(connection_id, recv, route_key, on_packet, read_event_sender);
+    ActiveConnection {
+        connection_id,
+        addr,
+        endpoint,
+        _request_sender: request_sender,
+        send,
+    }
+}
+
+fn spawn_h3_reader(
+    connection_id: u64,
+    recv: RequestStream<H3RecvStream, Bytes>,
+    route_key: RouteKey,
+    on_packet: PacketCallback,
+    read_event_sender: UnboundedSender<Http3ReadEvent>,
+) {
+    tokio::spawn(async move {
+        let reason = match read_h3_packets(recv, route_key, on_packet).await {
+            Ok(()) => format!(
+                "control http3 read loop ended unexpectedly {}",
+                route_key.addr
+            ),
+            Err(e) => format!("control http3 read failed {}: {:?}", route_key.addr, e),
+        };
+        let _ = read_event_sender.send(Http3ReadEvent::Closed {
+            connection_id,
+            reason,
+        });
+    });
+}
+
+fn handle_read_event(
+    active: &mut Option<ActiveConnection>,
+    event: Http3ReadEvent,
+    on_transport_error: &TransportErrorCallback,
+) {
+    match event {
+        Http3ReadEvent::Closed {
+            connection_id,
+            reason,
+        } => {
+            if active.as_ref().map(|conn| conn.connection_id) != Some(connection_id) {
+                return;
+            }
+            if let Some(connection) = active.take() {
+                connection.close();
+            }
+            on_transport_error(reason);
+        }
     }
 }
 

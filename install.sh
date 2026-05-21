@@ -15,6 +15,8 @@ Options:
   --link-dir <dir>      Directory for sdl/sdl-service symlinks (default: /usr/local/bin)
   --service-name <name> Service name/label basename (default: sdl-service)
   --user <name>         Non-root user that should own env files and command.sock
+  --overwrite-config    Replace an existing env/config.json with the installer copy
+  --preserve-config     Keep an existing env/config.json without prompting (default)
   -h, --help            Show this help
 EOF
 }
@@ -26,6 +28,8 @@ LINK_DIR="/usr/local/bin"
 SERVICE_NAME="sdl-service"
 TARGET_USER="${SUDO_USER:-root}"
 OS_NAME="$(uname -s)"
+CONFIG_INSTALL_MODE="preserve"
+CONFIG_VERSION_FALLBACK="1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +52,14 @@ while [[ $# -gt 0 ]]; do
     --user)
       TARGET_USER="$2"
       shift 2
+      ;;
+    --overwrite-config)
+      CONFIG_INSTALL_MODE="overwrite"
+      shift
+      ;;
+    --preserve-config)
+      CONFIG_INSTALL_MODE="preserve"
+      shift
       ;;
     -h|--help)
       usage
@@ -85,6 +97,115 @@ copy_env_file_if_present() {
   fi
 }
 
+backup_existing_file() {
+  local path="$1"
+  local backup_path="${path}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -p "${path}" "${backup_path}"
+  log_step "Backed up ${path} to ${backup_path}"
+}
+
+config_version_of() {
+  local path="$1"
+  local version
+  if [[ ! -f "${path}" ]]; then
+    return 1
+  fi
+  version="$(sed -nE 's/.*"config_version"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "${path}" | head -n 1)"
+  if [[ -z "${version}" ]]; then
+    version="${CONFIG_VERSION_FALLBACK}"
+  fi
+  printf '%s\n' "${version}"
+}
+
+overwrite_config_file() {
+  local source_path="$1"
+  local target_path="$2"
+  if [[ -f "${target_path}" ]]; then
+    backup_existing_file "${target_path}"
+  fi
+  install -m 600 "${source_path}" "${target_path}"
+}
+
+is_interactive_install() {
+  [[ -t 0 && -t 1 ]]
+}
+
+prompt_overwrite_existing_config() {
+  local prompt_message="$1"
+  local reply
+  while true; do
+    printf '%s [y/N] ' "${prompt_message}" >&2
+    if ! IFS= read -r reply; then
+      return 1
+    fi
+    case "${reply}" in
+      [Yy]|[Yy][Ee][Ss])
+        return 0
+        ;;
+      ""|[Nn]|[Nn][Oo])
+        return 1
+        ;;
+      *)
+        echo "Please answer y or n." >&2
+        ;;
+    esac
+  done
+}
+
+install_config_file_if_present() {
+  local source_path="${SOURCE_DIR}/env/config.json"
+  local target_path="${INSTALL_DIR}/env/config.json"
+  local source_version existing_version
+  if [[ ! -f "${source_path}" ]]; then
+    log_step "No installer env/config.json found; keeping any existing config.json"
+    return 0
+  fi
+  if [[ ! -f "${target_path}" ]]; then
+    log_step "Installing initial config.json"
+    install -m 600 "${source_path}" "${target_path}"
+    return 0
+  fi
+  if cmp -s "${source_path}" "${target_path}"; then
+    log_step "Existing config.json already matches installer config"
+    return 0
+  fi
+
+  source_version="$(config_version_of "${source_path}")"
+  existing_version="$(config_version_of "${target_path}")"
+  if [[ "${source_version}" != "${existing_version}" ]]; then
+    local mismatch_message="Existing config.json uses config_version=${existing_version}, installer config uses config_version=${source_version}. Keeping the old file may be incompatible with this build."
+    if [[ "${CONFIG_INSTALL_MODE}" == "overwrite" ]]; then
+      log_step "${mismatch_message}"
+      overwrite_config_file "${source_path}" "${target_path}"
+      return 0
+    fi
+    if is_interactive_install; then
+      echo "${mismatch_message}" >&2
+      if prompt_overwrite_existing_config "Overwrite existing config.json with the installer copy?"; then
+        overwrite_config_file "${source_path}" "${target_path}"
+        return 0
+      fi
+    fi
+    echo "Refusing to continue with a possibly incompatible existing config.json. Review ${target_path} and rerun with --overwrite-config if you want to replace it." >&2
+    exit 1
+  fi
+
+  if [[ "${CONFIG_INSTALL_MODE}" == "overwrite" ]]; then
+    log_step "Replacing existing config.json (--overwrite-config)"
+    overwrite_config_file "${source_path}" "${target_path}"
+    return 0
+  fi
+  if is_interactive_install; then
+    if prompt_overwrite_existing_config "Existing config.json found. Overwrite it with the installer copy?"; then
+      overwrite_config_file "${source_path}" "${target_path}"
+    else
+      log_step "Keeping existing config.json"
+    fi
+    return 0
+  fi
+  log_step "Keeping existing config.json (default non-interactive behavior)"
+}
+
 apply_env_ownership() {
   log_step "Applying env ownership for ${TARGET_USER} (${TARGET_UID}:${TARGET_GID})"
   chown "${TARGET_UID}:${TARGET_GID}" "${INSTALL_DIR}/env"
@@ -109,9 +230,10 @@ prepare_install_tree() {
   install -m 755 "${SOURCE_DIR}/sdl-service" "${INSTALL_DIR}/sdl-service"
 
   log_step "Copying persisted env files (if present)"
-  for name in config.json device-id device.key service-state.json; do
+  for name in device-id device.key service-state.json; do
     copy_env_file_if_present "${name}"
   done
+  install_config_file_if_present
 
   apply_env_ownership
 

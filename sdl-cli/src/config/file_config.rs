@@ -14,10 +14,17 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SERVICE_GROUP: &str = "default.ms.net";
 pub const DEFAULT_SERVICE_SERVER: &str = "https://control.middlescale.net/control";
+pub const FILE_CONFIG_VERSION: u32 = 1;
+
+fn default_config_version() -> u32 {
+    FILE_CONFIG_VERSION
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
+    #[serde(default = "default_config_version")]
+    pub config_version: u32,
     #[cfg(target_os = "windows")]
     pub tap: bool,
     pub group: String,
@@ -54,6 +61,7 @@ impl Default for FileConfig {
             stun_server.push(x.to_string());
         }
         Self {
+            config_version: default_config_version(),
             #[cfg(target_os = "windows")]
             tap: false,
             group: DEFAULT_SERVICE_GROUP.to_string(),
@@ -216,7 +224,9 @@ pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_config, FileConfig, DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
+    use super::{
+        read_config, FileConfig, DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
+    };
     use std::fs;
 
     fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
@@ -248,11 +258,29 @@ server_address: https://control.middlescale.net/control
     #[test]
     fn default_config_uses_group_defaults() {
         let file_conf = FileConfig::default();
+        assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
         assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
         assert_eq!(file_conf.server_address, DEFAULT_SERVICE_SERVER);
         assert_eq!(file_conf.ports, Some(vec![29873]));
         assert_eq!(file_conf.p2p_heartbeat_interval_sec, 10);
         assert_eq!(file_conf.p2p_route_idle_timeout_sec, 30);
+    }
+
+    #[test]
+    fn read_config_accepts_legacy_file_without_config_version() {
+        let path = write_temp_config(
+            r#"
+group: default.ms.net
+device_id: dev-legacy
+name: legacy-node
+server_address: https://control.middlescale.net/control
+"#,
+            "legacy-no-version",
+        );
+        let (_, file_conf) =
+            read_config(path.to_str().unwrap()).expect("legacy config should parse");
+        assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
+        let _ = fs::remove_file(path);
     }
 
     #[test]

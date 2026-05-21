@@ -52,6 +52,8 @@ sudo ./install.sh --source-dir ./target/release --user "$USER"
 - macOS: 安装到 `/opt/sdl`，生成并启动 `launchd` 服务 `net.middlescale.sdl-service`
 - Windows: 当前 `sdl-service.exe` 已支持作为真正的 Windows Service 进程运行，同时仍可在管理员命令行中直接执行
 - 安装脚本会复用 `/opt/sdl/env/` 下的持久配置，并把本地前端命令链接到 `/usr/local/bin`
+- 如果 `/opt/sdl/env/config.json` 已存在，默认会保留旧文件；只有显式 `--overwrite-config` 或交互确认后才会替换
+- 当安装包配置和本机现有配置的 `config_version` 不一致时，安装脚本会拒绝静默继续，提示你先确认是否覆盖
 
 ### 前端命令示例
 

@@ -20,12 +20,18 @@ use crate::transport::connect_protocol::ConnectProtocol;
 use crate::util::StopManager;
 
 pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, RouteKey) + Send + Sync + 'static>;
+type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 enum QuicCommand {
     Send(Vec<u8>),
 }
 
+enum QuicReadEvent {
+    Closed { connection_id: u64, reason: String },
+}
+
 struct ActiveConnection {
+    connection_id: u64,
     addr: SocketAddr,
     config_rev: u64,
     endpoint: Endpoint,
@@ -63,7 +69,7 @@ impl QuicChannel {
     where
         F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
     {
-        self.start_named(stop_manager, "controlQuic", on_packet)
+        self.start_named_with_transport_error(stop_manager, "controlQuic", on_packet, |_| {})
     }
 
     pub fn start_named<F>(
@@ -75,10 +81,43 @@ impl QuicChannel {
     where
         F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
     {
+        self.start_named_with_transport_error(stop_manager, worker_name, on_packet, |_| {})
+    }
+
+    pub fn start_with_transport_error<F, E>(
+        &self,
+        stop_manager: StopManager,
+        on_packet: F,
+        on_transport_error: E,
+    ) -> anyhow::Result<()>
+    where
+        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        E: Fn(String) + Send + Sync + 'static,
+    {
+        self.start_named_with_transport_error(
+            stop_manager,
+            "controlQuic",
+            on_packet,
+            on_transport_error,
+        )
+    }
+
+    pub fn start_named_with_transport_error<F, E>(
+        &self,
+        stop_manager: StopManager,
+        worker_name: &str,
+        on_packet: F,
+        on_transport_error: E,
+    ) -> anyhow::Result<()>
+    where
+        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        E: Fn(String) + Send + Sync + 'static,
+    {
         let Some(receiver) = self.receiver.lock().take() else {
             return Ok(());
         };
         let callback: PacketCallback = Arc::new(on_packet);
+        let on_transport_error: TransportErrorCallback = Arc::new(on_transport_error);
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
         let config_rev = self.config_rev.clone();
@@ -96,7 +135,15 @@ impl QuicChannel {
             .name(worker_name.clone())
             .spawn(move || {
                 let worker_task = runtime.spawn(async move {
-                    run_quic_worker(receiver, server_addr, server_name, config_rev, callback).await;
+                    run_quic_worker(
+                        receiver,
+                        server_addr,
+                        server_name,
+                        config_rev,
+                        callback,
+                        on_transport_error,
+                    )
+                    .await;
                 });
                 runtime.block_on(async {
                     let mut worker_task = worker_task;
@@ -118,6 +165,10 @@ impl QuicChannel {
     pub fn update_server_addr(&self, server_addr: SocketAddr) {
         self.server_addr.store(server_addr);
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn server_addr(&self) -> SocketAddr {
+        self.server_addr.load()
     }
 
     pub fn update_server_name(&self, server_name: String) {
@@ -145,101 +196,109 @@ async fn run_quic_worker(
     server_name: Arc<Mutex<String>>,
     config_rev: Arc<AtomicU64>,
     on_packet: PacketCallback,
+    on_transport_error: TransportErrorCallback,
 ) {
+    let (read_event_sender, mut read_event_receiver) = channel(16);
     let mut active: Option<ActiveConnection> = None;
-    while let Some(command) = receiver.recv().await {
-        match command {
-            QuicCommand::Send(data) => {
-                let addr = server_addr.load();
-                let current_rev = config_rev.load(Ordering::Relaxed);
-                if active.as_ref().map(|v| (v.addr, v.config_rev)) != Some((addr, current_rev)) {
-                    if let Some(connection) = active.take() {
-                        connection.close();
-                    }
-                }
-                if active.is_none() {
-                    let name = server_name.lock().clone();
-                    match connect(addr, &name, b"sdl-control").await {
-                        Ok(connection) => {
-                            let QuicClientConnection {
-                                addr,
-                                route_key,
-                                endpoint,
-                                send,
-                                mut recv,
-                            } = connection;
-                            let callback = on_packet.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    read_framed_packets(&mut recv, route_key, callback).await
-                                {
-                                    log::warn!(
-                                        "control quic read failed {:?}: {:?}",
-                                        route_key.addr,
-                                        e
-                                    );
-                                }
-                            });
-                            active = Some(ActiveConnection {
-                                addr,
-                                config_rev: current_rev,
-                                endpoint,
-                                send,
-                            });
-                        }
-                        Err(e) => {
-                            log::warn!("control quic connect failed {}: {:?}", addr, e);
-                            continue;
-                        }
-                    }
-                }
-                let send_result = if let Some(connection) = active.as_mut() {
-                    connection.send.write_all(&frame_packet(&data)).await
-                } else {
+    let mut next_connection_id = 1u64;
+    loop {
+        tokio::select! {
+            maybe_event = read_event_receiver.recv() => {
+                let Some(event) = maybe_event else {
                     continue;
                 };
-                if let Err(e) = send_result {
-                    log::warn!("control quic send failed {}: {:?}", addr, e);
-                    if let Some(connection) = active.take() {
-                        connection.close();
-                    }
-                    let name = server_name.lock().clone();
-                    let current_rev = config_rev.load(Ordering::Relaxed);
-                    match connect(addr, &name, b"sdl-control").await {
-                        Ok(connection) => {
-                            let QuicClientConnection {
-                                addr,
-                                route_key,
-                                endpoint,
-                                mut send,
-                                mut recv,
-                            } = connection;
-                            let callback = on_packet.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) =
-                                    read_framed_packets(&mut recv, route_key, callback).await
-                                {
-                                    log::warn!(
-                                        "control quic read failed {:?}: {:?}",
-                                        route_key.addr,
-                                        e
-                                    );
-                                }
-                            });
-                            if let Err(e) = send.write_all(&frame_packet(&data)).await {
-                                log::warn!("control quic resend failed {}: {:?}", addr, e);
-                                endpoint.close(0u32.into(), &[]);
-                            } else {
-                                active = Some(ActiveConnection {
-                                    addr,
-                                    config_rev: current_rev,
-                                    endpoint,
-                                    send,
-                                });
+                handle_read_event(&mut active, event, &on_transport_error);
+            }
+            maybe_command = receiver.recv() => {
+                let Some(command) = maybe_command else {
+                    break;
+                };
+                match command {
+                    QuicCommand::Send(data) => {
+                        let addr = server_addr.load();
+                        let current_rev = config_rev.load(Ordering::Relaxed);
+                        if active.as_ref().map(|v| (v.addr, v.config_rev)) != Some((addr, current_rev)) {
+                            if let Some(connection) = active.take() {
+                                connection.close();
                             }
                         }
-                        Err(e) => {
-                            log::warn!("control quic reconnect failed {}: {:?}", addr, e);
+                        if active.is_none() {
+                            let name = server_name.lock().clone();
+                            match connect(addr, &name, b"sdl-control").await {
+                                Ok(connection) => {
+                                    active = Some(register_active_connection(
+                                        connection,
+                                        current_rev,
+                                        &mut next_connection_id,
+                                        on_packet.clone(),
+                                        read_event_sender.clone(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    log::warn!("control quic connect failed {}: {:?}", addr, e);
+                                    on_transport_error(format!(
+                                        "control quic connect failed {}: {:?}",
+                                        addr, e
+                                    ));
+                                    continue;
+                                }
+                            }
+                        }
+                        let send_result = if let Some(connection) = active.as_mut() {
+                            connection.send.write_all(&frame_packet(&data)).await
+                        } else {
+                            continue;
+                        };
+                        if let Err(e) = send_result {
+                            log::warn!("control quic send failed {}: {:?}", addr, e);
+                            if let Some(connection) = active.take() {
+                                connection.close();
+                            }
+                            let name = server_name.lock().clone();
+                            let current_rev = config_rev.load(Ordering::Relaxed);
+                            match connect(addr, &name, b"sdl-control").await {
+                                Ok(connection) => {
+                                    let connection_id = next_connection_id;
+                                    next_connection_id = next_connection_id.wrapping_add(1);
+                                    let QuicClientConnection {
+                                        addr,
+                                        route_key,
+                                        endpoint,
+                                        mut send,
+                                        recv,
+                                    } = connection;
+                                    spawn_quic_reader(
+                                        connection_id,
+                                        recv,
+                                        route_key,
+                                        on_packet.clone(),
+                                        read_event_sender.clone(),
+                                    );
+                                    if let Err(e) = send.write_all(&frame_packet(&data)).await {
+                                        log::warn!("control quic resend failed {}: {:?}", addr, e);
+                                        on_transport_error(format!(
+                                            "control quic resend failed {}: {:?}",
+                                            addr, e
+                                        ));
+                                        endpoint.close(0u32.into(), &[]);
+                                    } else {
+                                        active = Some(ActiveConnection {
+                                            connection_id,
+                                            addr,
+                                            config_rev: current_rev,
+                                            endpoint,
+                                            send,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("control quic reconnect failed {}: {:?}", addr, e);
+                                    on_transport_error(format!(
+                                        "control quic reconnect failed {}: {:?}",
+                                        addr, e
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
@@ -248,6 +307,77 @@ async fn run_quic_worker(
     }
     if let Some(connection) = active {
         connection.close();
+    }
+}
+
+fn register_active_connection(
+    connection: QuicClientConnection,
+    config_rev: u64,
+    next_connection_id: &mut u64,
+    on_packet: PacketCallback,
+    read_event_sender: Sender<QuicReadEvent>,
+) -> ActiveConnection {
+    let connection_id = *next_connection_id;
+    *next_connection_id = next_connection_id.wrapping_add(1);
+    let QuicClientConnection {
+        addr,
+        route_key,
+        endpoint,
+        send,
+        recv,
+    } = connection;
+    spawn_quic_reader(connection_id, recv, route_key, on_packet, read_event_sender);
+    ActiveConnection {
+        connection_id,
+        addr,
+        config_rev,
+        endpoint,
+        send,
+    }
+}
+
+fn spawn_quic_reader(
+    connection_id: u64,
+    mut recv: RecvStream,
+    route_key: RouteKey,
+    on_packet: PacketCallback,
+    read_event_sender: Sender<QuicReadEvent>,
+) {
+    tokio::spawn(async move {
+        let reason = match read_framed_packets(&mut recv, route_key, on_packet).await {
+            Ok(()) => format!(
+                "control quic read loop ended unexpectedly {}",
+                route_key.addr
+            ),
+            Err(e) => format!("control quic read failed {}: {:?}", route_key.addr, e),
+        };
+        let _ = read_event_sender
+            .send(QuicReadEvent::Closed {
+                connection_id,
+                reason,
+            })
+            .await;
+    });
+}
+
+fn handle_read_event(
+    active: &mut Option<ActiveConnection>,
+    event: QuicReadEvent,
+    on_transport_error: &TransportErrorCallback,
+) {
+    match event {
+        QuicReadEvent::Closed {
+            connection_id,
+            reason,
+        } => {
+            if active.as_ref().map(|conn| conn.connection_id) != Some(connection_id) {
+                return;
+            }
+            if let Some(connection) = active.take() {
+                connection.close();
+            }
+            on_transport_error(reason);
+        }
     }
 }
 
