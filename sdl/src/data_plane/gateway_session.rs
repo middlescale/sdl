@@ -28,31 +28,42 @@ use crate::util::{DebugWatch, StopManager};
 const GATEWAY_SWITCH_BETTER_RT_MS: i64 = 15;
 const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
-const GATEWAY_CONNECT_RETRY_BASE_MS: u64 = 1_000;
-const GATEWAY_CONNECT_RETRY_MAX_MS: u64 = 5_000;
+const GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS: i64 = 120_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GatewaySessionPhase {
+pub enum GatewayGrantPhase {
     #[default]
-    Disconnected,
-    Connected,
-    Stale,
+    Missing,
+    Active,
+    RefreshDue,
     Grace,
     Expired,
 }
 
-impl GatewaySessionPhase {
-    pub fn is_live(self) -> bool {
-        matches!(self, Self::Connected | Self::Grace)
-    }
-
+impl GatewayGrantPhase {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Disconnected => "disconnected",
-            Self::Connected => "connected",
-            Self::Stale => "stale",
+            Self::Missing => "missing",
+            Self::Active => "active",
+            Self::RefreshDue => "refresh-due",
             Self::Grace => "grace",
             Self::Expired => "expired",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GatewayGrantState {
+    Active,
+    #[default]
+    NeedsRefresh,
+}
+
+impl GatewayGrantState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::NeedsRefresh => "needs-refresh",
         }
     }
 }
@@ -62,12 +73,13 @@ struct GatewaySessionState {
     gateway_id: String,
     ticket: Vec<u8>,
     session_id: u64,
-    policy_epoch: u64,
     policy_rev: u64,
+    soft_refresh_after_unix_ms: i64,
+    hard_expire_unix_ms: i64,
     ticket_expire_unix_ms: i64,
     device_id: String,
     channel_name: String,
-    phase: GatewaySessionPhase,
+    authenticated: bool,
     last_hello_unix_ms: i64,
     keepalive_secs: u32,
     lease_expire_unix_ms: i64,
@@ -76,8 +88,6 @@ struct GatewaySessionState {
     grace_secs_hint: u32,
     reauth_required: bool,
     last_rtt_ms: Option<i64>,
-    connect_retry_count: u32,
-    last_retry_nudge_unix_ms: i64,
 }
 
 #[derive(Clone)]
@@ -98,53 +108,65 @@ enum GatewayTransport {
 }
 
 impl GatewaySession {
-    fn live_expire_unix_ms(guard: &GatewaySessionState) -> i64 {
-        guard.grace_expire_unix_ms.max(guard.lease_expire_unix_ms)
+    fn default_soft_refresh_after_unix_ms(hard_expire_unix_ms: i64) -> i64 {
+        if hard_expire_unix_ms <= 0 {
+            return 0;
+        }
+        if hard_expire_unix_ms <= GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS {
+            return hard_expire_unix_ms;
+        }
+        hard_expire_unix_ms - GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS
     }
 
-    fn current_phase(guard: &GatewaySessionState, now_ms: i64) -> GatewaySessionPhase {
-        match guard.phase {
-            GatewaySessionPhase::Disconnected => GatewaySessionPhase::Disconnected,
-            GatewaySessionPhase::Stale => {
-                if now_ms > Self::live_expire_unix_ms(guard) {
-                    GatewaySessionPhase::Expired
-                } else {
-                    GatewaySessionPhase::Stale
-                }
-            }
-            GatewaySessionPhase::Connected
-            | GatewaySessionPhase::Grace
-            | GatewaySessionPhase::Expired => {
-                if now_ms <= guard.lease_expire_unix_ms {
-                    GatewaySessionPhase::Connected
-                } else if now_ms <= guard.grace_expire_unix_ms {
-                    GatewaySessionPhase::Grace
-                } else if guard.lease_expire_unix_ms > 0 || guard.grace_expire_unix_ms > 0 {
-                    GatewaySessionPhase::Expired
-                } else {
-                    guard.phase
-                }
-            }
+    fn hard_expire_unix_ms(guard: &GatewaySessionState) -> i64 {
+        guard.hard_expire_unix_ms.max(guard.ticket_expire_unix_ms)
+    }
+
+    fn soft_refresh_after_unix_ms(guard: &GatewaySessionState) -> i64 {
+        if guard.soft_refresh_after_unix_ms > 0 {
+            guard.soft_refresh_after_unix_ms
+        } else {
+            Self::default_soft_refresh_after_unix_ms(Self::hard_expire_unix_ms(guard))
         }
     }
 
-    fn refresh_phase(guard: &mut GatewaySessionState, now_ms: i64) -> GatewaySessionPhase {
-        let phase = Self::current_phase(guard, now_ms);
-        if guard.phase != phase {
-            guard.phase = phase;
+    fn grant_phase(guard: &GatewaySessionState, now_ms: i64) -> GatewayGrantPhase {
+        let hard_expire_unix_ms = Self::hard_expire_unix_ms(guard);
+        if guard.ticket.is_empty() || hard_expire_unix_ms <= 0 {
+            return GatewayGrantPhase::Missing;
         }
-        phase
+        if now_ms > hard_expire_unix_ms {
+            return GatewayGrantPhase::Expired;
+        }
+        if guard.authenticated
+            && guard.lease_expire_unix_ms > 0
+            && now_ms > guard.lease_expire_unix_ms
+            && now_ms <= guard.grace_expire_unix_ms
+        {
+            return GatewayGrantPhase::Grace;
+        }
+        if now_ms >= Self::soft_refresh_after_unix_ms(guard) {
+            return GatewayGrantPhase::RefreshDue;
+        }
+        GatewayGrantPhase::Active
     }
 
-    fn mark_transport_stale(guard: &mut GatewaySessionState, now_ms: i64) {
-        match Self::refresh_phase(guard, now_ms) {
-            GatewaySessionPhase::Connected
-            | GatewaySessionPhase::Grace
-            | GatewaySessionPhase::Stale => {
-                guard.phase = GatewaySessionPhase::Stale;
-            }
-            GatewaySessionPhase::Disconnected | GatewaySessionPhase::Expired => {}
+    fn grant_state(phase: GatewayGrantPhase) -> GatewayGrantState {
+        match phase {
+            GatewayGrantPhase::Active => GatewayGrantState::Active,
+            GatewayGrantPhase::RefreshDue
+            | GatewayGrantPhase::Grace
+            | GatewayGrantPhase::Missing
+            | GatewayGrantPhase::Expired => GatewayGrantState::NeedsRefresh,
         }
+    }
+
+    fn is_available(guard: &GatewaySessionState, now_ms: i64) -> bool {
+        let expire_unix_ms = guard
+            .grace_expire_unix_ms
+            .max(guard.lease_expire_unix_ms)
+            .max(Self::hard_expire_unix_ms(guard));
+        guard.authenticated && now_ms <= expire_unix_ms
     }
 
     fn new_quic(endpoint: SocketAddr, debug_watch: DebugWatch, stats: DataPlaneStats) -> Self {
@@ -251,16 +273,21 @@ impl GatewaySession {
         guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
-        guard.policy_epoch = grant.policy_epoch;
         guard.policy_rev = grant.policy_rev;
-        guard.ticket_expire_unix_ms = grant.ticket_expire_unix_ms;
+        guard.hard_expire_unix_ms = grant.hard_expire_unix_ms.max(grant.ticket_expire_unix_ms);
+        guard.soft_refresh_after_unix_ms = if grant.soft_refresh_after_unix_ms > 0 {
+            grant.soft_refresh_after_unix_ms
+        } else {
+            Self::default_soft_refresh_after_unix_ms(guard.hard_expire_unix_ms)
+        };
+        guard.ticket_expire_unix_ms = guard.hard_expire_unix_ms;
         guard.device_id = device_id;
         guard.channel_name = match &self.channel {
             GatewayTransport::Quic(_) => "quic".to_string(),
             GatewayTransport::Https(_) => "https".to_string(),
             GatewayTransport::Udp(_) => "udp".to_string(),
         };
-        guard.phase = GatewaySessionPhase::Disconnected;
+        guard.authenticated = false;
         guard.last_hello_unix_ms = 0;
         guard.keepalive_secs = 0;
         guard.lease_expire_unix_ms = 0;
@@ -269,8 +296,6 @@ impl GatewaySession {
         guard.grace_secs_hint = grant.grace_secs;
         guard.reauth_required = false;
         guard.last_rtt_ms = None;
-        guard.connect_retry_count = 0;
-        guard.last_retry_nudge_unix_ms = 0;
         let http2_idle_timeout = gateway_http2_idle_timeout(guard.keepalive_secs);
         drop(guard);
         match &self.channel {
@@ -337,44 +362,37 @@ impl GatewaySession {
         let guard = self.state.lock();
         GatewayGrantSnapshot {
             session_id: guard.session_id,
-            policy_epoch: guard.policy_epoch,
             policy_rev: guard.policy_rev,
-            ticket_expire_unix_ms: guard.ticket_expire_unix_ms,
+            soft_refresh_after_unix_ms: Self::soft_refresh_after_unix_ms(&guard),
+            hard_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
+            ticket_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
         }
     }
 
     fn summary(&self) -> GatewaySessionSummary {
-        let mut guard = self.state.lock();
+        let guard = self.state.lock();
         let now_ms = now_time() as i64;
-        let phase = Self::refresh_phase(&mut guard, now_ms);
+        let grant_phase = Self::grant_phase(&guard, now_ms);
         GatewaySessionSummary {
             configured: true,
-            available: phase.is_live(),
-            phase,
+            authenticated: Self::is_available(&guard, now_ms),
             endpoint: Some(self.endpoint),
             gateway_id: guard.gateway_id.clone(),
             channel_name: guard.channel_name.clone(),
+            grant_state: Self::grant_state(grant_phase),
+            soft_refresh_after_unix_ms: Self::soft_refresh_after_unix_ms(&guard),
+            hard_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
+            lease_expire_unix_ms: guard.lease_expire_unix_ms,
+            grace_expire_unix_ms: guard.grace_expire_unix_ms,
             reauth_required: guard.reauth_required,
             rt_ms: guard.last_rtt_ms,
             active: false,
+            grant_phase,
         }
     }
 
     fn matches_addr(&self, addr: SocketAddr) -> bool {
         self.endpoint == addr
-    }
-
-    fn request_immediate_retry(&self) {
-        let mut guard = self.state.lock();
-        let now_ms = now_time() as i64;
-        if !Self::refresh_phase(&mut guard, now_ms).is_live() {
-            let retry_interval_ms =
-                gateway_connect_retry_interval_ms(guard.connect_retry_count) as i64;
-            if now_ms - guard.last_retry_nudge_unix_ms >= retry_interval_ms {
-                guard.last_hello_unix_ms = guard.last_hello_unix_ms.min(now_ms - retry_interval_ms);
-                guard.last_retry_nudge_unix_ms = now_ms;
-            }
-        }
     }
 
     fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
@@ -400,9 +418,7 @@ impl GatewaySession {
             }),
         );
         if let Err(e) = self.send_packet(&packet) {
-            let mut guard = self.state.lock();
-            Self::mark_transport_stale(&mut guard, now_time() as i64);
-            guard.connect_retry_count = guard.connect_retry_count.saturating_add(1);
+            self.state.lock().authenticated = false;
             return Err(e.into());
         }
         Ok(())
@@ -410,29 +426,29 @@ impl GatewaySession {
 
     fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         {
-            let mut guard = self.state.lock();
+            let guard = self.state.lock();
             let now_ms = now_time() as i64;
-            let phase = Self::refresh_phase(&mut guard, now_ms);
-            let expire_unix_ms = Self::live_expire_unix_ms(&guard);
-            if !phase.is_live() {
+            let expire_unix_ms = guard
+                .grace_expire_unix_ms
+                .max(guard.lease_expire_unix_ms)
+                .max(guard.ticket_expire_unix_ms);
+            if !Self::is_available(&guard, now_ms) {
                 log::debug!(
-                    "gateway relay unavailable endpoint={}, phase={}, now_ms={}, expire_unix_ms={}, session_id={}",
+                    "gateway relay unavailable endpoint={}, authenticated={}, now_ms={}, expire_unix_ms={}, session_id={}",
                     self.endpoint,
-                    phase.as_str(),
+                    guard.authenticated,
                     now_ms,
                     expire_unix_ms,
                     guard.session_id
                 );
                 return Err(io::Error::new(
                     io::ErrorKind::NotConnected,
-                    "gateway relay is not available",
+                    "gateway relay is not authenticated",
                 ));
             }
         }
         if let Err(e) = self.send_packet(packet) {
-            let mut guard = self.state.lock();
-            Self::mark_transport_stale(&mut guard, now_time() as i64);
-            guard.connect_retry_count = guard.connect_retry_count.saturating_add(1);
+            self.state.lock().authenticated = false;
             return Err(e);
         }
         self.stats
@@ -459,8 +475,8 @@ impl GatewaySession {
             );
             return;
         }
+        guard.authenticated = ack.ok;
         if ack.ok {
-            guard.phase = GatewaySessionPhase::Connected;
             let now_ms = now_time() as i64;
             if guard.last_hello_unix_ms > 0 && now_ms >= guard.last_hello_unix_ms {
                 guard.last_rtt_ms = Some((now_ms - guard.last_hello_unix_ms).max(1));
@@ -477,13 +493,11 @@ impl GatewaySession {
                 guard.lease_expire_unix_ms + i64::from(guard.grace_secs_hint) * 1_000
             };
             guard.reauth_required = ack.reauth_required;
-            guard.connect_retry_count = 0;
-            guard.last_retry_nudge_unix_ms = 0;
             if let GatewayTransport::Https(channel) = &self.channel {
                 channel.update_idle_timeout(gateway_http2_idle_timeout(ack.keepalive_secs));
             }
             log::info!(
-                "gateway relay connected, session={}, endpoint={}, keepalive_secs={}, lease_expire={}, grace_expire={}, reauth_required={}",
+                "gateway relay authenticated, session={}, endpoint={}, keepalive_secs={}, lease_expire={}, grace_expire={}, reauth_required={}",
                 ack.session_id,
                 self.endpoint,
                 ack.keepalive_secs,
@@ -493,7 +507,7 @@ impl GatewaySession {
             );
             self.debug_watch.emit(
                 "gateway",
-                "connected",
+                "authenticated",
                 serde_json::json!({
                     "session_id": ack.session_id,
                     "endpoint": self.endpoint.to_string(),
@@ -504,13 +518,11 @@ impl GatewaySession {
                 }),
             );
         } else {
-            guard.phase = GatewaySessionPhase::Disconnected;
             guard.keepalive_secs = 0;
             guard.lease_expire_unix_ms = 0;
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = ack.reauth_required;
             guard.last_rtt_ms = None;
-            guard.connect_retry_count = guard.connect_retry_count.saturating_add(1);
             if let GatewayTransport::Https(channel) = &self.channel {
                 channel.update_idle_timeout(gateway_http2_idle_timeout(0));
             }
@@ -540,23 +552,19 @@ impl GatewaySession {
     ) -> anyhow::Result<Option<NetPacket<Vec<u8>>>> {
         let mut guard = self.state.lock();
         let now_ms = now_time() as i64;
-        let phase = Self::refresh_phase(&mut guard, now_ms);
         let ticket_available = now_ms <= guard.ticket_expire_unix_ms && !guard.ticket.is_empty();
         if !ticket_available && now_ms > guard.grace_expire_unix_ms {
             return Ok(None);
         }
-        let interval_ms = if phase.is_live() {
+        let interval_ms = if guard.authenticated {
             u64::from(guard.keepalive_secs.max(3)) * 1_000
         } else {
-            gateway_connect_retry_interval_ms(guard.connect_retry_count)
+            3_000
         } as i64;
         if now_ms - guard.last_hello_unix_ms < interval_ms {
             return Ok(None);
         }
         guard.last_hello_unix_ms = now_ms;
-        if !phase.is_live() {
-            guard.connect_retry_count = guard.connect_retry_count.saturating_add(1);
-        }
         let mut nonce = vec![0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
         let hello = GatewayConnectHello {
@@ -593,22 +601,28 @@ impl GatewaySession {
 #[derive(Clone)]
 pub struct GatewayGrantSnapshot {
     pub session_id: u64,
-    pub policy_epoch: u64,
     pub policy_rev: u64,
+    pub soft_refresh_after_unix_ms: i64,
+    pub hard_expire_unix_ms: i64,
     pub ticket_expire_unix_ms: i64,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct GatewaySessionSummary {
     pub configured: bool,
-    pub available: bool,
-    pub phase: GatewaySessionPhase,
+    pub authenticated: bool,
     pub endpoint: Option<SocketAddr>,
     pub gateway_id: String,
     pub channel_name: String,
+    pub grant_state: GatewayGrantState,
+    pub soft_refresh_after_unix_ms: i64,
+    pub hard_expire_unix_ms: i64,
+    pub lease_expire_unix_ms: i64,
+    pub grace_expire_unix_ms: i64,
     pub reauth_required: bool,
     pub rt_ms: Option<i64>,
     pub active: bool,
+    grant_phase: GatewayGrantPhase,
 }
 
 #[derive(Default)]
@@ -871,7 +885,11 @@ impl GatewaySessions {
             .lock()
             .values()
             .map(GatewaySession::grant_snapshot)
-            .max_by_key(|snapshot| snapshot.ticket_expire_unix_ms)
+            .max_by_key(|snapshot| {
+                snapshot
+                    .hard_expire_unix_ms
+                    .max(snapshot.ticket_expire_unix_ms)
+            })
     }
 
     pub fn session_summary(&self) -> GatewaySessionSummary {
@@ -907,7 +925,7 @@ impl GatewaySessions {
         summaries.sort_by_key(|summary| {
             (
                 summary.endpoint != active,
-                !summary.phase.is_live(),
+                !summary.authenticated,
                 summary.rt_ms.unwrap_or(i64::MAX),
                 summary.gateway_id.clone(),
                 summary.channel_name.clone(),
@@ -949,8 +967,7 @@ impl GatewaySessions {
         drop(guard);
         sessions.sort_by_key(|session| gateway_session_order_key(session, active));
         let mut last_err = None;
-        let had_sessions = !sessions.is_empty();
-        for session in &sessions {
+        for session in sessions {
             match session.send_relay(packet) {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::NotConnected => {
@@ -971,12 +988,6 @@ impl GatewaySessions {
                 }
             }
         }
-        if had_sessions {
-            for session in &sessions {
-                session.request_immediate_retry();
-            }
-        }
-        self.trigger_connect_now();
         Err(last_err.unwrap_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "no available gateway session")
         }))
@@ -1039,9 +1050,9 @@ impl GatewaySessions {
             (Some((current_endpoint, current_summary)), Some((best_endpoint, best_summary))) => {
                 if current_endpoint == best_endpoint {
                     current_endpoint
-                } else if !current_summary.phase.is_live() {
+                } else if !current_summary.authenticated {
                     best_endpoint
-                } else if best_summary.phase.is_live()
+                } else if best_summary.authenticated
                     && gateway_summary_is_clearly_better(&best_summary, &current_summary)
                     && now_ms - selection.last_switch_unix_ms >= GATEWAY_SWITCH_COOLDOWN_MS
                 {
@@ -1187,12 +1198,14 @@ fn gateway_summary_sort_key(
     summary: &GatewaySessionSummary,
 ) -> (
     bool,
+    u8,
     std::cmp::Reverse<i64>,
     bool,
     std::cmp::Reverse<String>,
 ) {
     (
-        summary.phase.is_live(),
+        summary.authenticated,
+        gateway_grant_phase_rank(summary.grant_phase),
         std::cmp::Reverse(summary.rt_ms.unwrap_or(i64::MAX)),
         !summary.reauth_required,
         std::cmp::Reverse(summary.gateway_id.clone()),
@@ -1215,14 +1228,25 @@ fn gateway_summary_is_clearly_better(
 fn gateway_session_order_key(
     session: &GatewaySession,
     active: Option<SocketAddr>,
-) -> (bool, bool, i64, String) {
+) -> (bool, bool, std::cmp::Reverse<u8>, i64, String) {
     let summary = session.summary();
     (
         Some(session.endpoint) != active,
-        !summary.phase.is_live(),
+        !summary.authenticated,
+        std::cmp::Reverse(gateway_grant_phase_rank(summary.grant_phase)),
         summary.rt_ms.unwrap_or(i64::MAX),
         summary.gateway_id,
     )
+}
+
+fn gateway_grant_phase_rank(phase: GatewayGrantPhase) -> u8 {
+    match phase {
+        GatewayGrantPhase::Active => 4,
+        GatewayGrantPhase::RefreshDue => 3,
+        GatewayGrantPhase::Grace => 2,
+        GatewayGrantPhase::Missing => 1,
+        GatewayGrantPhase::Expired => 0,
+    }
 }
 
 fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
@@ -1230,19 +1254,12 @@ fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
     Duration::from_secs((keepalive_secs * 2).max(GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS))
 }
 
-fn gateway_connect_retry_interval_ms(retry_count: u32) -> u64 {
-    let factor = 2u64.saturating_pow(retry_count.saturating_sub(1).min(3));
-    GATEWAY_CONNECT_RETRY_BASE_MS
-        .saturating_mul(factor)
-        .min(GATEWAY_CONNECT_RETRY_MAX_MS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        gateway_connect_retry_interval_ms, gateway_http2_idle_timeout,
-        parse_https_transport_target, parse_transport_endpoint, GatewaySession,
-        GatewaySessionPhase, GatewaySessionState, GatewaySessions,
+        gateway_http2_idle_timeout, gateway_session_order_key, now_time,
+        parse_https_transport_target, parse_transport_endpoint, GatewayGrantPhase,
+        GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
     };
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
@@ -1303,99 +1320,138 @@ mod tests {
     }
 
     #[test]
-    fn gateway_connect_retry_interval_backs_off_and_caps() {
-        assert_eq!(gateway_connect_retry_interval_ms(0), 1_000);
-        assert_eq!(gateway_connect_retry_interval_ms(1), 1_000);
-        assert_eq!(gateway_connect_retry_interval_ms(2), 2_000);
-        assert_eq!(gateway_connect_retry_interval_ms(3), 4_000);
-        assert_eq!(gateway_connect_retry_interval_ms(4), 5_000);
-        assert_eq!(gateway_connect_retry_interval_ms(8), 5_000);
-    }
-
-    #[test]
-    fn gateway_live_availability_ignores_ticket_expiry() {
-        let state = GatewaySessionState {
-            phase: GatewaySessionPhase::Connected,
-            lease_expire_unix_ms: 1_000,
-            grace_expire_unix_ms: 2_000,
-            ticket_expire_unix_ms: 60_000,
-            ..Default::default()
-        };
-        assert_eq!(
-            GatewaySession::current_phase(&state, 2_001),
-            GatewaySessionPhase::Expired
-        );
-        assert!(!GatewaySession::current_phase(&state, 2_001).is_live());
-    }
-
-    #[test]
-    fn gateway_may_retry_existing_session_without_ticket_inside_grace() {
-        let session = GatewaySession::new_quic(
-            "127.0.0.1:29900".parse().unwrap(),
-            crate::util::DebugWatch::default(),
-            crate::data_plane::stats::DataPlaneStats::new(true),
-        );
-        {
-            let mut guard = session.state.lock();
-            guard.device_id = "device-1".into();
-            guard.session_id = 7;
-            guard.ticket.clear();
-            guard.ticket_expire_unix_ms = 0;
-            guard.phase = GatewaySessionPhase::Stale;
-            guard.grace_expire_unix_ms = crate::handle::now_time() as i64 + 30_000;
-        }
-
-        let current_device = crate::handle::CurrentDeviceInfo::new(
-            Ipv4Addr::new(10, 26, 0, 2),
-            Ipv4Addr::new(255, 255, 255, 0),
-            Ipv4Addr::new(10, 26, 0, 1),
-        );
-        assert!(session
-            .maybe_build_connect_hello(&current_device)
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn immediate_retry_nudge_respects_existing_backoff_window() {
-        let session = GatewaySession::new_quic(
-            "127.0.0.1:29900".parse().unwrap(),
-            crate::util::DebugWatch::default(),
-            crate::data_plane::stats::DataPlaneStats::new(true),
-        );
-        let now_ms = crate::handle::now_time() as i64;
-        {
-            let mut guard = session.state.lock();
-            guard.phase = GatewaySessionPhase::Disconnected;
-            guard.connect_retry_count = 3;
-            guard.last_hello_unix_ms = now_ms - 500;
-            guard.last_retry_nudge_unix_ms = now_ms;
-        }
-        session.request_immediate_retry();
-        let guard = session.state.lock();
-        assert_eq!(guard.connect_retry_count, 3);
-        assert_eq!(guard.last_hello_unix_ms, now_ms - 500);
-    }
-
-    #[test]
-    fn transport_failure_marks_live_session_stale() {
+    fn grant_phase_distinguishes_active_refresh_due_grace_and_expired() {
         let mut state = GatewaySessionState {
-            phase: GatewaySessionPhase::Connected,
-            lease_expire_unix_ms: 10_000,
-            grace_expire_unix_ms: 20_000,
+            ticket: vec![1, 2, 3],
+            soft_refresh_after_unix_ms: 100,
+            hard_expire_unix_ms: 200,
+            ticket_expire_unix_ms: 200,
             ..Default::default()
         };
-        GatewaySession::mark_transport_stale(&mut state, 5_000);
-        assert_eq!(state.phase, GatewaySessionPhase::Stale);
         assert_eq!(
-            GatewaySession::current_phase(&state, 5_000),
-            GatewaySessionPhase::Stale
+            GatewaySession::grant_phase(&state, 99),
+            GatewayGrantPhase::Active
+        );
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 100),
+            GatewayGrantPhase::RefreshDue
+        );
+
+        state.authenticated = true;
+        state.lease_expire_unix_ms = 120;
+        state.grace_expire_unix_ms = 150;
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 130),
+            GatewayGrantPhase::Grace
+        );
+        assert_eq!(
+            GatewaySession::grant_phase(&state, 201),
+            GatewayGrantPhase::Expired
+        );
+    }
+
+    #[test]
+    fn grant_state_collapse_keeps_only_active_and_needs_refresh() {
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Active),
+            GatewayGrantState::Active
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::RefreshDue),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Grace),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Missing),
+            GatewayGrantState::NeedsRefresh
+        );
+        assert_eq!(
+            GatewaySession::grant_state(GatewayGrantPhase::Expired),
+            GatewayGrantState::NeedsRefresh
+        );
+    }
+
+    #[test]
+    fn fallback_soft_refresh_after_clamps_invalid_early_expiry() {
+        assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(0), 0);
+        assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(1_000), 1_000);
+        assert_eq!(
+            GatewaySession::default_soft_refresh_after_unix_ms(500_000),
+            380_000
+        );
+    }
+
+    #[test]
+    fn gateway_session_order_key_prefers_active_grants() {
+        let sessions = GatewaySessions::default();
+        let now_ms = now_time() as i64;
+        sessions.set_gateway_grants(
+            &[
+                GatewayAccessGrant {
+                    gateway_id: "gw-active".into(),
+                    ticket: vec![1, 2, 3],
+                    session_id: 1,
+                    policy_rev: 1,
+                    soft_refresh_after_unix_ms: now_ms + 30_000,
+                    hard_expire_unix_ms: now_ms + 60_000,
+                    ticket_expire_unix_ms: now_ms + 60_000,
+                    gateway_channels: vec![GatewayChannel {
+                        kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                        addr: "quic://127.0.0.1:29910".into(),
+                        ..Default::default()
+                    }],
+                    default_gateway_channel: EnumOrUnknown::new(
+                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                    ),
+                    ..Default::default()
+                },
+                GatewayAccessGrant {
+                    gateway_id: "gw-expired".into(),
+                    ticket: vec![4, 5, 6],
+                    session_id: 2,
+                    policy_rev: 1,
+                    soft_refresh_after_unix_ms: now_ms - 60_000,
+                    hard_expire_unix_ms: now_ms - 1,
+                    ticket_expire_unix_ms: now_ms - 1,
+                    gateway_channels: vec![GatewayChannel {
+                        kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                        addr: "quic://127.0.0.1:29911".into(),
+                        ..Default::default()
+                    }],
+                    default_gateway_channel: EnumOrUnknown::new(
+                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                    ),
+                    ..Default::default()
+                },
+            ],
+            Ipv4Addr::new(10, 0, 0, 1),
+            "device-1".into(),
+        );
+
+        let guard = sessions.sessions.lock();
+        let active = guard
+            .get(&"127.0.0.1:29910".parse().unwrap())
+            .expect("active session")
+            .clone();
+        let expired = guard
+            .get(&"127.0.0.1:29911".parse().unwrap())
+            .expect("expired session")
+            .clone();
+        drop(guard);
+
+        assert!(
+            gateway_session_order_key(&active, None) < gateway_session_order_key(&expired, None)
         );
     }
 
     #[test]
     fn mark_refresh_requested_keeps_existing_ticket_expiry() {
         let sessions = GatewaySessions::default();
+        let soft_refresh_after_unix_ms = 9_000;
+        let hard_expire_unix_ms = 12_345;
         let ticket_expire_unix_ms = 12_345;
         sessions.set_gateway_grants(
             &[GatewayAccessGrant {
@@ -1403,6 +1459,8 @@ mod tests {
                 ticket: vec![1, 2, 3],
                 session_id: 7,
                 policy_rev: 8,
+                soft_refresh_after_unix_ms,
+                hard_expire_unix_ms,
                 ticket_expire_unix_ms,
                 gateway_channels: vec![GatewayChannel {
                     kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
@@ -1421,6 +1479,11 @@ mod tests {
         sessions.mark_refresh_requested();
 
         let snapshot = sessions.current_grant_snapshot().expect("grant snapshot");
+        assert_eq!(
+            snapshot.soft_refresh_after_unix_ms,
+            soft_refresh_after_unix_ms
+        );
+        assert_eq!(snapshot.hard_expire_unix_ms, hard_expire_unix_ms);
         assert_eq!(snapshot.ticket_expire_unix_ms, ticket_expire_unix_ms);
         assert!(sessions.last_refresh_requested_at_ms() > 0);
     }

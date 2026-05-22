@@ -242,6 +242,7 @@ mod tests {
                     virtual_gateway: String::new(),
                     virtual_netmask: String::new(),
                     gateway_session_status: String::new(),
+                    gateway_grant_state: String::new(),
                     gateway_endpoint: String::new(),
                     gateway_channel: String::new(),
                     connect_status: String::new(),

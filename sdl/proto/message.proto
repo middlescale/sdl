@@ -64,7 +64,6 @@ message RegistrationResponse {
     repeated GatewayAccessGrant gateway_access_grants = 13;
     uint64 gateway_policy_rev = 14;
     RegistrationErrorReason error_reason = 15;
-    uint64 gateway_policy_epoch = 16;
 }
 enum GatewayChannelKind {
     GATEWAY_CHANNEL_UNKNOWN = 0;
@@ -92,7 +91,8 @@ message GatewayAccessGrant {
     bytes gateway_udp_public_key = 11;
     string gateway_udp_key_id = 12;
     string gateway_id = 13;
-    uint64 policy_epoch = 14;
+    int64 soft_refresh_after_unix_ms = 14;
+    int64 hard_expire_unix_ms = 15;
 }
 message RefreshGatewayGrantRequest {
     fixed32 virtual_ip = 1;
@@ -100,7 +100,13 @@ message RefreshGatewayGrantRequest {
     uint64 last_session_id = 3;
     uint64 last_policy_rev = 4;
     bool force_reissue = 5;
-    uint64 last_policy_epoch = 6;
+}
+enum RefreshGatewayGrantResult {
+    REFRESH_GATEWAY_GRANT_RESULT_UNSPECIFIED = 0;
+    REFRESH_GATEWAY_GRANT_RESULT_UPDATED = 1;
+    REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE = 2;
+    REFRESH_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE = 3;
+    REFRESH_GATEWAY_GRANT_RESULT_REVOKED = 4;
 }
 message RefreshGatewayGrantResponse {
     bool has_update = 1;
@@ -108,7 +114,7 @@ message RefreshGatewayGrantResponse {
     string reason = 3;
     repeated GatewayAccessGrant gateway_access_grants = 4;
     uint64 gateway_policy_rev = 5;
-    uint64 gateway_policy_epoch = 6;
+    RefreshGatewayGrantResult result = 6;
 }
 message GatewayTicketClaims {
     string ticket_id = 1;
@@ -123,7 +129,6 @@ message GatewayTicketClaims {
     int64 expire_unix_ms = 10;
     uint32 lease_cap_secs = 11;
     uint32 grace_cap_secs = 12;
-    uint64 policy_epoch = 13;
 }
 message SignedGatewayTicket {
     string alg = 1;
@@ -273,7 +278,6 @@ message DeviceList {
     repeated DeviceInfo device_info_list = 2;
     repeated GatewayAccessGrant gateway_access_grants = 3;
     uint64 gateway_policy_rev = 4;
-    uint64 gateway_policy_epoch = 5;
 }
 
 message PunchInfo {

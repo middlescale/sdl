@@ -51,7 +51,6 @@ pub struct SharedDataPlane {
     pub peer_crypto: Arc<PeerCryptoManager>,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub gateway_sessions: GatewaySessions,
-    pub gateway_grant_policy_epoch: Arc<AtomicU64>,
     pub gateway_grant_policy_rev: Arc<AtomicU64>,
     pub route_manager: RouteManager,
 }
@@ -285,6 +284,7 @@ impl ControlSession {
             let mut peer_state = self.data_plane.peer_state.lock();
             peer_state.epoch = 0;
         }
+        self.data_plane.gateway_grant_policy_rev.store(0, Ordering::Relaxed);
         self.clear_negotiated_capabilities();
         self.data_plane.route_manager.clear_peer(&CONTROL_VIP);
         log::warn!("{reason}");
@@ -548,10 +548,6 @@ impl ControlSession {
             virtual_ip,
             device_id: self.config.device_id.clone(),
             last_session_id: snapshot.as_ref().map(|v| v.session_id).unwrap_or(0),
-            last_policy_epoch: self
-                .data_plane
-                .gateway_grant_policy_epoch
-                .load(Ordering::Relaxed),
             last_policy_rev: self
                 .data_plane
                 .gateway_grant_policy_rev
@@ -792,6 +788,8 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
     };
     let now_ms = crate::handle::now_time() as i64;
     let Some(force_reissue) = gateway_grant_refresh_mode(
+        snapshot.soft_refresh_after_unix_ms,
+        snapshot.hard_expire_unix_ms,
         snapshot.ticket_expire_unix_ms,
         gateway_sessions.last_refresh_requested_at_ms(),
         now_ms,
@@ -816,6 +814,8 @@ fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions:
 }
 
 fn gateway_grant_refresh_mode(
+    soft_refresh_after_unix_ms: i64,
+    hard_expire_unix_ms: i64,
     ticket_expire_unix_ms: i64,
     last_refresh_requested_at_ms: i64,
     now_ms: i64,
@@ -826,10 +826,19 @@ fn gateway_grant_refresh_mode(
     {
         return None;
     }
-    if ticket_expire_unix_ms <= 0 {
+    let hard_expire_unix_ms = hard_expire_unix_ms.max(ticket_expire_unix_ms);
+    if hard_expire_unix_ms <= 0 {
         return Some(true);
     }
-    if ticket_expire_unix_ms - now_ms > 30_000 {
+    if now_ms >= hard_expire_unix_ms {
+        return Some(true);
+    }
+    let refresh_after_unix_ms = if soft_refresh_after_unix_ms > 0 {
+        soft_refresh_after_unix_ms
+    } else {
+        hard_expire_unix_ms.saturating_sub(30_000)
+    };
+    if now_ms < refresh_after_unix_ms {
         return None;
     }
     Some(false)
@@ -866,16 +875,34 @@ mod tests {
 
     #[test]
     fn gateway_grant_refresh_mode_requests_refresh_near_expiry() {
-        assert_eq!(gateway_grant_refresh_mode(25_000, 0, 0), Some(false));
+        assert_eq!(
+            gateway_grant_refresh_mode(25_000, 120_000, 120_000, 0, 25_000),
+            Some(false)
+        );
     }
 
     #[test]
     fn gateway_grant_refresh_mode_forces_reissue_when_ticket_missing() {
-        assert_eq!(gateway_grant_refresh_mode(0, 0, 10_000), Some(true));
+        assert_eq!(gateway_grant_refresh_mode(0, 0, 0, 0, 10_000), Some(true));
     }
 
     #[test]
     fn gateway_grant_refresh_mode_respects_retry_cooldown() {
-        assert_eq!(gateway_grant_refresh_mode(10_000, 6_000, 10_000), None);
+        assert_eq!(
+            gateway_grant_refresh_mode(5_000, 120_000, 120_000, 6_000, 10_000),
+            None
+        );
+    }
+
+    #[test]
+    fn gateway_grant_refresh_mode_waits_until_soft_refresh_boundary() {
+        assert_eq!(
+            gateway_grant_refresh_mode(50_000, 120_000, 120_000, 0, 49_999),
+            None
+        );
+        assert_eq!(
+            gateway_grant_refresh_mode(50_000, 120_000, 120_000, 0, 50_000),
+            Some(false)
+        );
     }
 }

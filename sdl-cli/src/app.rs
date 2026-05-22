@@ -144,6 +144,7 @@ impl ServiceManager {
             virtual_gateway: String::new(),
             virtual_netmask: String::new(),
             gateway_session_status: "stopped".to_string(),
+            gateway_grant_state: "not-configured".to_string(),
             gateway_endpoint: String::new(),
             gateway_channel: String::new(),
             connect_status: "Stopped".to_string(),

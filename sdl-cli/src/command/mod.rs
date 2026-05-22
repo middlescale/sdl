@@ -1,5 +1,5 @@
 use sdl::core::Sdl;
-use sdl::data_plane::gateway_session::{GatewaySessionPhase, GatewaySessionSummary};
+use sdl::data_plane::gateway_session::GatewaySessionSummary;
 use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
@@ -16,27 +16,16 @@ mod ipc;
 pub mod server;
 pub mod service_state;
 
-const CONTROL_DESTINATION: &str = "CONTROL";
-const CONTROL_VIP_STR: &str = "0.0.0.1";
-
-fn gateway_status_label(summary: &GatewaySessionSummary) -> String {
+fn gateway_grant_state_label(summary: &GatewaySessionSummary) -> String {
     if !summary.configured {
-        return "not-configured".to_string();
-    }
-    match summary.phase {
-        GatewaySessionPhase::Connected => {
-            if summary.reauth_required {
-                "reauth-required".to_string()
-            } else {
-                "connected".to_string()
-            }
-        }
-        GatewaySessionPhase::Grace => "grace".to_string(),
-        GatewaySessionPhase::Stale => "stale".to_string(),
-        GatewaySessionPhase::Expired => "expired".to_string(),
-        GatewaySessionPhase::Disconnected => "disconnected".to_string(),
+        "not-configured".to_string()
+    } else {
+        summary.grant_state.as_str().to_string()
     }
 }
+
+const CONTROL_DESTINATION: &str = "CONTROL";
+const CONTROL_VIP_STR: &str = "0.0.0.1";
 
 pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
     let route_table = vnt.route_states();
@@ -282,18 +271,29 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
-    let gateway_session_status = gateway_status_label(&gateway_summary);
+    let gateway_session_status = if !gateway_summary.configured {
+        "not-configured".to_string()
+    } else if gateway_summary.authenticated {
+        if gateway_summary.reauth_required {
+            "reauth-required".to_string()
+        } else {
+            "connected".to_string()
+        }
+    } else {
+        "disconnected".to_string()
+    };
     let gateway_endpoint = gateway_summary
         .endpoint
         .map(|endpoint| endpoint.to_string())
         .unwrap_or_default();
     let gateway_channel = if gateway_summary.configured {
-        gateway_summary.channel_name
+        gateway_summary.channel_name.clone()
     } else {
         String::new()
     };
+    let gateway_grant_state = gateway_grant_state_label(&gateway_summary);
     let connect_status = format!("{:?}", vnt.connection_status());
-    let data_plane_status = if gateway_summary.phase.is_live() {
+    let data_plane_status = if gateway_summary.authenticated {
         "gateway-available".to_string()
     } else if vnt
         .route_states()
@@ -340,6 +340,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
         virtual_gateway,
         virtual_netmask,
         gateway_session_status,
+        gateway_grant_state,
         gateway_endpoint,
         gateway_channel,
         connect_status,
@@ -362,20 +363,34 @@ pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
     vnt.gateway_session_summaries()
         .into_iter()
         .enumerate()
-        .map(|(index, summary)| GatewayItem {
-            status: gateway_status_label(&summary),
-            gateway_id: if summary.gateway_id.is_empty() {
-                format!("gateway-{}", index + 1)
-            } else {
-                summary.gateway_id
-            },
-            endpoint: summary
-                .endpoint
-                .map(|endpoint| endpoint.to_string())
-                .unwrap_or_default(),
-            channel: summary.channel_name,
-            rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
-            active: summary.active,
+        .map(|(index, summary)| {
+            let grant_state = gateway_grant_state_label(&summary);
+            GatewayItem {
+                gateway_id: if summary.gateway_id.is_empty() {
+                    format!("gateway-{}", index + 1)
+                } else {
+                    summary.gateway_id
+                },
+                endpoint: summary
+                    .endpoint
+                    .map(|endpoint| endpoint.to_string())
+                    .unwrap_or_default(),
+                channel: summary.channel_name,
+                status: if !summary.configured {
+                    "not-configured".to_string()
+                } else if summary.authenticated {
+                    if summary.reauth_required {
+                        "reauth-required".to_string()
+                    } else {
+                        "connected".to_string()
+                    }
+                } else {
+                    "disconnected".to_string()
+                },
+                grant_state,
+                rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
+                active: summary.active,
+            }
         })
         .collect()
 }
@@ -429,7 +444,13 @@ pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
         peer_items.push(PeerTrafficItem {
             name: "gateways".to_string(),
             virtual_ip: gateway_vip.to_string(),
-            status: gateway_status_label(&gateway_summary),
+            status: if !gateway_summary.configured {
+                "not-configured".to_string()
+            } else if gateway_summary.authenticated {
+                "connected".to_string()
+            } else {
+                "disconnected".to_string()
+            },
             up_total: vnt.gateway_up_stream(),
             down_total: vnt.gateway_down_stream(),
         });
