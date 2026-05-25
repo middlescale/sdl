@@ -21,6 +21,7 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
 use crate::tun_tap_device::vnt_device::write_full_sync_device;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
+use crate::util::local_dns::LocalDnsResolution;
 use crate::util::{PeerCryptoManager, StopManager};
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
@@ -189,16 +190,44 @@ pub(crate) fn handle(
     }
     let src_ip = ipv4_packet.source_ip();
     let mut dest_ip = ipv4_packet.destination_ip();
-    if ipv4_packet.protocol() == Protocol::Udp && data_channel.is_dns_service_ip(&dest_ip) {
-        let udp_packet = UdpPacket::new(src_ip, dest_ip, ipv4_packet.payload())?;
-        if udp_packet.destination_port() == 53 && !udp_packet.payload().is_empty() {
-            data_channel.proxy_dns_query(
-                src_ip,
-                dest_ip,
-                udp_packet.source_port(),
-                udp_packet.payload(),
-            )?;
-            return Ok(());
+    if ipv4_packet.protocol() == Protocol::Udp {
+        if data_channel.is_dns_service_ip(&dest_ip) || dest_ip == current_device.virtual_gateway {
+            let udp_packet = UdpPacket::new(src_ip, dest_ip, ipv4_packet.payload())?;
+            if udp_packet.destination_port() == 53 && !udp_packet.payload().is_empty() {
+                if let Ok(runtime) = data_channel.runtime() {
+                    let profile = runtime.dns_profile.read().clone();
+                    let decision = {
+                        let guard = peer_state.lock();
+                        crate::util::local_dns::resolve_local_query(
+                            udp_packet.payload(),
+                            profile.as_ref(),
+                            &guard.devices,
+                        )
+                    };
+                    if let LocalDnsResolution::Answered(dns_response_payload) = decision {
+                        let pending = crate::core::PendingDnsQuery {
+                            client_ip: src_ip,
+                            dns_server_ip: dest_ip,
+                            client_port: udp_packet.source_port(),
+                            created_at_ms: 0,
+                        };
+                        if let Ok(response_packet) = crate::util::dns_tunnel::build_dns_response_packet(
+                            &pending,
+                            &dns_response_payload,
+                        ) {
+                            write_full_sync_device(device_writer, &response_packet, "local dns response")?;
+                            return Ok(());
+                        }
+                    }
+                }
+                data_channel.proxy_dns_query(
+                    src_ip,
+                    dest_ip,
+                    udp_packet.source_port(),
+                    udp_packet.payload(),
+                )?;
+                return Ok(());
+            }
         }
     }
     let mut net_packet = NetPacket::new0(data_len, buf)?;

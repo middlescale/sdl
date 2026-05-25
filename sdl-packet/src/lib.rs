@@ -1,8 +1,5 @@
 use std::net::Ipv4Addr;
 
-use byteorder::BigEndian;
-use byteorder::ReadBytesExt;
-
 pub mod arp;
 pub mod ethernet;
 pub mod icmp;
@@ -69,19 +66,7 @@ unsigned short getChecksum(unsigned short * iphead, int count)
 }
  */
 pub fn cal_checksum(buffer: &[u8]) -> u16 {
-    use std::io::Cursor;
-    let mut sum = 0;
-    let mut buffer = Cursor::new(buffer);
-    while let Ok(value) = buffer.read_u16::<BigEndian>() {
-        sum += u32::from(value);
-    }
-    if let Ok(l) = buffer.read_u8() {
-        sum += u32c(l, 0);
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    !sum as u16
+    !fold_checksum(sum_words(buffer)) as u16
 }
 
 /// ipv4上层协议校验和计算方式
@@ -102,7 +87,6 @@ pub fn ipv4_cal_checksum(
     dest_ip: &Ipv4Addr,
     protocol: u8,
 ) -> u16 {
-    use std::io::Cursor;
     let length = buffer.len();
     let mut sum = 0;
     let src_ip = src_ip.octets();
@@ -113,17 +97,7 @@ pub fn ipv4_cal_checksum(
     sum += u32c(dest_ip[2], dest_ip[3]);
     sum += u32c(0, protocol);
     sum += length as u32;
-    let mut buffer = Cursor::new(buffer);
-    while let Ok(value) = buffer.read_u16::<BigEndian>() {
-        sum += u32::from(value);
-    }
-    if let Ok(l) = buffer.read_u8() {
-        sum += u32c(l, 0);
-    }
-    while sum >> 16 != 0 {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    !sum as u16
+    !fold_checksum(sum + sum_words(buffer)) as u16
 }
 
 #[inline]
@@ -131,13 +105,53 @@ fn u32c(x: u8, y: u8) -> u32 {
     ((x as u32) << 8) | y as u32
 }
 
+fn sum_words(buffer: &[u8]) -> u32 {
+    let mut sum = 0u32;
+    let mut chunks = buffer.chunks_exact(2);
+    for chunk in &mut chunks {
+        sum += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    }
+    if let [last] = chunks.remainder() {
+        sum += u32c(*last, 0);
+    }
+    sum
+}
+
+fn fold_checksum(mut sum: u32) -> u32 {
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn it_works() {
-        let sum = cal_checksum(&[255, 255]);
-        println!("{:?}", sum);
+    fn cal_checksum_handles_odd_lengths() {
+        assert_eq!(cal_checksum(&[0x12, 0x34, 0x56]), !0x6834u16);
+    }
+
+    #[test]
+    fn ipv4_cal_checksum_handles_odd_lengths() {
+        let payload = [0x12, 0x34, 0x56];
+        let checksum = ipv4_cal_checksum(
+            &payload,
+            &Ipv4Addr::new(10, 26, 0, 53),
+            &Ipv4Addr::new(10, 26, 0, 3),
+            17,
+        );
+        let expected = !fold_checksum(
+            u32c(10, 26)
+                + u32c(0, 53)
+                + u32c(10, 26)
+                + u32c(0, 3)
+                + u32c(0, 17)
+                + payload.len() as u32
+                + 0x1234
+                + 0x5600,
+        ) as u16;
+        assert_eq!(checksum, expected);
     }
 }

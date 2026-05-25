@@ -173,7 +173,7 @@ impl DataChannel {
         runtime.udp_channel.send_by_key(buf.buffer(), route_key)
     }
 
-    fn runtime(&self) -> io::Result<Arc<SdlRuntime>> {
+    pub(crate) fn runtime(&self) -> io::Result<Arc<SdlRuntime>> {
         self.runtime.upgrade().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "data channel runtime dropped")
         })
