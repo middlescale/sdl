@@ -31,6 +31,7 @@ pub struct RouteManager {
     direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
     heartbeat_interval: Duration,
     stale_direct_timeout: Duration,
+    pub(crate) peer_state: Option<Arc<Mutex<crate::handle::PeerState>>>,
 }
 
 #[derive(Clone)]
@@ -59,6 +60,7 @@ impl RouteManager {
         peer_encrypt: bool,
         heartbeat_interval: Duration,
         stale_direct_timeout: Duration,
+        peer_state: Arc<Mutex<crate::handle::PeerState>>,
     ) -> anyhow::Result<Self> {
         let manager = Self {
             route_table,
@@ -69,6 +71,7 @@ impl RouteManager {
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval,
             stale_direct_timeout,
+            peer_state: Some(peer_state),
         };
         manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
         manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
@@ -85,6 +88,7 @@ impl RouteManager {
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval: Duration::from_secs(10),
             stale_direct_timeout: Duration::from_secs(30),
+            peer_state: None,
         }
     }
 
@@ -105,11 +109,31 @@ impl RouteManager {
     }
 
     pub fn add_path_if_absent(&self, vip: Ipv4Addr, route: Route) {
+        if self.should_suppress_p2p(&vip, &route) {
+            return;
+        }
         self.route_table.add_route_if_absent(vip, route)
     }
 
     pub fn add_path(&self, vip: Ipv4Addr, route: Route) {
+        if self.should_suppress_p2p(&vip, &route) {
+            return;
+        }
         self.route_table.add_route(vip, route)
+    }
+
+    fn should_suppress_p2p(&self, vip: &Ipv4Addr, route: &Route) -> bool {
+        if !route.is_p2p() {
+            return false;
+        }
+        if let Some(peer_state) = &self.peer_state {
+            if let Some(peer) = peer_state.lock().devices.get(vip) {
+                if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
@@ -664,6 +688,36 @@ mod tests {
             .expect("heartbeat packets");
 
         assert_eq!(packets.len(), 2);
+    }
+
+    #[test]
+    fn suppress_p2p_when_peer_is_relay() {
+        use crate::handle::{PeerDeviceInfo, PeerState};
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let mut manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 10);
+        let peer_info = PeerDeviceInfo::new(
+            peer,
+            "peer-10".to_string(),
+            0,
+            "peer-10".to_string(),
+            vec![],
+            vec![],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY,
+        );
+        let peer_state = Arc::new(Mutex::new(PeerState {
+            epoch: 1,
+            devices: std::collections::HashMap::from([(peer, peer_info)]),
+        }));
+        manager.peer_state = Some(peer_state);
+
+        // Try to add a p2p route (metric = 1)
+        manager.add_path(peer, route(1, 1010));
+        assert!(table.get_first_route(&peer).is_none());
+
+        // Try to add a relay route (metric = 2)
+        manager.add_path(peer, route(2, 1011));
+        assert!(table.get_first_route(&peer).is_some());
     }
 
     fn kind_name(idle: &StaleDirectRoute) -> &'static str {

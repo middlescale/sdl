@@ -37,6 +37,7 @@ pub struct PeerDeviceInfo {
     pub device_id: String,
     pub device_pub_key: Vec<u8>,
     pub online_kx_pub: Vec<u8>,
+    pub preferred_channel_mode: crate::proto::message::ChannelMode,
 }
 
 impl PeerDeviceInfo {
@@ -47,6 +48,7 @@ impl PeerDeviceInfo {
         device_id: String,
         device_pub_key: Vec<u8>,
         online_kx_pub: Vec<u8>,
+        preferred_channel_mode: crate::proto::message::ChannelMode,
     ) -> Self {
         Self {
             virtual_ip,
@@ -55,6 +57,7 @@ impl PeerDeviceInfo {
             device_id,
             device_pub_key,
             online_kx_pub,
+            preferred_channel_mode,
         }
     }
 }

@@ -161,6 +161,7 @@ impl Sdl {
             true,
             std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
             std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
+            peer_state.clone(),
         )?;
         let control_session = ControlSession::new(
             Http3Channel::new(config.server_address, &config.server_address_str)?,

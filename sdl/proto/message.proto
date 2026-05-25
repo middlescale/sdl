@@ -264,6 +264,12 @@ message DebugWatchEvent {
     int64 event_unix_ms = 4;
     string payload_json = 5;
 }
+enum ChannelMode {
+    CHANNEL_MODE_AUTO = 0;
+    CHANNEL_MODE_DIRECT = 1;
+    CHANNEL_MODE_RELAY = 2;
+}
+
 message DeviceInfo {
     string name = 1;
     fixed32 virtual_ip = 2;
@@ -271,6 +277,7 @@ message DeviceInfo {
     string device_id = 7;
     bytes device_pub_key = 8;
     bytes online_kx_pub = 9;
+    ChannelMode preferred_channel_mode = 10;
 }
 
 message DeviceList {
@@ -394,6 +401,7 @@ message ClientStatusInfo {
     repeated PunchEndpoint public_udp_endpoints = 10;
     PunchTriggerReason punch_trigger_reason = 11;
     repeated PunchEndpoint local_udp_endpoints = 12;
+    ChannelMode preferred_channel_mode = 13;
 }
 message RouteItem {
     fixed32 next_ip = 1;

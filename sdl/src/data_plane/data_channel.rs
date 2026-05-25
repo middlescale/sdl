@@ -26,6 +26,11 @@ impl DataChannel {
 
     pub fn direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
         let runtime = self.runtime.upgrade()?;
+        if let Some(peer) = runtime.peer_state.lock().devices.get(vip) {
+            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                return None;
+            }
+        }
         if runtime.route_manager().use_channel_type().is_only_relay() {
             None
         } else {
@@ -142,8 +147,19 @@ impl DataChannel {
     }
 
     fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {
+        let use_channel_type = {
+            if let Some(peer) = runtime.peer_state.lock().devices.get(vip) {
+                if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                    UseChannelType::Relay
+                } else {
+                    runtime.route_manager().use_channel_type()
+                }
+            } else {
+                runtime.route_manager().use_channel_type()
+            }
+        };
         select_data_path(
-            runtime.route_manager().use_channel_type(),
+            use_channel_type,
             runtime.route_manager().direct_route(vip),
         )
     }

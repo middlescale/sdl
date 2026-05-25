@@ -359,6 +359,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     info.device_id,
                     info.device_pub_key,
                     info.online_kx_pub,
+                    info.preferred_channel_mode.enum_value_or_default(),
                 )
             })
             .collect();
@@ -1113,6 +1114,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         PunchSessionPhase::PunchPhaseWaiting,
                         "coalesced onto active punch session",
                     )
+                } else if self.runtime.peer_state.lock().devices.get(&peer_ip).map_or(false, |p| p.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY) {
+                    (
+                        false,
+                        PunchSessionPhase::PunchPhaseFailed,
+                        "peer in forced relay mode",
+                    )
                 } else {
                     let accepted = self
                         .runtime
@@ -1272,6 +1279,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                     reset_vips.insert(*previous_vip);
                 }
+            }
+            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                reset_vips.insert(peer.virtual_ip);
             }
         }
         for vip in &reset_vips {
@@ -1871,6 +1881,7 @@ mod tests {
             "peer-3".to_string(),
             vec![1],
             vec![2],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
         );
         let mut peer_state = crate::handle::PeerState {
             epoch: 83,
@@ -1883,6 +1894,7 @@ mod tests {
             "peer-4".to_string(),
             vec![3],
             vec![4],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
         );
         let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer)]);
 
@@ -1906,6 +1918,7 @@ mod tests {
             "peer-3".to_string(),
             vec![1],
             vec![2],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
         );
         let next_peer = PeerDeviceInfo::new(
             Ipv4Addr::new(10, 26, 0, 4),
@@ -1914,6 +1927,7 @@ mod tests {
             "peer-4".to_string(),
             vec![3],
             vec![4],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
         );
         let mut peer_state = crate::handle::PeerState {
             epoch: 63,
