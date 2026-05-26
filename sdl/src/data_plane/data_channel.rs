@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route_state::RouteKind;
 use crate::data_plane::use_channel_type::UseChannelType;
 
 #[derive(Clone)]
@@ -56,11 +57,37 @@ impl DataChannel {
         &self,
         buf: &crate::protocol::NetPacket<B>,
         vip: &Ipv4Addr,
-    ) -> io::Result<()> {
+    ) -> io::Result<RouteKind> {
         let runtime = self.runtime()?;
         match self.select_path(runtime.as_ref(), vip) {
-            Some(DataPath::P2pUdp(route_key)) => self.send_udp(runtime.as_ref(), buf, route_key),
-            Some(DataPath::GatewayRelay) => runtime.gateway_sessions.send_relay(buf),
+            Some(DataPath::P2pUdp(route_key)) => match self.send_udp(runtime.as_ref(), buf, route_key) {
+                Ok(()) => Ok(RouteKind::P2p),
+                Err(err) => {
+                    runtime.route_manager().mark_path_failed(vip, route_key);
+                    if self.allows_gateway_relay() {
+                        log::warn!(
+                            "p2p send failed for {}, removed route {:?}, falling back to relay: {:?}",
+                            vip,
+                            route_key,
+                            err
+                        );
+                        runtime.gateway_sessions.send_relay(buf)?;
+                        Ok(RouteKind::GatewayRelay)
+                    } else {
+                        log::warn!(
+                            "p2p send failed for {}, removed route {:?}, relay fallback unavailable: {:?}",
+                            vip,
+                            route_key,
+                            err
+                        );
+                        Err(err)
+                    }
+                }
+            },
+            Some(DataPath::GatewayRelay) => {
+                runtime.gateway_sessions.send_relay(buf)?;
+                Ok(RouteKind::GatewayRelay)
+            }
             None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("peer route not found: {}", vip),

@@ -612,6 +612,18 @@ impl ControlSession {
         let routes = self.data_plane.route_manager.snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
+        let mode = self.data_plane.route_manager.use_channel_type();
+        message.preferred_channel_mode = protobuf::EnumOrUnknown::new(match mode {
+            crate::data_plane::use_channel_type::UseChannelType::All => {
+                crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO
+            }
+            crate::data_plane::use_channel_type::UseChannelType::P2p => {
+                crate::proto::message::ChannelMode::CHANNEL_MODE_DIRECT
+            }
+            crate::data_plane::use_channel_type::UseChannelType::Relay => {
+                crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+            }
+        });
         for (ip, _) in routes {
             let mut item = RouteItem::new();
             item.next_ip = ip.into();

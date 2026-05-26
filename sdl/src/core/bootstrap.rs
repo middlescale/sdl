@@ -432,13 +432,11 @@ impl Sdl {
         self.runtime
             .route_manager()
             .set_use_channel_type(use_channel_type);
-        if previous.is_only_relay() && !use_channel_type.is_only_relay() {
-            self.runtime
-                .control_session
-                .trigger_status_report_with_nat_ready(
-                    crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
-                );
-        }
+        self.runtime
+            .control_session
+            .trigger_status_report_with_nat_ready(
+                crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
+            );
     }
     pub fn request_device_auth(
         &self,

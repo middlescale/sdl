@@ -224,6 +224,16 @@ impl RouteManager {
         self.route_table.remove_route(vip, route_key)
     }
 
+    pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
+        let direct_before = self.direct_path_count(vip);
+        self.remove_path(vip, route_key);
+        if direct_before > 0 && self.direct_path_count(vip) == 0 {
+            if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
+                handler(*vip);
+            }
+        }
+    }
+
     pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
         self.route_table.update_read_time(vip, route_key)
     }
@@ -621,6 +631,50 @@ mod tests {
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
 
         assert_eq!(*timeouts.lock(), vec![peer]);
+    }
+
+    #[test]
+    fn mark_path_failed_triggers_handler_when_last_direct_route_is_removed() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 16);
+        let failed_route = route(1, 2016);
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
+        {
+            let timeouts = timeouts.clone();
+            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
+                timeouts.lock().push(ip);
+            }));
+        }
+        table.add_route(peer, failed_route);
+
+        manager.mark_path_failed(&peer, failed_route.route_key());
+
+        assert!(table.get_routes(&peer).is_none());
+        assert_eq!(*timeouts.lock(), vec![peer]);
+    }
+
+    #[test]
+    fn mark_path_failed_keeps_handler_silent_when_other_direct_route_remains() {
+        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 17);
+        let first_route = route(1, 2017);
+        let second_route = route(1, 2018);
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
+        {
+            let timeouts = timeouts.clone();
+            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
+                timeouts.lock().push(ip);
+            }));
+        }
+        table.add_route(peer, first_route);
+        table.add_route(peer, second_route);
+
+        manager.mark_path_failed(&peer, first_route.route_key());
+
+        assert_eq!(manager.direct_path_count(&peer), 1);
+        assert!(timeouts.lock().is_empty());
     }
 
     #[test]

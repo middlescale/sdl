@@ -12,6 +12,7 @@ use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
+use crate::data_plane::route_state::RouteKind;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
@@ -75,7 +76,6 @@ pub fn start(
 
 fn broadcast(
     channel: &DataChannel,
-    gateway_sessions: &GatewaySessions,
     net_packet: &NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
     peer_state: &Mutex<crate::handle::PeerState>,
@@ -113,30 +113,16 @@ fn broadcast(
         };
         cipher.encrypt_ipv4(&mut peer_packet)?;
 
-        if let Some(route) = channel.direct_route(&peer_ip) {
-            if let Err(err) = channel.send_p2p_route(&peer_packet, route) {
-                if channel.allows_gateway_relay() {
-                    log::debug!(
-                        "p2p broadcast send failed for {}, fallback relay: {:?}",
-                        peer_ip,
-                        err
-                    );
-                    gateway_sessions.send_relay(&peer_packet)?;
-                    channel.record_logical_up_traffic(peer_packet.buffer().len());
-                    channel.record_gateway_up_traffic(peer_packet.buffer().len());
-                    channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
-                } else {
-                    return Err(err.into());
-                }
-            } else {
+        match channel.send_to_peer(&peer_packet, &peer_ip)? {
+            RouteKind::P2p => {
                 channel.record_logical_up_traffic(peer_packet.buffer().len());
                 channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
             }
-        } else if channel.allows_gateway_relay() {
-            gateway_sessions.send_relay(&peer_packet)?;
-            channel.record_logical_up_traffic(peer_packet.buffer().len());
-            channel.record_gateway_up_traffic(peer_packet.buffer().len());
-            channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
+            RouteKind::GatewayRelay | RouteKind::Relay => {
+                channel.record_logical_up_traffic(peer_packet.buffer().len());
+                channel.record_gateway_up_traffic(peer_packet.buffer().len());
+                channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
+            }
         }
     }
     Ok(())
@@ -295,7 +281,6 @@ pub(crate) fn handle(
         // 广播 发送到直连目标
         broadcast(
             data_channel,
-            gateway_sessions,
             &net_packet,
             &current_device,
             peer_state,
@@ -306,32 +291,19 @@ pub(crate) fn handle(
 
     let cipher = peer_crypto.send_cipher(&dest_ip)?;
     cipher.encrypt_ipv4(&mut net_packet)?;
-    if let Some(route) = data_channel.direct_route(&dest_ip) {
-        if let Err(err) = data_channel.send_p2p_route(&net_packet, route) {
-            if data_channel.allows_gateway_relay() {
-                log::debug!("p2p send failed for {}, fallback relay: {:?}", dest_ip, err);
-                gateway_sessions.send_relay(&net_packet)?;
-                data_channel.record_logical_up_traffic(net_packet.buffer().len());
-                data_channel.record_gateway_up_traffic(net_packet.buffer().len());
-                data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
-            } else {
-                return Err(err.into());
-            }
-        } else {
+    match data_channel.send_to_peer(&net_packet, &dest_ip) {
+        Ok(RouteKind::P2p) => {
             data_channel.record_logical_up_traffic(net_packet.buffer().len());
             data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
         }
-    } else if data_channel.allows_gateway_relay() {
-        gateway_sessions.send_relay(&net_packet)?;
-        data_channel.record_logical_up_traffic(net_packet.buffer().len());
-        data_channel.record_gateway_up_traffic(net_packet.buffer().len());
-        data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
-    } else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("peer route not found: {}", dest_ip),
-        )
-        .into());
+        Ok(RouteKind::GatewayRelay | RouteKind::Relay) => {
+            data_channel.record_logical_up_traffic(net_packet.buffer().len());
+            data_channel.record_gateway_up_traffic(net_packet.buffer().len());
+            data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
+        }
+        Err(err) => {
+            return Err(err.into());
+        }
     }
     Ok(())
 }
