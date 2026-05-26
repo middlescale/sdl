@@ -196,7 +196,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                 HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {
                 //没有加密，则发送注册请求
-                self.register(current_device, route_key)?;
+                self.register(current_device, route_key, false)?;
             }
 
             return Ok(());
@@ -878,7 +878,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     ack.user_id, ack.group, ack.device_id
                 );
                 self.callback.success();
-                self.register(current_device, route_key)?;
+                self.register(current_device, route_key, true)?;
             }
             service_packet::Protocol::DeviceAuthChallenge => {
                 let challenge = DeviceAuthChallenge::parse_from_bytes(net_packet.payload())
@@ -1339,6 +1339,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         current_device: &CurrentDeviceInfo,
         _route_key: RouteKey,
+        allow_ip_change: bool,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
             log::info!("已连接的不需要注册，{:?}", self.runtime.config);
@@ -1347,7 +1348,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         log::info!("发送注册请求，{:?}", self.runtime.config);
         self.runtime
             .control_session
-            .send_registration_request(false, false)?;
+            .send_registration_request(false, allow_ip_change)?;
         Ok(())
     }
     fn error(

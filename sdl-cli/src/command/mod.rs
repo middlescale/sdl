@@ -309,6 +309,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
         UseChannelType::P2p => "p2p".to_string(),
         UseChannelType::All => "auto".to_string(),
     };
+    let (auth_status, auth_detail) = describe_auth_state(&service_state);
     let nat_type = format!("{:?}", nat_info.nat_type);
     let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();
     let public_ips = public_ips.join(",");
@@ -346,6 +347,8 @@ pub fn command_info(vnt: &Sdl) -> Info {
         connect_status,
         data_plane_status,
         auth_pending: service_state.auth_pending,
+        auth_status,
+        auth_detail,
         channel_policy,
         last_error: service_state.last_error,
         nat_type,
@@ -356,6 +359,52 @@ pub fn command_info(vnt: &Sdl) -> Info {
         in_ips,
         out_ips,
         udp_listen_addr,
+    }
+}
+
+pub(crate) fn describe_auth_state(
+    service_state: &service_state::LocalServiceState,
+) -> (String, Option<String>) {
+    let authenticated_identity = match (
+        service_state.authenticated_user_id.as_deref(),
+        service_state.authenticated_group.as_deref(),
+    ) {
+        (Some(user_id), Some(group)) => Some(format!("last authenticated as {} in {}", user_id, group)),
+        (Some(user_id), None) => Some(format!("last authenticated as {}", user_id)),
+        _ => None,
+    };
+    if service_state.auth_pending {
+        let auth_message = service_state.auth_message.clone();
+        let status = auth_message
+            .as_deref()
+            .map(classify_auth_status)
+            .unwrap_or("auth-required")
+            .to_string();
+        let detail = match (auth_message, authenticated_identity) {
+            (Some(message), Some(identity)) => Some(format!("{message}; {identity}")),
+            (Some(message), None) => Some(message),
+            (None, Some(identity)) => Some(identity),
+            (None, None) => None,
+        };
+        return (status, detail);
+    }
+    if let Some(identity) = authenticated_identity {
+        return ("authenticated".to_string(), Some(identity));
+    }
+    ("unknown".to_string(), None)
+}
+
+fn classify_auth_status(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if message.contains("auth_expired") || message.contains("reauth_required") {
+        "reauth-required"
+    } else if message.contains("auth check failed")
+        || message.contains("not_auth")
+        || message.contains("device_key_mismatch")
+    {
+        "auth-required"
+    } else {
+        "auth-pending"
     }
 }
 

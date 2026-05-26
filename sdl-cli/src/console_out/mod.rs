@@ -87,14 +87,17 @@ pub fn console_info(status: Info) {
         println!("Data plane: {}", style(status.data_plane_status).yellow());
     }
 
-    println!(
-        "Auth pending: {}",
-        if status.auth_pending {
-            style("true").yellow()
-        } else {
-            style("false").green()
-        }
-    );
+    let auth_style = if status.auth_status.eq_ignore_ascii_case("authenticated") {
+        style(status.auth_status.clone()).green()
+    } else if status.auth_status.eq_ignore_ascii_case("unknown") {
+        style(status.auth_status.clone()).yellow()
+    } else {
+        style(status.auth_status.clone()).red()
+    };
+    println!("Authentication: {}", auth_style);
+    if let Some(auth_detail) = &status.auth_detail {
+        println!("Authentication detail: {}", style(auth_detail).yellow());
+    }
     println!("NAT type: {}", style(status.nat_type).green());
     println!("Channel policy: {}", style(status.channel_policy).green());
     if let Some(last_error) = &status.last_error {

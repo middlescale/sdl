@@ -248,6 +248,8 @@ mod tests {
                     connect_status: String::new(),
                     data_plane_status: String::new(),
                     auth_pending: false,
+                    auth_status: String::new(),
+                    auth_detail: None,
                     channel_policy: String::new(),
                     last_error: None,
                     nat_type: String::new(),

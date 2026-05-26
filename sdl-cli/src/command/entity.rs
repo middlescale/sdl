@@ -17,6 +17,8 @@ pub struct Info {
     pub connect_status: String,
     pub data_plane_status: String,
     pub auth_pending: bool,
+    pub auth_status: String,
+    pub auth_detail: Option<String>,
     pub channel_policy: String,
     pub last_error: Option<String>,
     pub nat_type: String,

@@ -126,6 +126,7 @@ impl ServiceManager {
     fn stopped_info(&self) -> Info {
         let config = self.current_config();
         let state = read_service_state().unwrap_or_default();
+        let (auth_status, auth_detail) = crate::command::describe_auth_state(&state);
         let channel_policy = match config.use_channel_type {
             UseChannelType::Relay => "relay".to_string(),
             UseChannelType::P2p => "p2p".to_string(),
@@ -150,6 +151,8 @@ impl ServiceManager {
             connect_status: "Stopped".to_string(),
             data_plane_status: "stopped".to_string(),
             auth_pending: state.auth_pending,
+            auth_status,
+            auth_detail,
             channel_policy,
             last_error: state.last_error,
             nat_type: String::new(),
@@ -256,6 +259,7 @@ impl ServiceManager {
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = false;
+            state.auth_message = None;
             state.last_error = None;
             state.authenticated_user_id = authenticated_user_id.clone();
             state.authenticated_group = authenticated_group.clone();
@@ -418,6 +422,7 @@ impl ServiceCallback {
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = false;
+            state.auth_message = None;
             state.last_error = None;
         });
     }
@@ -505,11 +510,8 @@ impl SdlCallback for ServiceCallback {
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = auth_pending;
-            state.last_error = if auth_pending {
-                None
-            } else {
-                Some(message.clone())
-            };
+            state.auth_message = auth_pending.then_some(message.clone());
+            state.last_error = (!auth_pending).then_some(message.clone());
         });
         if auth_pending {
             println!(
@@ -571,6 +573,7 @@ impl RunningService {
             state.runtime_running = false;
             state.runtime_suspended = false;
             state.auth_pending = false;
+            state.auth_message = None;
             state.last_error = None;
         });
         #[cfg(feature = "port_mapping")]

@@ -8,6 +8,7 @@ pub struct LocalServiceState {
     pub runtime_running: bool,
     pub runtime_suspended: bool,
     pub auth_pending: bool,
+    pub auth_message: Option<String>,
     pub last_error: Option<String>,
     pub authenticated_user_id: Option<String>,
     pub authenticated_group: Option<String>,

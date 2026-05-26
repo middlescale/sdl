@@ -129,6 +129,8 @@ pub fn device_rename_request_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::message::RegistrationRequest;
+    use protobuf::Message;
 
     #[test]
     fn device_rename_request_uses_registered_virtual_ip_as_source() {
@@ -143,5 +145,45 @@ mod tests {
 
         assert_eq!(packet.source(), source_ip);
         assert_eq!(packet.destination(), CONTROL_VIP);
+    }
+
+    #[test]
+    fn registration_request_sets_allow_ip_change_and_virtual_ip() {
+        let virtual_ip = Ipv4Addr::new(10, 26, 0, 3);
+        let packet = registration_request_packet(
+            "sales.ms.net".to_string(),
+            "dev-1".to_string(),
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            "node-1".to_string(),
+            Some(virtual_ip),
+            false,
+            true,
+        )
+        .unwrap();
+
+        let request = RegistrationRequest::parse_from_bytes(packet.payload()).unwrap();
+        assert_eq!(Ipv4Addr::from(request.virtual_ip), virtual_ip);
+        assert!(request.allow_ip_change);
+        assert!(!request.is_fast);
+    }
+
+    #[test]
+    fn registration_request_defaults_allow_ip_change_to_false() {
+        let packet = registration_request_packet(
+            "sales.ms.net".to_string(),
+            "dev-1".to_string(),
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            "node-1".to_string(),
+            None,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let request = RegistrationRequest::parse_from_bytes(packet.payload()).unwrap();
+        assert_eq!(request.virtual_ip, 0);
+        assert!(!request.allow_ip_change);
     }
 }
