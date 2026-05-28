@@ -24,6 +24,25 @@ fn gateway_grant_state_label(summary: &GatewaySessionSummary) -> String {
     }
 }
 
+fn gateway_status_label(summary: &GatewaySessionSummary) -> &'static str {
+    if !summary.configured {
+        return "not-configured";
+    }
+    if summary.reauth_required {
+        return "reauth-required";
+    }
+    if summary.authenticated {
+        if summary.active {
+            return "connected";
+        }
+        return "standby";
+    }
+    if summary.consecutive_send_failures > 0 {
+        return "reconnecting";
+    }
+    "connecting"
+}
+
 const CONTROL_DESTINATION: &str = "CONTROL";
 const CONTROL_VIP_STR: &str = "0.0.0.1";
 
@@ -271,17 +290,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
-    let gateway_session_status = if !gateway_summary.configured {
-        "not-configured".to_string()
-    } else if gateway_summary.authenticated {
-        if gateway_summary.reauth_required {
-            "reauth-required".to_string()
-        } else {
-            "connected".to_string()
-        }
-    } else {
-        "disconnected".to_string()
-    };
+    let gateway_session_status = gateway_status_label(&gateway_summary).to_string();
     let gateway_endpoint = gateway_summary
         .endpoint
         .map(|endpoint| endpoint.to_string())
@@ -414,6 +423,7 @@ pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
         .enumerate()
         .map(|(index, summary)| {
             let grant_state = gateway_grant_state_label(&summary);
+            let status = gateway_status_label(&summary).to_string();
             GatewayItem {
                 gateway_id: if summary.gateway_id.is_empty() {
                     format!("gateway-{}", index + 1)
@@ -425,17 +435,7 @@ pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
                     .map(|endpoint| endpoint.to_string())
                     .unwrap_or_default(),
                 channel: summary.channel_name,
-                status: if !summary.configured {
-                    "not-configured".to_string()
-                } else if summary.authenticated {
-                    if summary.reauth_required {
-                        "reauth-required".to_string()
-                    } else {
-                        "connected".to_string()
-                    }
-                } else {
-                    "disconnected".to_string()
-                },
+                status,
                 grant_state,
                 rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
                 active: summary.active,

@@ -88,6 +88,7 @@ struct GatewaySessionState {
     grace_secs_hint: u32,
     reauth_required: bool,
     last_rtt_ms: Option<i64>,
+    consecutive_send_failures: u32,
 }
 
 #[derive(Clone)]
@@ -297,6 +298,7 @@ impl GatewaySession {
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = false;
             guard.last_rtt_ms = None;
+            guard.consecutive_send_failures = 0;
         }
         guard.lease_secs_hint = grant.lease_secs;
         guard.grace_secs_hint = grant.grace_secs;
@@ -392,6 +394,7 @@ impl GatewaySession {
             rt_ms: guard.last_rtt_ms,
             active: false,
             grant_phase,
+            consecutive_send_failures: guard.consecutive_send_failures,
         }
     }
 
@@ -422,9 +425,10 @@ impl GatewaySession {
             }),
         );
         if let Err(e) = self.send_packet(&packet) {
-            self.state.lock().authenticated = false;
+            self.record_send_failure();
             return Err(e.into());
         }
+        self.record_send_success();
         Ok(())
     }
 
@@ -452,12 +456,26 @@ impl GatewaySession {
             }
         }
         if let Err(e) = self.send_packet(packet) {
-            self.state.lock().authenticated = false;
+            self.record_send_failure();
             return Err(e);
         }
+        self.record_send_success();
         self.stats
             .record_transport_up(self.endpoint.ip(), packet.buffer().as_ref().len());
         Ok(())
+    }
+
+    fn record_send_failure(&self) {
+        let mut guard = self.state.lock();
+        guard.consecutive_send_failures += 1;
+        if guard.consecutive_send_failures >= 3 {
+            guard.authenticated = false;
+        }
+    }
+
+    fn record_send_success(&self) {
+        let mut guard = self.state.lock();
+        guard.consecutive_send_failures = 0;
     }
 
     fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -480,6 +498,7 @@ impl GatewaySession {
             return;
         }
         guard.authenticated = ack.ok;
+        guard.consecutive_send_failures = 0;
         if ack.ok {
             let now_ms = now_time() as i64;
             if guard.last_hello_unix_ms > 0 && now_ms >= guard.last_hello_unix_ms {
@@ -626,7 +645,8 @@ pub struct GatewaySessionSummary {
     pub reauth_required: bool,
     pub rt_ms: Option<i64>,
     pub active: bool,
-    grant_phase: GatewayGrantPhase,
+    pub grant_phase: GatewayGrantPhase,
+    pub consecutive_send_failures: u32,
 }
 
 #[derive(Default)]
