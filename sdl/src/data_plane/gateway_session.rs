@@ -270,6 +270,8 @@ impl GatewaySession {
 
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
+        let auth_changed = guard.session_id != grant.session_id
+            || guard.ticket != grant.ticket;
         guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
@@ -287,15 +289,17 @@ impl GatewaySession {
             GatewayTransport::Https(_) => "https".to_string(),
             GatewayTransport::Udp(_) => "udp".to_string(),
         };
-        guard.authenticated = false;
-        guard.last_hello_unix_ms = 0;
-        guard.keepalive_secs = 0;
-        guard.lease_expire_unix_ms = 0;
-        guard.grace_expire_unix_ms = 0;
+        if auth_changed {
+            guard.authenticated = false;
+            guard.last_hello_unix_ms = 0;
+            guard.keepalive_secs = 0;
+            guard.lease_expire_unix_ms = 0;
+            guard.grace_expire_unix_ms = 0;
+            guard.reauth_required = false;
+            guard.last_rtt_ms = None;
+        }
         guard.lease_secs_hint = grant.lease_secs;
         guard.grace_secs_hint = grant.grace_secs;
-        guard.reauth_required = false;
-        guard.last_rtt_ms = None;
         let http2_idle_timeout = gateway_http2_idle_timeout(guard.keepalive_secs);
         drop(guard);
         match &self.channel {
@@ -1486,5 +1490,78 @@ mod tests {
         assert_eq!(snapshot.hard_expire_unix_ms, hard_expire_unix_ms);
         assert_eq!(snapshot.ticket_expire_unix_ms, ticket_expire_unix_ms);
         assert!(sessions.last_refresh_requested_at_ms() > 0);
+    }
+
+    #[test]
+    fn replaying_same_gateway_grant_keeps_authenticated_session_state() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29900".parse().unwrap();
+        let mut grant = GatewayAccessGrant {
+            gateway_id: "gw-1".into(),
+            ticket: vec![1, 2, 3],
+            session_id: 7,
+            policy_rev: 8,
+            soft_refresh_after_unix_ms: 9_000,
+            hard_expire_unix_ms: 12_345,
+            ticket_expire_unix_ms: 12_345,
+            lease_secs: 30,
+            grace_secs: 60,
+            gateway_channels: vec![GatewayChannel {
+                kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+                addr: "quic://127.0.0.1:29900".into(),
+                ..Default::default()
+            }],
+            default_gateway_channel: EnumOrUnknown::new(
+                GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+            ),
+            ..Default::default()
+        };
+        sessions.set_gateway_grants(
+            &[grant.clone()],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        let session = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("gateway session")
+            .clone();
+        {
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.keepalive_secs = 9;
+            state.lease_expire_unix_ms = 11_111;
+            state.grace_expire_unix_ms = 22_222;
+            state.reauth_required = true;
+            state.last_rtt_ms = Some(7);
+        }
+
+        grant.policy_rev = 9;
+        grant.soft_refresh_after_unix_ms = 10_000;
+        grant.hard_expire_unix_ms = 20_000;
+        grant.ticket_expire_unix_ms = 20_000;
+        grant.lease_secs = 45;
+        grant.grace_secs = 90;
+        sessions.set_gateway_grants(
+            &[grant],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        let state = session.state.lock();
+        assert!(state.authenticated);
+        assert_eq!(state.keepalive_secs, 9);
+        assert_eq!(state.lease_expire_unix_ms, 11_111);
+        assert_eq!(state.grace_expire_unix_ms, 22_222);
+        assert!(state.reauth_required);
+        assert_eq!(state.last_rtt_ms, Some(7));
+        assert_eq!(state.policy_rev, 9);
+        assert_eq!(state.soft_refresh_after_unix_ms, 10_000);
+        assert_eq!(state.hard_expire_unix_ms, 20_000);
+        assert_eq!(state.ticket_expire_unix_ms, 20_000);
+        assert_eq!(state.lease_secs_hint, 45);
+        assert_eq!(state.grace_secs_hint, 90);
     }
 }

@@ -10,7 +10,7 @@ use crate::protocol::NetPacket;
 
 use super::OnlineSessionKeyMaterial;
 
-const PEER_SESSION_CIPHER_GRACE_WINDOW: Duration = Duration::from_secs(10);
+const PEER_SESSION_CIPHER_GRACE_WINDOW: Duration = Duration::from_secs(30);
 
 pub struct PeerCryptoManager {
     online_session_key: RwLock<Option<OnlineSessionKeyMaterial>>,
