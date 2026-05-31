@@ -378,7 +378,9 @@ pub(crate) fn describe_auth_state(
         service_state.authenticated_user_id.as_deref(),
         service_state.authenticated_group.as_deref(),
     ) {
-        (Some(user_id), Some(group)) => Some(format!("last authenticated as {} in {}", user_id, group)),
+        (Some(user_id), Some(group)) => {
+            Some(format!("last authenticated as {} in {}", user_id, group))
+        }
         (Some(user_id), None) => Some(format!("last authenticated as {}", user_id)),
         _ => None,
     };

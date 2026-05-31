@@ -1108,33 +1108,40 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         }
                     }
                 };
-                let (accepted, phase, reason) = if coalesced {
-                    (
-                        true,
-                        PunchSessionPhase::PunchPhaseWaiting,
-                        "coalesced onto active punch session",
-                    )
-                } else if self.runtime.peer_state.lock().devices.get(&peer_ip).map_or(false, |p| p.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY) {
-                    (
+                let (accepted, phase, reason) =
+                    if coalesced {
+                        (
+                            true,
+                            PunchSessionPhase::PunchPhaseWaiting,
+                            "coalesced onto active punch session",
+                        )
+                    } else if self.runtime.peer_state.lock().devices.get(&peer_ip).map_or(
                         false,
-                        PunchSessionPhase::PunchPhaseFailed,
-                        "peer in forced relay mode",
-                    )
-                } else {
-                    let accepted = self
-                        .runtime
-                        .punch_coordinator
-                        .submit_local(peer_ip, peer_nat_info);
-                    (
-                        accepted,
-                        if accepted {
-                            PunchSessionPhase::PunchPhaseSending
-                        } else {
-                            PunchSessionPhase::PunchPhaseFailed
+                        |p| {
+                            p.preferred_channel_mode
+                                == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
                         },
-                        if accepted { "" } else { "punch queue busy" },
-                    )
-                };
+                    ) {
+                        (
+                            false,
+                            PunchSessionPhase::PunchPhaseFailed,
+                            "peer in forced relay mode",
+                        )
+                    } else {
+                        let accepted = self
+                            .runtime
+                            .punch_coordinator
+                            .submit_local(peer_ip, peer_nat_info);
+                        (
+                            accepted,
+                            if accepted {
+                                PunchSessionPhase::PunchPhaseSending
+                            } else {
+                                PunchSessionPhase::PunchPhaseFailed
+                            },
+                            if accepted { "" } else { "punch queue busy" },
+                        )
+                    };
                 log::info!(
                     "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} coalesced={} reason={}",
                     peer_ip,
@@ -1280,7 +1287,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     reset_vips.insert(*previous_vip);
                 }
             }
-            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+            {
                 reset_vips.insert(peer.virtual_ip);
             }
         }
@@ -2162,8 +2170,7 @@ mod tests {
         let mut no_change = RefreshGatewayGrantResponse::new();
         no_change.has_update = false;
         no_change.reason = "gateway grant unchanged".into();
-        no_change.result =
-            RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE.into();
+        no_change.result = RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE.into();
         assert!(!should_clear_gateway_grants_from_refresh_response(
             &no_change
         ));

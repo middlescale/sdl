@@ -374,7 +374,11 @@ async fn connect(
     client_crypto.enable_early_data = true;
     client_crypto.alpn_protocols = vec![b"h3".to_vec()];
     let quic_crypto = QuicClientConfig::try_from(client_crypto)?;
-    let client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
+    let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
+    let mut transport = quinn::TransportConfig::default();
+    transport.max_idle_timeout(Some(std::time::Duration::from_secs(30).try_into().unwrap()));
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+    client_config.transport_config(std::sync::Arc::new(transport));
 
     let bind_addr: SocketAddr = if addr.is_ipv4() {
         "0.0.0.0:0".parse().unwrap()

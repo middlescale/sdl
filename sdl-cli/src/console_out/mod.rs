@@ -61,10 +61,7 @@ pub fn console_info(status: Info) {
         } else {
             style(status.gateway_grant_state.clone()).yellow()
         };
-        println!(
-            "Gateway grant: {}",
-            grant_style
-        );
+        println!("Gateway grant: {}", grant_style);
     }
     if !status.gateway_channel.is_empty() {
         println!("Gateway channel: {}", style(status.gateway_channel).green());

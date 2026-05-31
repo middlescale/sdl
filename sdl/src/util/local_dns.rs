@@ -33,19 +33,15 @@ pub(crate) fn resolve_local_query(
     };
     match query.qtype {
         DNS_TYPE_A => match resolve_forward(&query.name, profile, devices) {
-            Some(ip) => LocalDnsResolution::Answered(build_a_response(
-                payload,
-                query.question_end,
-                ip,
-            )),
+            Some(ip) => {
+                LocalDnsResolution::Answered(build_a_response(payload, query.question_end, ip))
+            }
             None => LocalDnsResolution::Miss,
         },
         DNS_TYPE_PTR => match resolve_reverse(&query.name, profile, devices) {
-            Some(name) => LocalDnsResolution::Answered(build_ptr_response(
-                payload,
-                query.question_end,
-                &name,
-            )),
+            Some(name) => {
+                LocalDnsResolution::Answered(build_ptr_response(payload, query.question_end, &name))
+            }
             None => LocalDnsResolution::Miss,
         },
         _ => LocalDnsResolution::Unsupported,
@@ -269,10 +265,14 @@ mod tests {
     #[test]
     fn resolves_a_from_full_name() {
         let query = a_query(&[
-            6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2, b'm',
-            b's', 3, b'n', b'e', b't', 0,
+            6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2, b'm', b's',
+            3, b'n', b'e', b't', 0,
         ]);
-        match resolve_local_query(&query, Some(&profile(&["ms.net", "sales.ms.net"])), &devices()) {
+        match resolve_local_query(
+            &query,
+            Some(&profile(&["ms.net", "sales.ms.net"])),
+            &devices(),
+        ) {
             LocalDnsResolution::Answered(resp) => {
                 assert_eq!(&resp[resp.len() - 4..], &[10, 26, 0, 3]);
             }
@@ -292,8 +292,8 @@ mod tests {
     #[test]
     fn misses_on_unknown_local_name() {
         let query = a_query(&[
-            7, b'm', b'i', b's', b's', b'i', b'n', b'g', 5, b's', b'a', b'l', b'e', b's', 2,
-            b'm', b's', 3, b'n', b'e', b't', 0,
+            7, b'm', b'i', b's', b's', b'i', b'n', b'g', 5, b's', b'a', b'l', b'e', b's', 2, b'm',
+            b's', 3, b'n', b'e', b't', 0,
         ]);
         assert!(matches!(
             resolve_local_query(&query, Some(&profile(&["sales.ms.net"])), &devices()),
@@ -304,8 +304,8 @@ mod tests {
     #[test]
     fn falls_back_for_aaaa() {
         let mut query = a_query(&[
-            6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2, b'm',
-            b's', 3, b'n', b'e', b't', 0,
+            6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2, b'm', b's',
+            3, b'n', b'e', b't', 0,
         ]);
         let len = query.len();
         query[len - 4] = 0;
@@ -319,13 +319,17 @@ mod tests {
     #[test]
     fn resolves_ptr_locally() {
         let mut query = a_query(&[
-            1, b'3', 1, b'0', 2, b'2', b'6', 2, b'1', b'0', 7, b'i', b'n', b'-', b'a', b'd',
-            b'd', b'r', 4, b'a', b'r', b'p', b'a', 0,
+            1, b'3', 1, b'0', 2, b'2', b'6', 2, b'1', b'0', 7, b'i', b'n', b'-', b'a', b'd', b'd',
+            b'r', 4, b'a', b'r', b'p', b'a', 0,
         ]);
         let len = query.len();
         query[len - 4] = 0;
         query[len - 3] = 12;
-        match resolve_local_query(&query, Some(&profile(&["ms.net", "sales.ms.net"])), &devices()) {
+        match resolve_local_query(
+            &query,
+            Some(&profile(&["ms.net", "sales.ms.net"])),
+            &devices(),
+        ) {
             LocalDnsResolution::Answered(resp) => {
                 assert!(resp.ends_with(&[
                     6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2,

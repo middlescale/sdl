@@ -128,7 +128,9 @@ impl RouteManager {
         }
         if let Some(peer_state) = &self.peer_state {
             if let Some(peer) = peer_state.lock().devices.get(vip) {
-                if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                if peer.preferred_channel_mode
+                    == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+                {
                     return true;
                 }
             }

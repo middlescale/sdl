@@ -28,7 +28,8 @@ impl DataChannel {
     pub fn direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
         let runtime = self.runtime.upgrade()?;
         if let Some(peer) = runtime.peer_state.lock().devices.get(vip) {
-            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+            {
                 return None;
             }
         }
@@ -60,30 +61,32 @@ impl DataChannel {
     ) -> io::Result<RouteKind> {
         let runtime = self.runtime()?;
         match self.select_path(runtime.as_ref(), vip) {
-            Some(DataPath::P2pUdp(route_key)) => match self.send_udp(runtime.as_ref(), buf, route_key) {
-                Ok(()) => Ok(RouteKind::P2p),
-                Err(err) => {
-                    runtime.route_manager().mark_path_failed(vip, route_key);
-                    if self.allows_gateway_relay() {
-                        log::warn!(
+            Some(DataPath::P2pUdp(route_key)) => {
+                match self.send_udp(runtime.as_ref(), buf, route_key) {
+                    Ok(()) => Ok(RouteKind::P2p),
+                    Err(err) => {
+                        runtime.route_manager().mark_path_failed(vip, route_key);
+                        if self.allows_gateway_relay() {
+                            log::warn!(
                             "p2p send failed for {}, removed route {:?}, falling back to relay: {:?}",
                             vip,
                             route_key,
                             err
                         );
-                        runtime.gateway_sessions.send_relay(buf)?;
-                        Ok(RouteKind::GatewayRelay)
-                    } else {
-                        log::warn!(
+                            runtime.gateway_sessions.send_relay(buf)?;
+                            Ok(RouteKind::GatewayRelay)
+                        } else {
+                            log::warn!(
                             "p2p send failed for {}, removed route {:?}, relay fallback unavailable: {:?}",
                             vip,
                             route_key,
                             err
                         );
-                        Err(err)
+                            Err(err)
+                        }
                     }
                 }
-            },
+            }
             Some(DataPath::GatewayRelay) => {
                 runtime.gateway_sessions.send_relay(buf)?;
                 Ok(RouteKind::GatewayRelay)
@@ -176,7 +179,9 @@ impl DataChannel {
     fn select_path(&self, runtime: &SdlRuntime, vip: &Ipv4Addr) -> Option<DataPath> {
         let use_channel_type = {
             if let Some(peer) = runtime.peer_state.lock().devices.get(vip) {
-                if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+                if peer.preferred_channel_mode
+                    == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+                {
                     UseChannelType::Relay
                 } else {
                     runtime.route_manager().use_channel_type()
@@ -185,10 +190,7 @@ impl DataChannel {
                 runtime.route_manager().use_channel_type()
             }
         };
-        select_data_path(
-            use_channel_type,
-            runtime.route_manager().direct_route(vip),
-        )
+        select_data_path(use_channel_type, runtime.route_manager().direct_route(vip))
     }
 
     fn send_udp<B: AsRef<[u8]>>(

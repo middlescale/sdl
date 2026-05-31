@@ -12,8 +12,8 @@ use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
 use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::route_state::RouteKind;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::route_state::RouteKind;
 use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
@@ -197,11 +197,17 @@ pub(crate) fn handle(
                             client_port: udp_packet.source_port(),
                             created_at_ms: 0,
                         };
-                        if let Ok(response_packet) = crate::util::dns_tunnel::build_dns_response_packet(
-                            &pending,
-                            &dns_response_payload,
-                        ) {
-                            write_full_sync_device(device_writer, &response_packet, "local dns response")?;
+                        if let Ok(response_packet) =
+                            crate::util::dns_tunnel::build_dns_response_packet(
+                                &pending,
+                                &dns_response_payload,
+                            )
+                        {
+                            write_full_sync_device(
+                                device_writer,
+                                &response_packet,
+                                "local dns response",
+                            )?;
                             return Ok(());
                         }
                     }

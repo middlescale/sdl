@@ -515,8 +515,21 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         let source = net_packet.source();
         match other_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             other_turn_packet::Protocol::Punch => {
-                if self.runtime.peer_state.lock().devices.get(&source).map_or(false, |p| p.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY) {
-                    log::info!("bypassing peer punch request from {} because peer is in forced relay mode", source);
+                if self
+                    .runtime
+                    .peer_state
+                    .lock()
+                    .devices
+                    .get(&source)
+                    .map_or(false, |p| {
+                        p.preferred_channel_mode
+                            == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+                    })
+                {
+                    log::info!(
+                        "bypassing peer punch request from {} because peer is in forced relay mode",
+                        source
+                    );
                     return Ok(());
                 }
                 let punch_info = PunchInfo::parse_from_bytes(net_packet.payload())

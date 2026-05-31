@@ -37,7 +37,6 @@ const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
 const CAPABILITY_GATEWAY_TICKET_V1: &str = "gateway_ticket_v1";
 const HANDSHAKE_SOURCE_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(0, 0, 0, 2);
-const CONTROL_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const RELAY_REPUNCH_INTERVAL: Duration = Duration::from_secs(60);
 const REGISTRATION_REJECT_HANDSHAKE_COOLDOWN: Duration = Duration::from_secs(3);
 const DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
@@ -64,6 +63,7 @@ pub struct ControlSession {
     nat_test: NatTest,
     negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
     last_control_packet_at_ms: Arc<AtomicU64>,
+    unanswered_heartbeats: Arc<std::sync::atomic::AtomicU32>,
     last_registration_reject_handshake_at_ms: Arc<AtomicU64>,
     last_device_auth_retry_at_ms: Arc<AtomicU64>,
 }
@@ -85,6 +85,7 @@ impl ControlSession {
             nat_test,
             negotiated_capabilities,
             last_control_packet_at_ms: Arc::new(AtomicU64::new(0)),
+            unanswered_heartbeats: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_registration_reject_handshake_at_ms: Arc::new(AtomicU64::new(0)),
             last_device_auth_retry_at_ms: Arc::new(AtomicU64::new(0)),
         }
@@ -213,8 +214,10 @@ impl ControlSession {
         // automatically updates the liveness timestamp — no address-based
         // detection needed at the call site.
         let last_ts = self.last_control_packet_at_ms.clone();
+        let unanswered = self.unanswered_heartbeats.clone();
         let wrapped = move |data: Vec<u8>, route_key: crate::data_plane::route::RouteKey| {
             last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
+            unanswered.store(0, Ordering::Relaxed);
             on_packet(data, route_key);
         };
         let control_session = self.clone();
@@ -255,15 +258,6 @@ impl ControlSession {
         Ok(())
     }
 
-    fn idle_timed_out(&self) -> bool {
-        let last = self.last_control_packet_at_ms.load(Ordering::Relaxed);
-        if last == 0 {
-            return false;
-        }
-        (crate::handle::now_time() as u64).saturating_sub(last)
-            > CONTROL_SESSION_IDLE_TIMEOUT.as_millis() as u64
-    }
-
     fn mark_control_disconnected<Call: SdlCallback>(&self, call: &Call, reason: String) {
         if !self.force_reconnect_without_callback(reason.clone()) {
             return;
@@ -279,12 +273,15 @@ impl ControlSession {
             return false;
         }
         self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
+        self.unanswered_heartbeats.store(0, Ordering::Relaxed);
         crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
         {
             let mut peer_state = self.data_plane.peer_state.lock();
             peer_state.epoch = 0;
         }
-        self.data_plane.gateway_grant_policy_rev.store(0, Ordering::Relaxed);
+        self.data_plane
+            .gateway_grant_policy_rev
+            .store(0, Ordering::Relaxed);
         self.clear_negotiated_capabilities();
         self.data_plane.route_manager.clear_peer(&CONTROL_VIP);
         log::warn!("{reason}");
@@ -324,18 +321,29 @@ impl ControlSession {
                 }
                 continue;
             }
-            if self.idle_timed_out() {
+            let unanswered = self.unanswered_heartbeats.load(Ordering::Relaxed);
+            if unanswered >= 15 {
                 self.mark_control_disconnected(
                     &call,
                     format!(
-                        "control session idle for more than {:?}, reconnecting",
-                        CONTROL_SESSION_IDLE_TIMEOUT
+                        "control session idle with {} unanswered heartbeats (45s), reconnecting",
+                        unanswered
                     ),
                 );
                 continue;
             }
             if last_heartbeat_at.elapsed() >= Duration::from_secs(3) {
                 last_heartbeat_at = Instant::now();
+                let unanswered = self.unanswered_heartbeats.fetch_add(1, Ordering::Relaxed) + 1;
+                if unanswered == 5 || unanswered == 10 {
+                    log::warn!(
+                        "control session idle: {} unanswered heartbeats ({}s), keeping session active",
+                        unanswered,
+                        unanswered * 3
+                    );
+                } else {
+                    log::debug!("sending control heartbeat ping, unanswered={}", unanswered);
+                }
                 match self.send_server_heartbeat(self.data_plane.peer_state.lock().epoch) {
                     Ok(_) => {}
                     Err(e) => {

@@ -5,8 +5,8 @@ pub use notify::{StopManager, Worker};
 // pub use counter::*;
 
 mod dns_query;
-pub(crate) mod local_dns;
 pub(crate) mod dns_tunnel;
+pub(crate) mod local_dns;
 pub use dns_query::*;
 mod device_identity;
 pub use device_identity::*;

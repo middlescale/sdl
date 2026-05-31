@@ -271,8 +271,7 @@ impl GatewaySession {
 
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
-        let auth_changed = guard.session_id != grant.session_id
-            || guard.ticket != grant.ticket;
+        let auth_changed = guard.session_id != grant.session_id || guard.ticket != grant.ticket;
         guard.gateway_id = grant.gateway_id.clone();
         guard.ticket = grant.ticket.clone();
         guard.session_id = grant.session_id;
@@ -1401,7 +1400,10 @@ mod tests {
     #[test]
     fn fallback_soft_refresh_after_clamps_invalid_early_expiry() {
         assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(0), 0);
-        assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(1_000), 1_000);
+        assert_eq!(
+            GatewaySession::default_soft_refresh_after_unix_ms(1_000),
+            1_000
+        );
         assert_eq!(
             GatewaySession::default_soft_refresh_after_unix_ms(500_000),
             380_000
@@ -1531,9 +1533,7 @@ mod tests {
                 addr: "quic://127.0.0.1:29900".into(),
                 ..Default::default()
             }],
-            default_gateway_channel: EnumOrUnknown::new(
-                GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
-            ),
+            default_gateway_channel: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
             ..Default::default()
         };
         sessions.set_gateway_grants(
@@ -1564,11 +1564,7 @@ mod tests {
         grant.ticket_expire_unix_ms = 20_000;
         grant.lease_secs = 45;
         grant.grace_secs = 90;
-        sessions.set_gateway_grants(
-            &[grant],
-            Ipv4Addr::new(10, 26, 0, 3),
-            "device-1".into(),
-        );
+        sessions.set_gateway_grants(&[grant], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
 
         let state = session.state.lock();
         assert!(state.authenticated);
