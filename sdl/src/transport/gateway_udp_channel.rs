@@ -159,10 +159,18 @@ impl GatewayUdpChannel {
         gateway_udp_key_id: String,
         session_id: u64,
     ) -> anyhow::Result<()> {
-        *self.gateway_udp_public_key.lock() = gateway_udp_public_key;
-        *self.gateway_udp_key_id.lock() = gateway_udp_key_id.clone();
-        *self.crypto.lock() =
-            GatewayUdpCrypto::new(gateway_udp_public_key, &gateway_udp_key_id, session_id)?;
+        let mut current_public_key = self.gateway_udp_public_key.lock();
+        let mut current_key_id = self.gateway_udp_key_id.lock();
+        let mut crypto = self.crypto.lock();
+        if *current_public_key == gateway_udp_public_key
+            && *current_key_id == gateway_udp_key_id
+            && crypto.session_id == session_id
+        {
+            return Ok(());
+        }
+        *current_public_key = gateway_udp_public_key;
+        *current_key_id = gateway_udp_key_id.clone();
+        *crypto = GatewayUdpCrypto::new(gateway_udp_public_key, &gateway_udp_key_id, session_id)?;
         Ok(())
     }
 
@@ -269,9 +277,10 @@ fn should_log_recv_sequence_drop(drop_count: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_recv_sequence_drop, should_log_recv_sequence_drop, GatewayUdpCrypto,
-        RecvSequenceDropKind,
+        classify_recv_sequence_drop, should_log_recv_sequence_drop, GatewayUdpChannel,
+        GatewayUdpCrypto, RecvSequenceDropKind,
     };
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     #[test]
     fn recv_sequence_drop_classifies_duplicate_and_reordered_packets() {
@@ -321,5 +330,39 @@ mod tests {
         assert!(should_log_recv_sequence_drop(2));
         assert!(!should_log_recv_sequence_drop(3));
         assert!(should_log_recv_sequence_drop(4));
+    }
+
+    #[test]
+    fn update_gateway_udp_auth_is_idempotent_for_unchanged_auth() {
+        let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4242));
+        let gateway_udp_public_key = [7; 32];
+        let gateway_udp_key_id = "key-1".to_string();
+        let channel = GatewayUdpChannel::new(
+            server_addr,
+            gateway_udp_public_key,
+            gateway_udp_key_id.clone(),
+            11,
+        )
+        .expect("create gateway udp channel");
+
+        {
+            let mut crypto = channel.crypto.lock();
+            crypto.send_sequence = 9;
+            crypto.bootstrap_pending = false;
+        }
+        let initial_crypto = channel.crypto.lock().clone();
+
+        channel
+            .update_gateway_udp_auth(gateway_udp_public_key, gateway_udp_key_id, 11)
+            .expect("update auth");
+
+        let updated_crypto = channel.crypto.lock().clone();
+        assert_eq!(
+            updated_crypto.client_public_key,
+            initial_crypto.client_public_key
+        );
+        assert_eq!(updated_crypto.header_key, initial_crypto.header_key);
+        assert_eq!(updated_crypto.send_sequence, 9);
+        assert!(!updated_crypto.bootstrap_pending);
     }
 }
