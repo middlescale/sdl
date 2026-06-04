@@ -578,6 +578,12 @@ impl GatewaySession {
         if !ticket_available && now_ms > guard.grace_expire_unix_ms {
             return Ok(None);
         }
+        if guard.authenticated
+            && guard.lease_expire_unix_ms > 0
+            && now_ms > guard.lease_expire_unix_ms
+        {
+            guard.authenticated = false;
+        }
         let interval_ms = if guard.authenticated {
             u64::from(guard.keepalive_secs.max(3)) * 1_000
         } else {
@@ -585,6 +591,11 @@ impl GatewaySession {
         } as i64;
         if now_ms - guard.last_hello_unix_ms < interval_ms {
             return Ok(None);
+        }
+        if !guard.authenticated {
+            if let GatewayTransport::Udp(channel) = &self.channel {
+                channel.mark_bootstrap_pending();
+            }
         }
         guard.last_hello_unix_ms = now_ms;
         let mut nonce = vec![0u8; 12];
@@ -1282,13 +1293,14 @@ mod tests {
     use super::{
         gateway_http2_idle_timeout, gateway_session_order_key, now_time,
         parse_https_transport_target, parse_transport_endpoint, GatewayGrantPhase,
-        GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
+        GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions, GatewayTransport,
     };
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
     use protobuf::EnumOrUnknown;
 
+    use crate::handle::CurrentDeviceInfo;
     use crate::proto::message::{GatewayAccessGrant, GatewayChannel, GatewayChannelKind};
 
     #[test]
@@ -1579,5 +1591,131 @@ mod tests {
         assert_eq!(state.ticket_expire_unix_ms, 20_000);
         assert_eq!(state.lease_secs_hint, 45);
         assert_eq!(state.grace_secs_hint, 90);
+    }
+
+    #[test]
+    fn unauthenticated_udp_connect_hello_reenables_bootstrap() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: 9_000,
+                hard_expire_unix_ms: now_time() as i64 + 60_000,
+                ticket_expire_unix_ms: now_time() as i64 + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_udp_public_key: [7; 32].to_vec(),
+                gateway_udp_key_id: "key-1".into(),
+                gateway_channels: vec![GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    ..Default::default()
+                }],
+                default_gateway_channel: EnumOrUnknown::new(
+                    GatewayChannelKind::GATEWAY_CHANNEL_UDP,
+                ),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        let session = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("gateway session")
+            .clone();
+        let channel = match &session.channel {
+            GatewayTransport::Udp(channel) => channel.clone(),
+            _ => panic!("expected udp gateway transport"),
+        };
+        {
+            let mut state = session.state.lock();
+            state.authenticated = false;
+            state.last_hello_unix_ms = 0;
+        }
+        channel.set_bootstrap_pending_for_test(false);
+
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+        let packet = session
+            .maybe_build_connect_hello(&current_device)
+            .expect("build connect hello");
+
+        assert!(packet.is_some());
+        assert!(channel.bootstrap_pending_for_test());
+    }
+
+    #[test]
+    fn expired_udp_lease_drops_auth_and_reenables_bootstrap() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        let now_ms = now_time() as i64;
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 9_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_udp_public_key: [7; 32].to_vec(),
+                gateway_udp_key_id: "key-1".into(),
+                gateway_channels: vec![GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    ..Default::default()
+                }],
+                default_gateway_channel: EnumOrUnknown::new(
+                    GatewayChannelKind::GATEWAY_CHANNEL_UDP,
+                ),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        let session = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("gateway session")
+            .clone();
+        let channel = match &session.channel {
+            GatewayTransport::Udp(channel) => channel.clone(),
+            _ => panic!("expected udp gateway transport"),
+        };
+        {
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.keepalive_secs = 15;
+            state.lease_expire_unix_ms = now_ms - 1;
+            state.last_hello_unix_ms = now_ms - 4_000;
+        }
+        channel.set_bootstrap_pending_for_test(false);
+
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+        let packet = session
+            .maybe_build_connect_hello(&current_device)
+            .expect("build connect hello");
+
+        assert!(packet.is_some());
+        assert!(channel.bootstrap_pending_for_test());
+        assert!(!session.state.lock().authenticated);
     }
 }

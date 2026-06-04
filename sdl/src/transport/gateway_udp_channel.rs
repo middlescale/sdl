@@ -153,6 +153,20 @@ impl GatewayUdpChannel {
         *self.server_addr.lock() = server_addr;
     }
 
+    pub fn mark_bootstrap_pending(&self) {
+        self.crypto.lock().bootstrap_pending = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_bootstrap_pending_for_test(&self, pending: bool) {
+        self.crypto.lock().bootstrap_pending = pending;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bootstrap_pending_for_test(&self) -> bool {
+        self.crypto.lock().bootstrap_pending
+    }
+
     pub fn update_gateway_udp_auth(
         &self,
         gateway_udp_public_key: [u8; 32],
@@ -364,5 +378,32 @@ mod tests {
         assert_eq!(updated_crypto.header_key, initial_crypto.header_key);
         assert_eq!(updated_crypto.send_sequence, 9);
         assert!(!updated_crypto.bootstrap_pending);
+    }
+
+    #[test]
+    fn mark_bootstrap_pending_preserves_existing_udp_crypto_state() {
+        let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4242));
+        let channel = GatewayUdpChannel::new(server_addr, [7; 32], "key-1".to_string(), 11)
+            .expect("create gateway udp channel");
+
+        let initial_crypto = {
+            let mut crypto = channel.crypto.lock();
+            crypto.send_sequence = 9;
+            crypto.last_recv_sequence = 5;
+            crypto.bootstrap_pending = false;
+            crypto.clone()
+        };
+
+        channel.mark_bootstrap_pending();
+
+        let updated_crypto = channel.crypto.lock().clone();
+        assert_eq!(
+            updated_crypto.client_public_key,
+            initial_crypto.client_public_key
+        );
+        assert_eq!(updated_crypto.header_key, initial_crypto.header_key);
+        assert_eq!(updated_crypto.send_sequence, 9);
+        assert_eq!(updated_crypto.last_recv_sequence, 5);
+        assert!(updated_crypto.bootstrap_pending);
     }
 }
