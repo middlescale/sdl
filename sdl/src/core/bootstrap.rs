@@ -274,7 +274,15 @@ impl Sdl {
                 tun_lifecycle: Arc::new(Mutex::new(())),
                 #[cfg(feature = "integrated_tun")]
                 tun_device_helper,
-                #[cfg(all(feature = "integrated_tun", target_os = "linux"))]
+                #[cfg(all(
+                    feature = "integrated_tun",
+                    any(target_os = "windows", target_os = "linux", target_os = "macos")
+                ))]
+                last_dns_interface: Arc::new(Mutex::new(None)),
+                #[cfg(all(
+                    feature = "integrated_tun",
+                    any(target_os = "windows", target_os = "linux", target_os = "macos")
+                ))]
                 applied_dns_interface: Arc::new(Mutex::new(None)),
                 #[cfg(all(
                     feature = "integrated_tun",

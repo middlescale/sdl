@@ -753,6 +753,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                 ));
                             }
                         }
+                    } else if old.status.offline() {
+                        #[cfg(feature = "integrated_tun")]
+                        self.runtime.force_apply_dns_profile(&self.callback);
                     }
                     self.set_device_info_list(device_list_update);
                     if vip_changed {
