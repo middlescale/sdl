@@ -24,6 +24,10 @@ use crate::util::StopManager;
 
 type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
 
+const CONTROL_HTTP3_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTROL_HTTP3_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTROL_HTTP3_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
 enum Http3Command {
     Send(Vec<u8>),
 }
@@ -197,17 +201,19 @@ async fn run_http3_worker(
                                 }
                                 Err(e) => {
                                     log::warn!("control http3 connect failed {}: {:?}", addr, e);
-                                    on_transport_error(format!(
-                                        "control http3 connect failed {}: {:?}",
-                                        addr, e
-                                    ));
+                                    report_transport_failure(
+                                        &mut receiver,
+                                        &on_transport_error,
+                                        format!("control http3 connect failed {}: {:?}", addr, e),
+                                        addr,
+                                    );
                                     continue;
                                 }
                             }
                         }
                         let frame = Bytes::from(frame_packet(&data));
                         let send_result = if let Some(connection) = active.as_mut() {
-                            connection.send.send_data(frame).await
+                            send_h3_data(&mut connection.send, frame).await
                         } else {
                             continue;
                         };
@@ -219,16 +225,16 @@ async fn run_http3_worker(
                             let name = server_name.lock().clone();
                             match connect(addr, &name, &request_uri).await {
                                 Ok(connection) => {
-                                    let connection_id = next_connection_id;
-                                    next_connection_id = next_connection_id.wrapping_add(1);
                                     let Http3ClientConnection {
                                         addr,
-                                        route_key,
                                         endpoint,
                                         request_sender,
                                         mut send,
                                         recv,
+                                        route_key,
                                     } = connection;
+                                    let connection_id = next_connection_id;
+                                    next_connection_id = next_connection_id.wrapping_add(1);
                                     spawn_h3_reader(
                                         connection_id,
                                         recv,
@@ -236,14 +242,22 @@ async fn run_http3_worker(
                                         on_packet.clone(),
                                         read_event_sender.clone(),
                                     );
-                                    if let Err(e) =
-                                        send.send_data(Bytes::from(frame_packet(&data))).await
+                                    if let Err(e) = send_h3_data(
+                                        &mut send,
+                                        Bytes::from(frame_packet(&data)),
+                                    )
+                                    .await
                                     {
                                         log::warn!("control http3 resend failed {}: {:?}", addr, e);
-                                        on_transport_error(format!(
-                                            "control http3 resend failed {}: {:?}",
-                                            addr, e
-                                        ));
+                                        report_transport_failure(
+                                            &mut receiver,
+                                            &on_transport_error,
+                                            format!(
+                                                "control http3 resend failed {}: {:?}",
+                                                addr, e
+                                            ),
+                                            addr,
+                                        );
                                         endpoint.close(0u32.into(), &[]);
                                     } else {
                                         active = Some(ActiveConnection {
@@ -257,10 +271,15 @@ async fn run_http3_worker(
                                 }
                                 Err(e) => {
                                     log::warn!("control http3 reconnect failed {}: {:?}", addr, e);
-                                    on_transport_error(format!(
-                                        "control http3 reconnect failed {}: {:?}",
-                                        addr, e
-                                    ));
+                                    report_transport_failure(
+                                        &mut receiver,
+                                        &on_transport_error,
+                                        format!(
+                                            "control http3 reconnect failed {}: {:?}",
+                                            addr, e
+                                        ),
+                                        addr,
+                                    );
                                 }
                             }
                         }
@@ -352,6 +371,55 @@ struct Http3ClientConnection {
     recv: RequestStream<H3RecvStream, Bytes>,
 }
 
+async fn send_h3_data(
+    send: &mut RequestStream<H3SendStream<Bytes>, Bytes>,
+    frame: Bytes,
+) -> io::Result<()> {
+    tokio::time::timeout(CONTROL_HTTP3_SEND_TIMEOUT, send.send_data(frame))
+        .await
+        .map_err(|_| timeout_io_error("send_data", CONTROL_HTTP3_SEND_TIMEOUT))?
+        .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, format!("{e:?}")))
+}
+
+fn report_transport_failure(
+    receiver: &mut Receiver<Http3Command>,
+    on_transport_error: &TransportErrorCallback,
+    reason: String,
+    addr: SocketAddr,
+) {
+    let drained = drain_pending_commands(receiver);
+    if drained > 0 {
+        log::warn!(
+            "dropped {} queued control http3 packets after transport failure {}",
+            drained,
+            addr
+        );
+    }
+    on_transport_error(reason);
+}
+
+fn drain_pending_commands(receiver: &mut Receiver<Http3Command>) -> usize {
+    let mut drained = 0usize;
+    loop {
+        match receiver.try_recv() {
+            Ok(Http3Command::Send(_)) => drained += 1,
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => return drained,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return drained,
+        }
+    }
+}
+
+fn timeout_io_error(stage: &str, timeout: Duration) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("control http3 {stage} timed out after {timeout:?}"),
+    )
+}
+
+fn timeout_anyhow_error(stage: &str, timeout: Duration) -> anyhow::Error {
+    anyhow::anyhow!("control http3 {stage} timed out after {timeout:?}")
+}
+
 async fn connect(
     addr: SocketAddr,
     server_name: &str,
@@ -389,35 +457,43 @@ async fn connect(
     endpoint.set_default_client_config(client_config);
 
     let connecting = endpoint.connect(addr, server_name)?;
-    let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
+    let conn = tokio::time::timeout(CONTROL_HTTP3_CONNECT_TIMEOUT, connecting)
+        .await
+        .map_err(|_| timeout_anyhow_error("quic_connect", CONTROL_HTTP3_CONNECT_TIMEOUT))??;
     let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
 
-    let quinn_conn = h3_quinn::Connection::new(conn);
-    let (mut driver, mut send_request) = h3::client::new(quinn_conn).await?;
-    tokio::spawn(async move {
-        let err = future::poll_fn(|cx| driver.poll_close(cx)).await;
-        if !err.is_h3_no_error() {
-            log::debug!("control http3 driver closed: {:?}", err);
-        }
-    });
+    let (request_sender, send, recv) =
+        tokio::time::timeout(CONTROL_HTTP3_SETUP_TIMEOUT, async move {
+            let quinn_conn = h3_quinn::Connection::new(conn);
+            let (mut driver, mut send_request) = h3::client::new(quinn_conn).await?;
+            tokio::spawn(async move {
+                let err = future::poll_fn(|cx| driver.poll_close(cx)).await;
+                if !err.is_h3_no_error() {
+                    log::debug!("control http3 driver closed: {:?}", err);
+                }
+            });
 
-    let request = http::Request::builder()
-        .method(http::Method::POST)
-        .uri(request_uri)
-        .header(http::header::CONTENT_TYPE, "application/octet-stream")
-        .body(())?;
-    let req_stream = send_request.send_request(request).await?;
-    let (send, mut recv) = req_stream.split();
-    let response = recv.recv_response().await?;
-    if !response.status().is_success() {
-        anyhow::bail!("control http3 response status {}", response.status());
-    }
+            let request = http::Request::builder()
+                .method(http::Method::POST)
+                .uri(request_uri)
+                .header(http::header::CONTENT_TYPE, "application/octet-stream")
+                .body(())?;
+            let req_stream = send_request.send_request(request).await?;
+            let (send, mut recv) = req_stream.split();
+            let response = recv.recv_response().await?;
+            if !response.status().is_success() {
+                anyhow::bail!("control http3 response status {}", response.status());
+            }
+            Ok::<_, anyhow::Error>((send_request, send, recv))
+        })
+        .await
+        .map_err(|_| timeout_anyhow_error("request_setup", CONTROL_HTTP3_SETUP_TIMEOUT))??;
 
     Ok(Http3ClientConnection {
         addr,
         route_key,
         endpoint,
-        request_sender: send_request,
+        request_sender,
         send,
         recv,
     })
@@ -436,5 +512,33 @@ async fn read_h3_packets(
         let bytes = chunk.copy_to_bytes(chunk.remaining());
         pending.extend_from_slice(bytes.as_ref());
         consume_pending_frames(&mut pending, &mut |packet| on_packet(packet, route_key))?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{drain_pending_commands, timeout_io_error, Http3Command};
+    use std::io;
+    use std::time::Duration;
+    use tokio::sync::mpsc::channel;
+
+    #[test]
+    fn timeout_io_error_marks_timed_out_stage() {
+        let err = timeout_io_error("send_data", Duration::from_secs(5));
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(err
+            .to_string()
+            .contains("control http3 send_data timed out"));
+    }
+
+    #[test]
+    fn drain_pending_commands_clears_queued_packets() {
+        let (sender, mut receiver) = channel(4);
+        sender.try_send(Http3Command::Send(vec![1])).unwrap();
+        sender.try_send(Http3Command::Send(vec![2])).unwrap();
+        sender.try_send(Http3Command::Send(vec![3])).unwrap();
+
+        assert_eq!(drain_pending_commands(&mut receiver), 3);
+        assert_eq!(drain_pending_commands(&mut receiver), 0);
     }
 }
