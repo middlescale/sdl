@@ -274,6 +274,7 @@ impl ControlSession {
         }
         self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
         self.unanswered_heartbeats.store(0, Ordering::Relaxed);
+        self.channel.reset_connection();
         crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
         {
             let mut peer_state = self.data_plane.peer_state.lock();

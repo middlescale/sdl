@@ -7,6 +7,7 @@ use h3_quinn::{quinn, RecvStream as H3RecvStream, SendStream as H3SendStream};
 use rustls::RootCertStore;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -39,6 +40,7 @@ enum Http3ReadEvent {
 struct ActiveConnection {
     connection_id: u64,
     addr: SocketAddr,
+    config_rev: u64,
     endpoint: quinn::Endpoint,
     _request_sender: SendRequest<h3_quinn::OpenStreams, Bytes>,
     send: RequestStream<H3SendStream<Bytes>, Bytes>,
@@ -55,6 +57,7 @@ pub struct Http3Channel {
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
     request_uri: String,
+    config_rev: Arc<AtomicU64>,
     sender: Sender<Http3Command>,
     receiver: Arc<Mutex<Option<Receiver<Http3Command>>>>,
 }
@@ -67,6 +70,7 @@ impl Http3Channel {
             server_addr: Arc::new(AtomicCell::new(server_addr)),
             server_name: Arc::new(Mutex::new(control_addr.server_name().to_string())),
             request_uri: control_addr.request_uri().to_string(),
+            config_rev: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
         })
@@ -89,6 +93,7 @@ impl Http3Channel {
         let on_transport_error: TransportErrorCallback = Arc::new(on_transport_error);
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
+        let config_rev = self.config_rev.clone();
         let request_uri = self.request_uri.clone();
         let worker_name = "controlHttp3".to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
@@ -108,6 +113,7 @@ impl Http3Channel {
                         receiver,
                         server_addr,
                         server_name,
+                        config_rev,
                         request_uri,
                         callback,
                         on_transport_error,
@@ -132,7 +138,10 @@ impl Http3Channel {
     }
 
     pub fn update_server_addr(&self, server_addr: SocketAddr) {
-        self.server_addr.store(server_addr);
+        if self.server_addr.load() != server_addr {
+            self.server_addr.store(server_addr);
+            self.config_rev.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     pub fn server_addr(&self) -> SocketAddr {
@@ -140,7 +149,15 @@ impl Http3Channel {
     }
 
     pub fn update_server_name(&self, server_name: String) {
-        *self.server_name.lock() = server_name;
+        let mut guard = self.server_name.lock();
+        if *guard != server_name {
+            *guard = server_name;
+            self.config_rev.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn reset_connection(&self) {
+        self.config_rev.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -161,6 +178,7 @@ async fn run_http3_worker(
     mut receiver: Receiver<Http3Command>,
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
+    config_rev: Arc<AtomicU64>,
     request_uri: String,
     on_packet: PacketCallback,
     on_transport_error: TransportErrorCallback,
@@ -183,7 +201,8 @@ async fn run_http3_worker(
                 match command {
                     Http3Command::Send(data) => {
                         let addr = server_addr.load();
-                        if active.as_ref().map(|conn| conn.addr) != Some(addr) {
+                        let current_rev = config_rev.load(Ordering::Relaxed);
+                        if active.as_ref().map(|conn| (conn.addr, conn.config_rev)) != Some((addr, current_rev)) {
                             if let Some(connection) = active.take() {
                                 connection.close();
                             }
@@ -194,6 +213,7 @@ async fn run_http3_worker(
                                 Ok(connection) => {
                                     active = Some(register_active_connection(
                                         connection,
+                                        current_rev,
                                         &mut next_connection_id,
                                         on_packet.clone(),
                                         read_event_sender.clone(),
@@ -263,6 +283,7 @@ async fn run_http3_worker(
                                         active = Some(ActiveConnection {
                                             connection_id,
                                             addr,
+                                            config_rev: current_rev,
                                             endpoint,
                                             _request_sender: request_sender,
                                             send,
@@ -295,6 +316,7 @@ async fn run_http3_worker(
 
 fn register_active_connection(
     connection: Http3ClientConnection,
+    config_rev: u64,
     next_connection_id: &mut u64,
     on_packet: PacketCallback,
     read_event_sender: UnboundedSender<Http3ReadEvent>,
@@ -313,6 +335,7 @@ fn register_active_connection(
     ActiveConnection {
         connection_id,
         addr,
+        config_rev,
         endpoint,
         _request_sender: request_sender,
         send,
@@ -517,8 +540,10 @@ async fn read_h3_packets(
 
 #[cfg(test)]
 mod tests {
-    use super::{drain_pending_commands, timeout_io_error, Http3Command};
+    use super::{drain_pending_commands, timeout_io_error, Http3Channel, Http3Command};
     use std::io;
+    use std::net::SocketAddr;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tokio::sync::mpsc::channel;
 
@@ -540,5 +565,25 @@ mod tests {
 
         assert_eq!(drain_pending_commands(&mut receiver), 3);
         assert_eq!(drain_pending_commands(&mut receiver), 0);
+    }
+
+    #[test]
+    fn reset_connection_bumps_revision() {
+        let addr: SocketAddr = "127.0.0.1:443".parse().unwrap();
+        let channel = Http3Channel::new(addr, "https://control.example.com/control").unwrap();
+        let before = channel.config_rev.load(Ordering::Relaxed);
+        channel.reset_connection();
+        assert_eq!(channel.config_rev.load(Ordering::Relaxed), before + 1);
+    }
+
+    #[test]
+    fn update_server_name_only_bumps_revision_on_change() {
+        let addr: SocketAddr = "127.0.0.1:443".parse().unwrap();
+        let channel = Http3Channel::new(addr, "https://control.example.com/control").unwrap();
+        let before = channel.config_rev.load(Ordering::Relaxed);
+        channel.update_server_name("control.example.com".to_string());
+        assert_eq!(channel.config_rev.load(Ordering::Relaxed), before);
+        channel.update_server_name("other.example.com".to_string());
+        assert_eq!(channel.config_rev.load(Ordering::Relaxed), before + 1);
     }
 }
