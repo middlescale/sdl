@@ -337,7 +337,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
     let in_ips = vnt.config().in_ips.clone();
     let out_ips = vnt.config().out_ips.clone();
     let udp_listen_addr = nat_info
-        .udp_ports
+        .local_udp_ports
         .iter()
         .map(|port| format!("0.0.0.0:{}", port))
         .collect();

@@ -603,7 +603,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     std::net::SocketAddr::V4(_) => None,
                     std::net::SocketAddr::V6(addr) => Some(*addr.ip()),
                 });
-                let udp_ports = local_udp_endpoints.iter().map(|addr| addr.port()).collect();
+                let local_udp_ports = local_udp_endpoints.iter().map(|addr| addr.port()).collect();
                 let peer_nat_info = NatInfo::new(
                     public_ips,
                     public_ports,
@@ -611,7 +611,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     punch_info.public_port_range as u16,
                     local_ipv4,
                     ipv6,
-                    udp_ports,
+                    local_udp_ports,
                     punch_info.nat_type.enum_value_or_default().into(),
                     punch_info.punch_model.enum_value_or_default().into(),
                 );

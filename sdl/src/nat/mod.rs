@@ -128,7 +128,7 @@ pub struct NatTest {
     info: Arc<Mutex<NatInfo>>,
     time: Arc<AtomicCell<Instant>>,
     pending_stun_requests: Arc<Mutex<Vec<PendingStunRequest>>>,
-    udp_ports: Vec<u16>,
+    local_udp_ports: Vec<u16>,
     #[cfg(feature = "upnp")]
     upnp: UPnP,
     pub(crate) update_local_ipv4: bool,
@@ -141,11 +141,11 @@ impl NatTest {
         udp_channel: UdpChannel,
         local_ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
-        udp_ports: Vec<u16>,
+        local_udp_ports: Vec<u16>,
         update_local_ipv4: bool,
         punch_model: PunchModel,
     ) -> NatTest {
-        let ports = vec![0; udp_ports.len()];
+        let ports = vec![0; local_udp_ports.len()];
         let nat_info = NatInfo::new(
             Vec::new(),
             ports,
@@ -153,7 +153,7 @@ impl NatTest {
             0,
             local_ipv4,
             ipv6,
-            udp_ports.clone(),
+            local_udp_ports.clone(),
             NatType::Cone,
             punch_model,
         );
@@ -161,7 +161,7 @@ impl NatTest {
         #[cfg(feature = "upnp")]
         let upnp = UPnP::default();
         #[cfg(feature = "upnp")]
-        for port in &udp_ports {
+        for port in &local_udp_ports {
             upnp.add_udp_port(*port);
         }
         let instant = Instant::now();
@@ -176,7 +176,7 @@ impl NatTest {
                     .unwrap_or(instant),
             )),
             pending_stun_requests: Arc::new(Mutex::new(Vec::with_capacity(4))),
-            udp_ports,
+            local_udp_ports,
             #[cfg(feature = "upnp")]
             upnp,
             update_local_ipv4,
@@ -237,7 +237,7 @@ impl NatTest {
         Ok(())
     }
     pub fn is_local_udp(&self, ipv4: Ipv4Addr, port: u16) -> bool {
-        for x in &self.udp_ports {
+        for x in &self.local_udp_ports {
             if x == &port {
                 let guard = self.info.lock();
                 if let Some(ip) = guard.local_ipv4 {
@@ -275,7 +275,7 @@ impl NatTest {
             }
             false
         };
-        for x in &self.udp_ports {
+        for x in &self.local_udp_ports {
             if x == &port {
                 return check_ip();
             }

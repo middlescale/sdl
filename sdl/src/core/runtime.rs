@@ -583,7 +583,7 @@ impl SdlRuntime {
                     "public_ports": nat_info.public_ports,
                     "public_port_range": nat_info.public_port_range,
                     "public_udp_endpoints": nat_info.public_udp_endpoints.iter().map(ToString::to_string).collect::<Vec<_>>(),
-                    "udp_ports": nat_info.udp_ports,
+                    "local_udp_ports": nat_info.local_udp_ports,
                     "local_udp_endpoints": nat_info.local_udp_endpoints().iter().map(ToString::to_string).collect::<Vec<_>>(),
                     "local_ipv4": nat_info.local_ipv4.map(|ip| ip.to_string()),
                     "ipv6": nat_info.ipv6.map(|ip| ip.to_string()),

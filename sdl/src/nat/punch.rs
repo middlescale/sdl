@@ -94,7 +94,7 @@ pub struct NatInfo {
     pub nat_type: NatType,
     pub(crate) local_ipv4: Option<Ipv4Addr>,
     pub(crate) ipv6: Option<Ipv6Addr>,
-    pub udp_ports: Vec<u16>,
+    pub local_udp_ports: Vec<u16>,
     pub punch_model: PunchModel,
 }
 
@@ -135,7 +135,7 @@ impl NatInfo {
         public_port_range: u16,
         mut local_ipv4: Option<Ipv4Addr>,
         mut ipv6: Option<Ipv6Addr>,
-        udp_ports: Vec<u16>,
+        local_udp_ports: Vec<u16>,
         mut nat_type: NatType,
         punch_model: PunchModel,
     ) -> Self {
@@ -189,7 +189,7 @@ impl NatInfo {
             public_port_range,
             local_ipv4,
             ipv6,
-            udp_ports,
+            local_udp_ports,
             nat_type,
             punch_model,
         }
@@ -226,7 +226,7 @@ impl NatInfo {
         self.ipv6
     }
     pub fn local_udp_ipv4addr(&self) -> Option<SocketAddr> {
-        let port = *self.udp_ports.first()?;
+        let port = *self.local_udp_ports.first()?;
         if let Some(local_ipv4) = self.local_ipv4 {
             Some(SocketAddr::V4(SocketAddrV4::new(local_ipv4, port)))
         } else {
@@ -234,7 +234,7 @@ impl NatInfo {
         }
     }
     pub fn local_udp_ipv6addr(&self) -> Option<SocketAddr> {
-        let port = *self.udp_ports.first()?;
+        let port = *self.local_udp_ports.first()?;
         if let Some(ipv6) = self.ipv6 {
             Some(SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, 0)))
         } else {
@@ -242,8 +242,8 @@ impl NatInfo {
         }
     }
     pub fn local_udp_endpoints(&self) -> Vec<SocketAddr> {
-        let mut endpoints = Vec::with_capacity(self.udp_ports.len() * 2);
-        for port in &self.udp_ports {
+        let mut endpoints = Vec::with_capacity(self.local_udp_ports.len() * 2);
+        for port in &self.local_udp_ports {
             if *port == 0 {
                 continue;
             }
@@ -315,7 +315,7 @@ impl Punch {
             .public_ips
             .retain(|ip| is_ipv4_global(ip) && device_info.not_in_network(*ip));
         nat_info.public_ports.retain(|port| *port != 0);
-        nat_info.udp_ports.retain(|port| *port != 0);
+        nat_info.local_udp_ports.retain(|port| *port != 0);
 
         nat_info.local_ipv4 = nat_info
             .local_ipv4
@@ -341,7 +341,7 @@ impl Punch {
         }
         if !has_explicit_public_endpoints {
             // 可能是开放了端口的，需要打洞
-            for port in &nat_info.udp_ports {
+            for port in &nat_info.local_udp_ports {
                 if *port == 0 {
                     continue;
                 }

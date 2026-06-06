@@ -146,7 +146,7 @@ impl<Call, Device> ServerPacketHandler<Call, Device> {
 impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandler<Call, Device> {
     fn handle(
         &self,
-        net_packet: NetPacket<&mut [u8]>,
+        mut net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
@@ -214,47 +214,113 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             Protocol::IpTurn => {
                 match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
                     ip_turn_packet::Protocol::Ipv4 => {
-                        let ipv4 = IpV4Packet::new(net_packet.payload())?;
-                        if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
-                            && ipv4.destination_ip() == current_device.virtual_ip
+                        let source = net_packet.source();
+                        let destination = net_packet.destination();
+                        let from_gateway = self.runtime.gateway_sessions.is_gateway_addr(route_key.addr);
+                        let from_gateway_peer =
+                            is_gateway_peer_ipturn_source(source, current_device, from_gateway);
+                        let mut gateway_echo_reply = None;
+                        let mut peer_echo_reply = None;
+                        let mut echo_meta = None;
                         {
-                            let icmp_packet = icmp::IcmpPacket::new(ipv4.payload())?;
-                            if icmp_packet.kind() == Kind::EchoReply {
-                                //网关ip ping的回应
+                            let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
+                            if ipv4.protocol() == ipv4::protocol::Protocol::Icmp
+                                && ipv4.destination_ip() == destination
+                            {
+                                let icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
+                                echo_meta = parse_icmp_echo_meta(&icmp_packet);
+                                if from_gateway_peer && icmp_packet.kind() == Kind::EchoRequest {
+                                    drop(icmp_packet);
+                                    drop(ipv4);
+                                    rewrite_peer_echo_request_as_reply(
+                                        &mut net_packet,
+                                        source,
+                                        destination,
+                                    )?;
+                                    self.send_gateway_reply(&net_packet, current_device)?;
+                                    return Ok(());
+                                }
+                                if icmp_packet.kind() == Kind::EchoReply {
+                                    if source == current_device.virtual_gateway {
+                                        gateway_echo_reply =
+                                            Some((ipv4.source_ip(), ipv4.destination_ip()));
+                                    } else if from_gateway_peer {
+                                        peer_echo_reply =
+                                            Some((ipv4.source_ip(), ipv4.destination_ip()));
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((icmp_source, icmp_destination)) = gateway_echo_reply {
+                            self.runtime.debug_watch.emit(
+                                "icmp",
+                                "gateway_echo_reply_received",
+                                serde_json::json!({
+                                    "src": icmp_source.to_string(),
+                                    "dst": icmp_destination.to_string(),
+                                    "via": route_key.addr.to_string(),
+                                    "bytes": net_packet.payload().len(),
+                                    "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                    "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                    "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                    "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
+                                }),
+                            );
+                            let written =
+                                write_full_device(&self.device, net_packet.payload(), "gateway ip packet inject")?;
+                            self.runtime.debug_watch.emit(
+                                "icmp",
+                                "gateway_echo_reply_injected",
+                                serde_json::json!({
+                                    "src": icmp_source.to_string(),
+                                    "dst": icmp_destination.to_string(),
+                                    "written_bytes": written,
+                                    "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                    "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                    "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                    "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
+                                }),
+                            );
+                            return Ok(());
+                        }
+                        if from_gateway_peer {
+                            if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
                                 self.runtime.debug_watch.emit(
                                     "icmp",
-                                    "gateway_echo_reply_received",
+                                    "peer_echo_reply_received",
                                     serde_json::json!({
-                                        "src": ipv4.source_ip().to_string(),
-                                        "dst": ipv4.destination_ip().to_string(),
+                                        "src": icmp_source.to_string(),
+                                        "dst": icmp_destination.to_string(),
                                         "via": route_key.addr.to_string(),
                                         "bytes": net_packet.payload().len(),
-                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
-                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
-                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
-                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
+                                        "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                        "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                        "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                                     }),
                                 );
-                                let written = write_full_device(
-                                    &self.device,
-                                    net_packet.payload(),
-                                    "gateway ip packet inject",
-                                )?;
+                            }
+                            let written = write_full_device(
+                                &self.device,
+                                net_packet.payload(),
+                                "gateway peer ip packet inject",
+                            )?;
+                            if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
                                 self.runtime.debug_watch.emit(
                                     "icmp",
-                                    "gateway_echo_reply_injected",
+                                    "peer_echo_reply_injected",
                                     serde_json::json!({
-                                        "src": ipv4.source_ip().to_string(),
-                                        "dst": ipv4.destination_ip().to_string(),
+                                        "src": icmp_source.to_string(),
+                                        "dst": icmp_destination.to_string(),
                                         "written_bytes": written,
-                                        "icmp_kind": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.kind_label()),
-                                        "icmp_id": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.identifier),
-                                        "icmp_seq": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.sequence),
-                                        "icmp_checksum_valid": parse_icmp_echo_meta(&icmp_packet).map(|meta| meta.checksum_valid),
+                                        "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
+                                        "icmp_id": echo_meta.map(|meta| meta.identifier),
+                                        "icmp_seq": echo_meta.map(|meta| meta.sequence),
+                                        "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                                     }),
                                 );
-                                return Ok(());
                             }
+                            return Ok(());
                         }
                     }
                     ip_turn_packet::Protocol::WGIpv4 => {}
@@ -270,6 +336,24 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
 }
 
 impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+    fn send_gateway_reply<B: AsRef<[u8]>>(
+        &self,
+        packet: &NetPacket<B>,
+        current_device: &CurrentDeviceInfo,
+    ) -> anyhow::Result<()> {
+        let packet_len = packet.buffer().len();
+        let destination = packet.destination();
+        self.runtime.data_plane_stats.record_logical_up(packet_len);
+        self.runtime.gateway_sessions.send_relay(packet)?;
+        self.runtime.data_plane_stats.record_gateway_up(packet_len);
+        if destination != current_device.virtual_gateway {
+            self.runtime
+                .data_plane_stats
+                .record_peer_up(destination, packet_len);
+        }
+        Ok(())
+    }
+
     fn peer_identity_key(peer: &PeerDeviceInfo) -> Vec<u8> {
         if !peer.device_id.is_empty() {
             return format!("id:{}", peer.device_id).into_bytes();
@@ -1616,6 +1700,7 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
     let peer_ip = Ipv4Addr::from(punch_start.target);
     let mut public_ips = Vec::new();
     let mut public_ports = Vec::new();
+    let mut local_udp_ports = Vec::new();
     let mut local_ipv4: Option<Ipv4Addr> = None;
     let mut ipv6: Option<Ipv6Addr> = None;
     let mut has_ipv4 = false;
@@ -1632,6 +1717,13 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
                 // candidate so punch workers still have a reachable direct target to probe.
                 local_ipv4 = Some(ip);
             }
+            if !crate::nat::is_ipv4_global(&ip)
+                && ep.port <= u16::MAX as u32
+                && ep.port > 0
+                && !local_udp_ports.contains(&(ep.port as u16))
+            {
+                local_udp_ports.push(ep.port as u16);
+            }
         }
         if ep.port <= u16::MAX as u32 && ep.port > 0 {
             public_ports.push(ep.port as u16);
@@ -1642,7 +1734,19 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
             v6.copy_from_slice(&ep.ipv6);
             ipv6 = Some(Ipv6Addr::from(v6));
         }
+        if ep.ipv6.len() == 16
+            && ep.port <= u16::MAX as u32
+            && ep.port > 0
+            && !local_udp_ports.contains(&(ep.port as u16))
+        {
+            local_udp_ports.push(ep.port as u16);
+        }
     }
+    let local_udp_ports = if local_udp_ports.is_empty() {
+        public_ports.clone()
+    } else {
+        local_udp_ports
+    };
     let punch_model = if has_ipv4 && has_ipv6 {
         PunchModel::All
     } else if has_ipv6 {
@@ -1686,7 +1790,7 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
             0,
             local_ipv4,
             ipv6,
-            public_ports,
+            local_udp_ports,
             NatType::Cone,
             punch_model,
         ),
@@ -1727,6 +1831,31 @@ fn effective_gateway_policy_rev(
         .map(|grant| grant.policy_rev)
         .max()
         .unwrap_or(0)
+}
+
+fn is_gateway_peer_ipturn_source(
+    source: Ipv4Addr,
+    current_device: &CurrentDeviceInfo,
+    from_gateway: bool,
+) -> bool {
+    from_gateway && source != current_device.virtual_gateway
+}
+
+fn rewrite_peer_echo_request_as_reply<B: AsRef<[u8]> + AsMut<[u8]>>(
+    net_packet: &mut NetPacket<B>,
+    source: Ipv4Addr,
+    destination: Ipv4Addr,
+) -> io::Result<()> {
+    let mut ipv4 = IpV4Packet::new(net_packet.payload_mut())?;
+    let mut icmp_packet = icmp::IcmpPacket::new(ipv4.payload_mut())?;
+    icmp_packet.set_kind(Kind::EchoReply);
+    icmp_packet.update_checksum();
+    ipv4.set_source_ip(destination);
+    ipv4.set_destination_ip(source);
+    ipv4.update_checksum();
+    net_packet.set_source(destination);
+    net_packet.set_destination(source);
+    Ok(())
 }
 
 fn should_apply_gateway_policy_rev(current_policy_rev: u64, incoming_policy_rev: u64) -> bool {
@@ -1799,14 +1928,17 @@ mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
+        is_gateway_peer_ipturn_source,
         log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
         punch_endpoint_from_route, selected_endpoint_for_result, should_apply_gateway_policy_rev,
         should_clear_gateway_grants_from_refresh_response,
         should_refresh_gateway_grant_after_registration,
-        should_retry_device_auth_after_challenge_expired,
+        should_retry_device_auth_after_challenge_expired, rewrite_peer_echo_request_as_reply,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
         ActivePunchSession, ActivePunchState,
     };
+    use crate::handle::CurrentDeviceInfo;
+    use crate::protocol::{ip_turn_packet, NetPacket, Protocol};
     use crate::data_plane::route::Route;
     use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
@@ -1815,9 +1947,43 @@ mod tests {
         PunchSessionPhase, PunchStart, RefreshGatewayGrantResponse, RefreshGatewayGrantResult,
         RegistrationErrorReason,
     };
+    use sdl_packet::icmp::icmp::IcmpPacket;
+    use sdl_packet::icmp::Kind;
+    use sdl_packet::ip::ipv4::packet::IpV4Packet;
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    fn build_icmp_echo_request_packet(source: Ipv4Addr, destination: Ipv4Addr) -> NetPacket<Vec<u8>> {
+        let mut ipv4_payload = vec![0u8; 28];
+        let ipv4_len = ipv4_payload.len() as u16;
+        ipv4_payload[0] = 0x45;
+        ipv4_payload[2..4].copy_from_slice(&ipv4_len.to_be_bytes());
+        ipv4_payload[8] = 64;
+        ipv4_payload[9] = 1;
+        ipv4_payload[12..16].copy_from_slice(&source.octets());
+        ipv4_payload[16..20].copy_from_slice(&destination.octets());
+        ipv4_payload[24..26].copy_from_slice(&0x1234u16.to_be_bytes());
+        ipv4_payload[26..28].copy_from_slice(&0x0001u16.to_be_bytes());
+        {
+            let mut ipv4 = IpV4Packet::new(&mut ipv4_payload).expect("ipv4 packet");
+            let mut icmp = IcmpPacket::new(ipv4.payload_mut()).expect("icmp packet");
+            icmp.set_kind(Kind::EchoRequest);
+            icmp.update_checksum();
+            ipv4.update_checksum();
+        }
+
+        let buffer = vec![0u8; 12 + ipv4_payload.len()];
+        let mut packet = NetPacket::new0(buffer.len(), buffer).expect("net packet");
+        packet.set_default_version();
+        packet.set_protocol(Protocol::IpTurn);
+        packet.set_transport_protocol_into(ip_turn_packet::Protocol::Ipv4);
+        packet.set_initial_ttl(6);
+        packet.set_source(source);
+        packet.set_destination(destination);
+        packet.set_payload(&ipv4_payload).expect("set payload");
+        packet
+    }
 
     #[test]
     fn build_peer_nat_info_from_punch_start_uses_endpoints() {
@@ -1855,7 +2021,52 @@ mod tests {
         assert!(nat_info.public_ips.is_empty());
         assert_eq!(nat_info.local_ipv4(), Some(Ipv4Addr::new(172, 18, 0, 7)));
         assert_eq!(nat_info.public_ports, vec![10001]);
-        assert_eq!(nat_info.udp_ports, vec![10001]);
+        assert_eq!(nat_info.local_udp_ports, vec![10001]);
+    }
+
+    #[test]
+    fn build_peer_nat_info_from_punch_start_uses_local_ports_for_local_candidates() {
+        let mut start = PunchStart::new();
+        start.target = u32::from(Ipv4Addr::new(10, 26, 0, 5));
+
+        let mut public_ep = PunchEndpoint::new();
+        public_ep.ip = u32::from(Ipv4Addr::new(223, 74, 148, 126));
+        public_ep.port = 1386;
+
+        let mut local_ep = PunchEndpoint::new();
+        local_ep.ip = u32::from(Ipv4Addr::new(192, 168, 31, 146));
+        local_ep.port = 55979;
+
+        let mut local_v6_ep = PunchEndpoint::new();
+        let local_v6 = "2409:8a55:30d6:3fe4:adf7:c3f7:6177:590f"
+            .parse::<Ipv6Addr>()
+            .unwrap();
+        local_v6_ep.ipv6 = local_v6.octets().to_vec();
+        local_v6_ep.port = 55979;
+
+        start.peer_endpoints.push(public_ep);
+        start.peer_endpoints.push(local_ep);
+        start.peer_endpoints.push(local_v6_ep);
+
+        let (_peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
+
+        assert_eq!(nat_info.local_ipv4(), Some(Ipv4Addr::new(192, 168, 31, 146)));
+        assert_eq!(nat_info.ipv6(), Some(local_v6));
+        assert_eq!(
+            nat_info.local_udp_ipv4addr(),
+            Some(SocketAddr::V4(std::net::SocketAddrV4::new(
+                Ipv4Addr::new(192, 168, 31, 146),
+                55979,
+            )))
+        );
+        assert_eq!(
+            nat_info.local_udp_ipv6addr(),
+            Some(SocketAddr::V6(std::net::SocketAddrV6::new(
+                local_v6, 55979, 0, 0,
+            )))
+        );
+        assert_eq!(nat_info.public_ports, vec![1386, 55979, 55979]);
+        assert_eq!(nat_info.local_udp_ports, vec![55979]);
     }
 
     #[test]
@@ -1870,6 +2081,49 @@ mod tests {
             ack.phase.enum_value_or_default(),
             PunchSessionPhase::PunchPhaseFailed
         );
+    }
+
+    #[test]
+    fn gateway_peer_ipturn_source_only_matches_non_gateway_peer_packets() {
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+
+        assert!(is_gateway_peer_ipturn_source(
+            Ipv4Addr::new(10, 26, 0, 5),
+            &current_device,
+            true,
+        ));
+        assert!(!is_gateway_peer_ipturn_source(
+            Ipv4Addr::new(10, 26, 0, 1),
+            &current_device,
+            true,
+        ));
+        assert!(!is_gateway_peer_ipturn_source(
+            Ipv4Addr::new(10, 26, 0, 5),
+            &current_device,
+            false,
+        ));
+    }
+
+    #[test]
+    fn rewrite_peer_echo_request_as_reply_swaps_inner_and_outer_ips() {
+        let source = Ipv4Addr::new(10, 26, 0, 5);
+        let destination = Ipv4Addr::new(10, 26, 0, 3);
+        let mut packet = build_icmp_echo_request_packet(source, destination);
+
+        rewrite_peer_echo_request_as_reply(&mut packet, source, destination)
+            .expect("rewrite echo request");
+
+        assert_eq!(packet.source(), destination);
+        assert_eq!(packet.destination(), source);
+        let ipv4 = IpV4Packet::new(packet.payload()).expect("ipv4");
+        assert_eq!(ipv4.source_ip(), destination);
+        assert_eq!(ipv4.destination_ip(), source);
+        let icmp = IcmpPacket::new(ipv4.payload()).expect("icmp");
+        assert_eq!(icmp.kind(), Kind::EchoReply);
     }
 
     #[test]
