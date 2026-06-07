@@ -83,7 +83,13 @@ impl GatewayUdpChannel {
             worker_name,
             move |buf, _extend, route_key| {
                 let from = route_key.addr;
-                if from != *server_addr.lock() {
+                let expected = *server_addr.lock();
+                if from != expected {
+                    log::debug!(
+                        "drop gateway udp packet from unexpected source {} (expected {})",
+                        from,
+                        expected
+                    );
                     return;
                 }
                 let packet = match GatewayUdpPacket::decode(buf) {
@@ -154,7 +160,14 @@ impl GatewayUdpChannel {
     }
 
     pub fn mark_bootstrap_pending(&self) {
-        self.crypto.lock().bootstrap_pending = true;
+        let mut crypto = self.crypto.lock();
+        crypto.bootstrap_pending = true;
+        // A fresh bootstrap makes the gateway create a new per-peer UDP state whose
+        // outbound sequence restarts from 1. Reset our receive-side sequence gate so
+        // the next connect ack is not dropped as a stale/reordered packet.
+        crypto.last_recv_sequence = 0;
+        crypto.duplicate_drop_count = 0;
+        crypto.reordered_drop_count = 0;
     }
 
     #[cfg(test)]
@@ -381,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_bootstrap_pending_preserves_existing_udp_crypto_state() {
+    fn mark_bootstrap_pending_resets_recv_sequence_for_fresh_bootstrap() {
         let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4242));
         let channel = GatewayUdpChannel::new(server_addr, [7; 32], "key-1".to_string(), 11)
             .expect("create gateway udp channel");
@@ -390,6 +403,8 @@ mod tests {
             let mut crypto = channel.crypto.lock();
             crypto.send_sequence = 9;
             crypto.last_recv_sequence = 5;
+            crypto.duplicate_drop_count = 2;
+            crypto.reordered_drop_count = 3;
             crypto.bootstrap_pending = false;
             crypto.clone()
         };
@@ -403,7 +418,9 @@ mod tests {
         );
         assert_eq!(updated_crypto.header_key, initial_crypto.header_key);
         assert_eq!(updated_crypto.send_sequence, 9);
-        assert_eq!(updated_crypto.last_recv_sequence, 5);
+        assert_eq!(updated_crypto.last_recv_sequence, 0);
+        assert_eq!(updated_crypto.duplicate_drop_count, 0);
+        assert_eq!(updated_crypto.reordered_drop_count, 0);
         assert!(updated_crypto.bootstrap_pending);
     }
 }
