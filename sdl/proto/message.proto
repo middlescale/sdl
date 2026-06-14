@@ -76,6 +76,8 @@ message GatewayChannel {
     string addr = 2;
     string server_name = 3;
     reserved 4;
+    bytes udp_public_key = 5;
+    string udp_key_id = 6;
 }
 message GatewayAccessGrant {
     bytes ticket = 1;
@@ -86,10 +88,12 @@ message GatewayAccessGrant {
     uint32 lease_secs = 6;
     uint32 grace_secs = 7;
     string gateway_group_id = 8;
-    repeated GatewayChannel gateway_channels = 9;
-    GatewayChannelKind default_gateway_channel = 10;
-    bytes gateway_udp_public_key = 11;
-    string gateway_udp_key_id = 12;
+    GatewayChannel gateway_channel = 9;
+    reserved "gateway_channels";
+    reserved 10;
+    reserved "selected_gateway_channel_kind";
+    reserved 11, 12;
+    reserved "gateway_udp_public_key", "gateway_udp_key_id";
     string gateway_id = 13;
     int64 soft_refresh_after_unix_ms = 14;
     int64 hard_expire_unix_ms = 15;

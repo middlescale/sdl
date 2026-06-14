@@ -73,9 +73,6 @@ impl GatewayUdpChannel {
         worker_name: &str,
         on_packet: PacketCallback,
     ) -> anyhow::Result<()> {
-        if self.started.swap(true, Ordering::Relaxed) {
-            return Ok(());
-        }
         let server_addr = self.server_addr.clone();
         let crypto = self.crypto.clone();
         self.driver.start_named(
@@ -152,7 +149,9 @@ impl GatewayUdpChannel {
             |_| true,
             |_| true,
             |_, _| {},
-        )
+        )?;
+        self.started.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn update_server_addr(&self, server_addr: SocketAddr) {
@@ -308,6 +307,11 @@ mod tests {
         GatewayUdpCrypto, RecvSequenceDropKind,
     };
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::util::StopManager;
 
     #[test]
     fn recv_sequence_drop_classifies_duplicate_and_reordered_packets() {
@@ -357,6 +361,37 @@ mod tests {
         assert!(should_log_recv_sequence_drop(2));
         assert!(!should_log_recv_sequence_drop(3));
         assert!(should_log_recv_sequence_drop(4));
+    }
+
+    #[test]
+    fn failed_start_can_be_retried() {
+        let server_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4242));
+        let channel = GatewayUdpChannel::new(server_addr, [7; 32], "key-1".to_string(), 11)
+            .expect("create gateway udp channel");
+        let stopped_manager = StopManager::new(|| {});
+        stopped_manager.stop();
+
+        channel
+            .start_named(
+                stopped_manager,
+                "gateway-udp-failed-start",
+                Arc::new(|_, _| {}),
+            )
+            .expect_err("start with stopped manager");
+        assert!(!channel.started.load(Ordering::Relaxed));
+
+        let stop_manager = StopManager::new(|| {});
+        channel
+            .start_named(
+                stop_manager.clone(),
+                "gateway-udp-retry",
+                Arc::new(|_, _| {}),
+            )
+            .expect("retry gateway UDP start");
+        assert!(channel.started.load(Ordering::Relaxed));
+
+        stop_manager.stop();
+        assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
     }
 
     #[test]

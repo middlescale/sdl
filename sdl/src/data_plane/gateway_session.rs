@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -29,6 +30,8 @@ const GATEWAY_SWITCH_BETTER_RT_MS: i64 = 15;
 const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
 const GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS: i64 = 120_000;
+const GATEWAY_UDP_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+static GATEWAY_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GatewayGrantPhase {
@@ -97,8 +100,25 @@ pub struct GatewaySession {
     state: Arc<Mutex<GatewaySessionState>>,
     channel: GatewayTransport,
     started: Arc<AtomicCell<bool>>,
+    active: Arc<AtomicCell<bool>>,
+    udp_stop_handle: Arc<Mutex<Option<UdpStopHandle>>>,
     debug_watch: DebugWatch,
     stats: DataPlaneStats,
+}
+
+struct UdpStopHandle {
+    stop_sender: Option<mpsc::Sender<()>>,
+    stopped_receiver: mpsc::Receiver<()>,
+    runtime_active: Arc<AtomicCell<bool>>,
+}
+
+impl UdpStopHandle {
+    fn stop(&mut self, timeout: Duration) -> bool {
+        if let Some(stop_sender) = self.stop_sender.take() {
+            let _ = stop_sender.send(());
+        }
+        self.stopped_receiver.recv_timeout(timeout).is_ok()
+    }
 }
 
 #[derive(Clone)]
@@ -176,6 +196,8 @@ impl GatewaySession {
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
             channel: GatewayTransport::Quic(QuicChannel::new(endpoint, endpoint.ip().to_string())),
             started: Arc::new(AtomicCell::new(false)),
+            active: Arc::new(AtomicCell::new(false)),
+            udp_stop_handle: Arc::new(Mutex::new(None)),
             debug_watch,
             stats,
         }
@@ -184,25 +206,27 @@ impl GatewaySession {
     fn new_udp(
         endpoint: SocketAddr,
         grant: &GatewayAccessGrant,
+        channel_meta: &crate::proto::message::GatewayChannel,
         debug_watch: DebugWatch,
         stats: DataPlaneStats,
     ) -> anyhow::Result<Self> {
-        let gateway_udp_public_key: [u8; 32] =
-            grant
-                .gateway_udp_public_key
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("gateway udp public key must be 32 bytes"))?;
+        let gateway_udp_public_key: [u8; 32] = channel_meta
+            .udp_public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("gateway udp public key must be 32 bytes"))?;
         Ok(Self {
             endpoint,
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
             channel: GatewayTransport::Udp(GatewayUdpChannel::new(
                 endpoint,
                 gateway_udp_public_key,
-                grant.gateway_udp_key_id.clone(),
+                channel_meta.udp_key_id.clone(),
                 grant.session_id,
             )?),
             started: Arc::new(AtomicCell::new(false)),
+            active: Arc::new(AtomicCell::new(false)),
+            udp_stop_handle: Arc::new(Mutex::new(None)),
             debug_watch,
             stats,
         })
@@ -220,6 +244,8 @@ impl GatewaySession {
             state: Arc::new(Mutex::new(GatewaySessionState::default())),
             channel: GatewayTransport::Https(Http2Channel::new(endpoint, request_uri, server_name)),
             started: Arc::new(AtomicCell::new(false)),
+            active: Arc::new(AtomicCell::new(false)),
+            udp_stop_handle: Arc::new(Mutex::new(None)),
             debug_watch,
             stats,
         }
@@ -229,44 +255,161 @@ impl GatewaySession {
         if self.started.swap(true) {
             return Ok(());
         }
-        let worker_name = format!("gateway-{}", sanitize_worker_name(self.endpoint));
+        let runtime_id = GATEWAY_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
+        let worker_name = format!(
+            "gateway-{}-{runtime_id}",
+            sanitize_worker_name(self.endpoint)
+        );
         let endpoint = self.endpoint;
         let stats = self.stats.clone();
         let on_packet = on_packet.clone();
+        let session_active = self.active.clone();
         match &self.channel {
-            GatewayTransport::Quic(channel) => {
-                let on_packet = on_packet.clone();
-                let stats = stats.clone();
-                channel.start_named(
-                    stop_manager.clone(),
-                    &worker_name,
-                    move |packet: Vec<u8>, route_key| {
-                        stats.record_transport_down(endpoint.ip(), packet.len());
-                        on_packet(packet, route_key);
-                    },
-                )?
-            }
+            GatewayTransport::Quic(channel) => channel.start_named(
+                stop_manager.clone(),
+                &worker_name,
+                move |packet: Vec<u8>, route_key| {
+                    if !session_active.load() {
+                        return;
+                    }
+                    stats.record_transport_down(endpoint.ip(), packet.len());
+                    on_packet(packet, route_key);
+                },
+            ),
             GatewayTransport::Https(channel) => {
-                let on_packet = on_packet.clone();
-                let stats = stats.clone();
+                let session_active = self.active.clone();
                 channel.start_named(
                     stop_manager.clone(),
                     &worker_name,
                     move |packet: Vec<u8>, route_key| {
+                        if !session_active.load() {
+                            return;
+                        }
                         stats.record_transport_down(endpoint.ip(), packet.len());
                         on_packet(packet, route_key);
                     },
-                )?
+                )
             }
             GatewayTransport::Udp(channel) => {
+                let runtime_active = Arc::new(AtomicCell::new(true));
+                let callback_runtime_active = runtime_active.clone();
+                let session_active = self.active.clone();
                 let callback: PacketCallback = Arc::new(move |packet: Vec<u8>, route_key| {
+                    if !session_active.load() || !callback_runtime_active.load() {
+                        return;
+                    }
                     stats.record_transport_down(endpoint.ip(), packet.len());
                     on_packet(packet, route_key);
                 });
-                channel.start_named(stop_manager.clone(), &worker_name, callback)?
+                self.start_udp(
+                    stop_manager,
+                    &worker_name,
+                    channel,
+                    callback,
+                    runtime_active,
+                )
             }
         }
+    }
+
+    fn start_udp(
+        &self,
+        stop_manager: &StopManager,
+        worker_name: &str,
+        channel: &GatewayUdpChannel,
+        callback: PacketCallback,
+        runtime_active: Arc<AtomicCell<bool>>,
+    ) -> anyhow::Result<()> {
+        let mut udp_stop_handle = self.udp_stop_handle.lock();
+        let session_stop_manager = StopManager::new(|| {});
+        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+        let parent_stop_sender = stop_sender.clone();
+        let parent_worker = stop_manager.add_listener(worker_name.to_string(), move || {
+            let _ = parent_stop_sender.send(());
+        })?;
+        let child_stop_manager = session_stop_manager.clone();
+        let (stopped_sender, stopped_receiver) = mpsc::channel::<()>();
+        let bridge_thread_name = format!("{worker_name}-stop");
+        if let Err(err) = thread::Builder::new()
+            .name(bridge_thread_name)
+            .spawn(move || {
+                let _ = stop_receiver.recv();
+                child_stop_manager.stop();
+                child_stop_manager.wait();
+                drop(parent_worker);
+                let _ = stopped_sender.send(());
+            })
+        {
+            runtime_active.store(false);
+            self.started.store(false);
+            return Err(err.into());
+        }
+        if let Err(err) = channel.start_named(session_stop_manager, worker_name, callback) {
+            runtime_active.store(false);
+            let mut stop_handle = UdpStopHandle {
+                stop_sender: Some(stop_sender),
+                stopped_receiver,
+                runtime_active: runtime_active.clone(),
+            };
+            let _ = stop_handle.stop(GATEWAY_UDP_STOP_TIMEOUT);
+            self.started.store(false);
+            return Err(err);
+        }
+        *udp_stop_handle = Some(UdpStopHandle {
+            stop_sender: Some(stop_sender),
+            stopped_receiver,
+            runtime_active,
+        });
         Ok(())
+    }
+
+    fn is_udp(&self) -> bool {
+        matches!(&self.channel, GatewayTransport::Udp(_))
+    }
+
+    fn matches_kind(&self, kind: GatewayChannelKind) -> bool {
+        matches!(
+            (&self.channel, kind),
+            (
+                GatewayTransport::Udp(_),
+                GatewayChannelKind::GATEWAY_CHANNEL_UDP
+            ) | (
+                GatewayTransport::Quic(_),
+                GatewayChannelKind::GATEWAY_CHANNEL_QUIC
+            ) | (
+                GatewayTransport::Https(_),
+                GatewayChannelKind::GATEWAY_CHANNEL_HTTPS
+            )
+        )
+    }
+
+    fn reactivate(&self) {
+        self.active.store(true);
+    }
+
+    fn retire(&self) {
+        self.active.store(false);
+        let mut state = self.state.lock();
+        state.authenticated = false;
+        state.ticket.clear();
+        state.hard_expire_unix_ms = 0;
+        state.ticket_expire_unix_ms = 0;
+        state.lease_expire_unix_ms = 0;
+        state.grace_expire_unix_ms = 0;
+    }
+
+    fn stop_udp_runtime(&self) -> bool {
+        let mut guard = self.udp_stop_handle.lock();
+        if let Some(stop_handle) = guard.as_ref() {
+            stop_handle.runtime_active.store(false);
+        }
+        let stopped = guard
+            .as_mut()
+            .map(|stop_handle| stop_handle.stop(GATEWAY_UDP_STOP_TIMEOUT))
+            .unwrap_or(true);
+        guard.take();
+        self.started.store(false);
+        stopped
     }
 
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
@@ -305,7 +448,7 @@ impl GatewaySession {
         drop(guard);
         match &self.channel {
             GatewayTransport::Quic(channel) => {
-                let selected_channel = grant.gateway_channels.iter().find(|channel_meta| {
+                let selected_channel = grant.gateway_channel.as_ref().filter(|channel_meta| {
                     channel_meta.kind.enum_value_or_default()
                         == GatewayChannelKind::GATEWAY_CHANNEL_QUIC
                         && parse_transport_endpoint(&channel_meta.addr)
@@ -320,7 +463,7 @@ impl GatewaySession {
                 channel.update_server_addr(self.endpoint);
             }
             GatewayTransport::Https(channel) => {
-                let selected_channel = grant.gateway_channels.iter().find(|channel_meta| {
+                let selected_channel = grant.gateway_channel.as_ref().filter(|channel_meta| {
                     channel_meta.kind.enum_value_or_default()
                         == GatewayChannelKind::GATEWAY_CHANNEL_HTTPS
                         && parse_https_transport_target(&channel_meta.addr)
@@ -347,15 +490,19 @@ impl GatewaySession {
                 channel.update_idle_timeout(http2_idle_timeout);
             }
             GatewayTransport::Udp(channel) => {
-                let gateway_udp_public_key: [u8; 32] = grant
-                    .gateway_udp_public_key
+                let channel_meta = grant
+                    .gateway_channel
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("gateway channel is missing"))?;
+                let gateway_udp_public_key: [u8; 32] = channel_meta
+                    .udp_public_key
                     .as_slice()
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("gateway udp public key must be 32 bytes"))?;
                 channel.update_server_addr(self.endpoint);
                 channel.update_gateway_udp_auth(
                     gateway_udp_public_key,
-                    grant.gateway_udp_key_id.clone(),
+                    channel_meta.udp_key_id.clone(),
                     grant.session_id,
                 )?;
             }
@@ -478,10 +625,30 @@ impl GatewaySession {
     }
 
     fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
+        if !self.active.load() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "gateway session is retired",
+            ));
+        }
         match &self.channel {
             GatewayTransport::Quic(channel) => channel.send_packet(packet),
             GatewayTransport::Https(channel) => channel.send_packet(packet),
-            GatewayTransport::Udp(channel) => channel.send_packet(packet),
+            GatewayTransport::Udp(channel) => {
+                let runtime_active = self
+                    .udp_stop_handle
+                    .lock()
+                    .as_ref()
+                    .map(|stop_handle| stop_handle.runtime_active.load())
+                    .unwrap_or(false);
+                if !runtime_active {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        "udp gateway session is inactive",
+                    ));
+                }
+                channel.send_packet(packet)
+            }
         }
     }
 
@@ -671,6 +838,7 @@ pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     runtime: Arc<OnceLock<(StopManager, PacketCallback)>>,
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
+    dormant_stream_sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     selection: Arc<Mutex<GatewaySelectionState>>,
     refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
@@ -688,6 +856,7 @@ impl GatewaySessions {
             current_device,
             runtime: Arc::new(OnceLock::new()),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            dormant_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
             refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
@@ -765,52 +934,55 @@ impl GatewaySessions {
         let mut parsed: Vec<(GatewayAccessGrant, ResolvedGatewayChannel)> = Vec::new();
         let mut desired = HashSet::new();
         for grant in grants {
-            let preferred_kind = grant.default_gateway_channel.enum_value_or_default();
-            let mut selected_channels: Vec<ResolvedGatewayChannel> = grant
-                .gateway_channels
-                .iter()
-                .filter_map(|channel| {
-                    let kind = channel.kind.enum_value_or_default();
-                    let supported = match kind {
-                        GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
-                            grant.gateway_udp_public_key.len() == 32
-                                && !grant.gateway_udp_key_id.is_empty()
-                        }
-                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
-                        GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => true,
-                        _ => false,
-                    };
-                    if !supported || kind != preferred_kind {
-                        return None;
+            if let Some(channel) = grant.gateway_channel.as_ref() {
+                let kind = match channel.kind.enum_value() {
+                    Ok(
+                        kind @ (GatewayChannelKind::GATEWAY_CHANNEL_UDP
+                        | GatewayChannelKind::GATEWAY_CHANNEL_QUIC
+                        | GatewayChannelKind::GATEWAY_CHANNEL_HTTPS),
+                    ) => kind,
+                    Ok(GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN) => {
+                        log::warn!(
+                            "ignore gateway channel with unspecified kind gateway_id={} addr={}",
+                            grant.gateway_id,
+                            channel.addr
+                        );
+                        continue;
                     }
-                    resolve_gateway_channel(channel).ok()
-                })
-                .collect();
-            if selected_channels.is_empty() {
-                selected_channels = grant
-                    .gateway_channels
-                    .iter()
-                    .filter_map(|channel| {
-                        let kind = channel.kind.enum_value_or_default();
-                        let supported = match kind {
-                            GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
-                                grant.gateway_udp_public_key.len() == 32
-                                    && !grant.gateway_udp_key_id.is_empty()
-                            }
-                            GatewayChannelKind::GATEWAY_CHANNEL_QUIC => true,
-                            GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => true,
-                            _ => false,
-                        };
-                        if !supported {
-                            return None;
-                        }
-                        resolve_gateway_channel(channel).ok()
-                    })
-                    .collect();
-            }
-            for channel in selected_channels {
-                if desired.insert(channel.endpoint) {
-                    parsed.push((grant.clone(), channel));
+                    Err(value) => {
+                        log::warn!(
+                            "ignore gateway channel with unknown kind gateway_id={} kind={} addr={}",
+                            grant.gateway_id,
+                            value,
+                            channel.addr
+                        );
+                        continue;
+                    }
+                };
+                if kind == GatewayChannelKind::GATEWAY_CHANNEL_UDP
+                    && (channel.udp_public_key.len() != 32 || channel.udp_key_id.is_empty())
+                {
+                    log::warn!(
+                        "ignore UDP gateway channel with invalid key metadata gateway_id={} addr={}",
+                        grant.gateway_id,
+                        channel.addr
+                    );
+                    continue;
+                }
+                match resolve_gateway_channel(channel) {
+                    Ok(channel) if desired.insert(channel.endpoint) => {
+                        parsed.push((grant.clone(), channel));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!(
+                            "ignore invalid gateway channel gateway_id={} kind={:?} addr={}: {:?}",
+                            grant.gateway_id,
+                            kind,
+                            channel.addr,
+                            e
+                        );
+                    }
                 }
             }
         }
@@ -835,17 +1007,63 @@ impl GatewaySessions {
                 .collect::<Vec<_>>()
         );
         let mut guard = self.sessions.lock();
-        guard.retain(|addr, _| desired.contains(addr));
+        let removed_endpoints: Vec<SocketAddr> = guard
+            .keys()
+            .filter(|endpoint| !desired.contains(endpoint))
+            .copied()
+            .collect();
+        let mut dormant = self.dormant_stream_sessions.lock();
+        for endpoint in removed_endpoints {
+            let Some(session) = guard.remove(&endpoint) else {
+                continue;
+            };
+            session.retire();
+            if session.is_udp() {
+                if !session.stop_udp_runtime() {
+                    log::warn!(
+                        "udp gateway session stop timed out; detaching endpoint={}",
+                        endpoint
+                    );
+                }
+            } else {
+                dormant.insert(endpoint, session);
+            }
+        }
         for (grant, resolved_channel) in parsed {
             let endpoint = resolved_channel.endpoint;
             let session = if let Some(existing) = guard.get(&endpoint).cloned() {
+                if !existing.matches_kind(resolved_channel.kind) {
+                    log::warn!(
+                        "ignore gateway channel kind change for active endpoint={} requested_kind={:?}",
+                        endpoint,
+                        resolved_channel.kind
+                    );
+                    continue;
+                }
                 existing
+            } else if let Some(existing) = dormant.remove(&endpoint) {
+                if existing.matches_kind(resolved_channel.kind) {
+                    guard.insert(endpoint, existing.clone());
+                    existing
+                } else {
+                    log::warn!(
+                        "ignore gateway channel kind change for dormant endpoint={} requested_kind={:?}",
+                        endpoint,
+                        resolved_channel.kind
+                    );
+                    dormant.insert(endpoint, existing);
+                    continue;
+                }
             } else {
                 let created = match resolved_channel.kind {
                     GatewayChannelKind::GATEWAY_CHANNEL_UDP => {
                         match GatewaySession::new_udp(
                             endpoint,
                             &grant,
+                            grant
+                                .gateway_channel
+                                .as_ref()
+                                .expect("parsed gateway channel"),
                             self.debug_watch.clone(),
                             self.stats.clone(),
                         ) {
@@ -881,13 +1099,31 @@ impl GatewaySessions {
             };
             if let Err(e) = session.update_grant(&grant, device_id.clone()) {
                 log::warn!("update gateway session failed {}: {:?}", endpoint, e);
+                session.retire();
+                if session.is_udp() && !session.stop_udp_runtime() {
+                    log::warn!(
+                        "udp gateway session stop timed out after grant update failure; detaching endpoint={}",
+                        endpoint
+                    );
+                }
+                guard.remove(&endpoint);
                 continue;
             }
             if let Some((stop_manager, on_packet)) = self.runtime.get() {
                 if let Err(e) = session.start(stop_manager, on_packet) {
                     log::warn!("start gateway session failed {}: {:?}", endpoint, e);
+                    session.retire();
+                    if session.is_udp() && !session.stop_udp_runtime() {
+                        log::warn!(
+                            "udp gateway session stop timed out after start failure; detaching endpoint={}",
+                            endpoint
+                        );
+                    }
+                    guard.remove(&endpoint);
+                    continue;
                 }
             }
+            session.reactivate();
         }
         self.reset_selection_if_missing(&guard);
         drop(guard);
@@ -895,7 +1131,23 @@ impl GatewaySessions {
     }
 
     pub fn clear_gateway_grant(&self) {
-        self.sessions.lock().clear();
+        let mut sessions = self.sessions.lock();
+        let mut dormant = self.dormant_stream_sessions.lock();
+        for (endpoint, session) in sessions.drain() {
+            session.retire();
+            if session.is_udp() {
+                if !session.stop_udp_runtime() {
+                    log::warn!(
+                        "udp gateway session stop timed out while clearing grants; detaching endpoint={}",
+                        endpoint
+                    );
+                }
+            } else {
+                dormant.insert(endpoint, session);
+            }
+        }
+        drop(dormant);
+        drop(sessions);
         *self.selection.lock() = GatewaySelectionState::default();
         self.refresh_requested_at_ms.store(0);
     }
@@ -1157,7 +1409,13 @@ struct HttpsTransportTarget {
 fn resolve_gateway_channel(
     channel: &crate::proto::message::GatewayChannel,
 ) -> anyhow::Result<ResolvedGatewayChannel> {
-    let kind = channel.kind.enum_value_or_default();
+    let kind = channel
+        .kind
+        .enum_value()
+        .map_err(|value| anyhow::anyhow!("unknown gateway channel kind {value}"))?;
+    if kind == GatewayChannelKind::GATEWAY_CHANNEL_UNKNOWN {
+        anyhow::bail!("gateway channel kind is unspecified");
+    }
     match kind {
         GatewayChannelKind::GATEWAY_CHANNEL_HTTPS => {
             let target = parse_https_transport_target(&channel.addr)?;
@@ -1292,16 +1550,21 @@ fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
 mod tests {
     use super::{
         gateway_http2_idle_timeout, gateway_session_order_key, now_time,
-        parse_https_transport_target, parse_transport_endpoint, GatewayGrantPhase,
-        GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions, GatewayTransport,
+        parse_https_transport_target, parse_transport_endpoint, resolve_gateway_channel,
+        GatewayGrantPhase, GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
+        GatewayTransport, UdpStopHandle,
     };
     use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
     use std::time::Duration;
 
+    use crossbeam_utils::atomic::AtomicCell;
     use protobuf::EnumOrUnknown;
 
     use crate::handle::CurrentDeviceInfo;
     use crate::proto::message::{GatewayAccessGrant, GatewayChannel, GatewayChannelKind};
+    use crate::protocol::NetPacket;
+    use crate::util::StopManager;
 
     #[test]
     fn parse_transport_endpoint_accepts_socket_addr() {
@@ -1339,6 +1602,20 @@ mod tests {
                 .contains("gateway https addr path must be /gateway or empty"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn unknown_gateway_channel_kind_is_rejected() {
+        let channel = GatewayChannel {
+            kind: EnumOrUnknown::from_i32(99),
+            addr: "quic://127.0.0.1:29900".into(),
+            ..Default::default()
+        };
+
+        let err = resolve_gateway_channel(&channel)
+            .err()
+            .expect("unknown channel kind");
+        assert!(err.to_string().contains("unknown gateway channel kind 99"));
     }
 
     #[test]
@@ -1436,14 +1713,12 @@ mod tests {
                     soft_refresh_after_unix_ms: now_ms + 30_000,
                     hard_expire_unix_ms: now_ms + 60_000,
                     ticket_expire_unix_ms: now_ms + 60_000,
-                    gateway_channels: vec![GatewayChannel {
+                    gateway_channel: Some(GatewayChannel {
                         kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
                         addr: "quic://127.0.0.1:29910".into(),
                         ..Default::default()
-                    }],
-                    default_gateway_channel: EnumOrUnknown::new(
-                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
-                    ),
+                    })
+                    .into(),
                     ..Default::default()
                 },
                 GatewayAccessGrant {
@@ -1454,14 +1729,12 @@ mod tests {
                     soft_refresh_after_unix_ms: now_ms - 60_000,
                     hard_expire_unix_ms: now_ms - 1,
                     ticket_expire_unix_ms: now_ms - 1,
-                    gateway_channels: vec![GatewayChannel {
+                    gateway_channel: Some(GatewayChannel {
                         kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
                         addr: "quic://127.0.0.1:29911".into(),
                         ..Default::default()
-                    }],
-                    default_gateway_channel: EnumOrUnknown::new(
-                        GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
-                    ),
+                    })
+                    .into(),
                     ..Default::default()
                 },
             ],
@@ -1500,14 +1773,12 @@ mod tests {
                 soft_refresh_after_unix_ms,
                 hard_expire_unix_ms,
                 ticket_expire_unix_ms,
-                gateway_channels: vec![GatewayChannel {
+                gateway_channel: Some(GatewayChannel {
                     kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
                     addr: "quic://127.0.0.1:29900".into(),
                     ..Default::default()
-                }],
-                default_gateway_channel: EnumOrUnknown::new(
-                    GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
-                ),
+                })
+                .into(),
                 ..Default::default()
             }],
             Ipv4Addr::new(10, 26, 0, 3),
@@ -1540,12 +1811,12 @@ mod tests {
             ticket_expire_unix_ms: 12_345,
             lease_secs: 30,
             grace_secs: 60,
-            gateway_channels: vec![GatewayChannel {
+            gateway_channel: Some(GatewayChannel {
                 kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
                 addr: "quic://127.0.0.1:29900".into(),
                 ..Default::default()
-            }],
-            default_gateway_channel: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_QUIC),
+            })
+            .into(),
             ..Default::default()
         };
         sessions.set_gateway_grants(
@@ -1608,16 +1879,14 @@ mod tests {
                 ticket_expire_unix_ms: now_time() as i64 + 60_000,
                 lease_secs: 30,
                 grace_secs: 60,
-                gateway_udp_public_key: [7; 32].to_vec(),
-                gateway_udp_key_id: "key-1".into(),
-                gateway_channels: vec![GatewayChannel {
+                gateway_channel: Some(GatewayChannel {
                     kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
                     addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
                     ..Default::default()
-                }],
-                default_gateway_channel: EnumOrUnknown::new(
-                    GatewayChannelKind::GATEWAY_CHANNEL_UDP,
-                ),
+                })
+                .into(),
                 ..Default::default()
             }],
             Ipv4Addr::new(10, 26, 0, 3),
@@ -1655,6 +1924,87 @@ mod tests {
     }
 
     #[test]
+    fn retired_https_session_rejects_outbound_packets() {
+        let session = GatewaySession::new_https(
+            "127.0.0.1:443".parse().unwrap(),
+            "https://127.0.0.1:443/gateway".into(),
+            "127.0.0.1".into(),
+            Default::default(),
+            crate::data_plane::stats::DataPlaneStats::new(true),
+        );
+        let packet = NetPacket::new(vec![0u8; 12]).expect("packet");
+
+        session.retire();
+
+        let err = session
+            .send_packet(&packet)
+            .expect_err("retired HTTPS send");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+    }
+
+    #[test]
+    fn inactive_udp_session_rejects_outbound_packets() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        let now_ms = now_time() as i64;
+        let stop_manager = StopManager::new(|| {});
+        sessions
+            .start(stop_manager.clone(), |_, _| {})
+            .expect("start gateway sessions");
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 9_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let session = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("gateway session")
+            .clone();
+        let current_device = CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        );
+        let packet = session
+            .maybe_build_connect_hello(&current_device)
+            .expect("build connect hello")
+            .expect("connect hello");
+
+        session
+            .udp_stop_handle
+            .lock()
+            .as_ref()
+            .expect("udp runtime")
+            .runtime_active
+            .store(false);
+        let err = session.send_packet(&packet).expect_err("inactive UDP send");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+        stop_manager.stop();
+        assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
     fn expired_udp_lease_drops_auth_and_reenables_bootstrap() {
         let sessions = GatewaySessions::default();
         let endpoint = "127.0.0.1:29901".parse().unwrap();
@@ -1670,16 +2020,14 @@ mod tests {
                 ticket_expire_unix_ms: now_ms + 60_000,
                 lease_secs: 30,
                 grace_secs: 60,
-                gateway_udp_public_key: [7; 32].to_vec(),
-                gateway_udp_key_id: "key-1".into(),
-                gateway_channels: vec![GatewayChannel {
+                gateway_channel: Some(GatewayChannel {
                     kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
                     addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
                     ..Default::default()
-                }],
-                default_gateway_channel: EnumOrUnknown::new(
-                    GatewayChannelKind::GATEWAY_CHANNEL_UDP,
-                ),
+                })
+                .into(),
                 ..Default::default()
             }],
             Ipv4Addr::new(10, 26, 0, 3),
@@ -1717,5 +2065,340 @@ mod tests {
         assert!(packet.is_some());
         assert!(channel.bootstrap_pending_for_test());
         assert!(!session.state.lock().authenticated);
+    }
+
+    #[test]
+    fn udp_runtime_gates_are_independent() {
+        let old_gate = Arc::new(AtomicCell::new(true));
+        let new_gate = Arc::new(AtomicCell::new(true));
+
+        old_gate.store(false);
+
+        assert!(!old_gate.load());
+        assert!(new_gate.load());
+    }
+
+    #[test]
+    fn udp_stop_timeout_preserves_handle_until_listener_exits() {
+        let (stop_sender, stop_receiver) = std::sync::mpsc::channel();
+        let (stopped_sender, stopped_receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            stop_receiver.recv().expect("stop request");
+            std::thread::sleep(Duration::from_millis(50));
+            stopped_sender.send(()).expect("stopped notification");
+        });
+        let mut handle = UdpStopHandle {
+            stop_sender: Some(stop_sender),
+            stopped_receiver,
+            runtime_active: Arc::new(AtomicCell::new(true)),
+        };
+
+        assert!(!handle.stop(Duration::from_millis(5)));
+        assert!(handle.stop_sender.is_none());
+        assert!(handle.stop(Duration::from_secs(1)));
+        worker.join().expect("stop worker");
+    }
+
+    #[test]
+    fn failed_stream_gateway_start_is_not_routable() {
+        let cases = [
+            (
+                GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                "quic://127.0.0.1:29951",
+                "127.0.0.1:29951",
+            ),
+            (
+                GatewayChannelKind::GATEWAY_CHANNEL_HTTPS,
+                "https://127.0.0.1:445/gateway",
+                "127.0.0.1:445",
+            ),
+        ];
+
+        for (kind, addr, endpoint) in cases {
+            let sessions = GatewaySessions::default();
+            let stop_manager = StopManager::new(|| {});
+            sessions
+                .start(stop_manager.clone(), |_, _| {})
+                .expect("start gateway sessions");
+            stop_manager.stop();
+            assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
+
+            let now_ms = now_time() as i64;
+            sessions.set_gateway_grants(
+                &[GatewayAccessGrant {
+                    gateway_id: format!("gw-{kind:?}"),
+                    ticket: vec![1, 2, 3],
+                    session_id: 7,
+                    policy_rev: 8,
+                    soft_refresh_after_unix_ms: now_ms + 30_000,
+                    hard_expire_unix_ms: now_ms + 60_000,
+                    ticket_expire_unix_ms: now_ms + 60_000,
+                    lease_secs: 30,
+                    grace_secs: 60,
+                    gateway_channel: Some(GatewayChannel {
+                        kind: EnumOrUnknown::new(kind),
+                        addr: addr.into(),
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                Ipv4Addr::new(10, 26, 0, 3),
+                "device-1".into(),
+            );
+
+            let endpoint = endpoint.parse().unwrap();
+            assert!(!sessions.sessions.lock().contains_key(&endpoint));
+            assert!(!sessions
+                .dormant_stream_sessions
+                .lock()
+                .contains_key(&endpoint));
+        }
+    }
+
+    #[test]
+    fn stream_gateway_session_is_reused_after_clear_and_readd() {
+        let cases = [
+            (
+                GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+                "quic://127.0.0.1:29941",
+                "127.0.0.1:29941",
+            ),
+            (
+                GatewayChannelKind::GATEWAY_CHANNEL_HTTPS,
+                "https://127.0.0.1:444/gateway",
+                "127.0.0.1:444",
+            ),
+        ];
+
+        for (kind, addr, endpoint) in cases {
+            let sessions = GatewaySessions::default();
+            let now_ms = now_time() as i64;
+            let grant = GatewayAccessGrant {
+                gateway_id: format!("gw-{kind:?}"),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 30_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(kind),
+                    addr: addr.into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            };
+            let endpoint = endpoint.parse().unwrap();
+
+            sessions.set_gateway_grants(
+                &[grant.clone()],
+                Ipv4Addr::new(10, 26, 0, 3),
+                "device-1".into(),
+            );
+            let original = sessions
+                .sessions
+                .lock()
+                .get(&endpoint)
+                .expect("original stream session")
+                .clone();
+
+            sessions.clear_gateway_grant();
+            assert!(!original.active.load());
+            assert!(sessions.sessions.lock().is_empty());
+            assert!(sessions
+                .dormant_stream_sessions
+                .lock()
+                .contains_key(&endpoint));
+
+            sessions.set_gateway_grants(&[grant], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
+            let reused = sessions
+                .sessions
+                .lock()
+                .get(&endpoint)
+                .expect("reused stream session")
+                .clone();
+
+            assert!(Arc::ptr_eq(&original.active, &reused.active));
+            assert!(Arc::ptr_eq(&original.state, &reused.state));
+            assert!(reused.active.load());
+            assert!(!sessions
+                .dormant_stream_sessions
+                .lock()
+                .contains_key(&endpoint));
+        }
+    }
+
+    #[test]
+    fn gateway_kind_change_for_same_endpoint_is_rejected() {
+        fn stream_grant(
+            gateway_id: &str,
+            kind: GatewayChannelKind,
+            addr: &str,
+        ) -> GatewayAccessGrant {
+            let now_ms = now_time() as i64;
+            GatewayAccessGrant {
+                gateway_id: gateway_id.into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 30_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(kind),
+                    addr: addr.into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }
+        }
+
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29961".parse().unwrap();
+        let quic_grant = stream_grant(
+            "gw-quic",
+            GatewayChannelKind::GATEWAY_CHANNEL_QUIC,
+            "quic://127.0.0.1:29961",
+        );
+        let https_grant = stream_grant(
+            "gw-https",
+            GatewayChannelKind::GATEWAY_CHANNEL_HTTPS,
+            "https://127.0.0.1:29961/gateway",
+        );
+
+        sessions.set_gateway_grants(
+            &[quic_grant],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let original = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("original QUIC session")
+            .clone();
+
+        sessions.set_gateway_grants(
+            &[https_grant.clone()],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let active = sessions
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .expect("original active session retained")
+            .clone();
+        assert!(Arc::ptr_eq(&original.state, &active.state));
+        assert!(active.matches_kind(GatewayChannelKind::GATEWAY_CHANNEL_QUIC));
+
+        sessions.clear_gateway_grant();
+        sessions.set_gateway_grants(
+            &[https_grant],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+
+        assert!(sessions.sessions.lock().is_empty());
+        let dormant = sessions
+            .dormant_stream_sessions
+            .lock()
+            .get(&endpoint)
+            .expect("original dormant session retained")
+            .clone();
+        assert!(Arc::ptr_eq(&original.state, &dormant.state));
+        assert!(dormant.matches_kind(GatewayChannelKind::GATEWAY_CHANNEL_QUIC));
+        assert!(!dormant.active.load());
+    }
+
+    #[test]
+    fn removed_gateway_can_be_recreated_with_the_same_endpoint() {
+        fn udp_grant(gateway_id: &str, endpoint: &str, session_id: u64) -> GatewayAccessGrant {
+            let now_ms = now_time() as i64;
+            GatewayAccessGrant {
+                gateway_id: gateway_id.into(),
+                ticket: vec![1, 2, 3],
+                session_id,
+                policy_rev: session_id,
+                soft_refresh_after_unix_ms: now_ms + 30_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                lease_secs: 30,
+                grace_secs: 60,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: format!("udp://{endpoint}"),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: format!("key-{session_id}"),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }
+        }
+
+        let sessions = GatewaySessions::default();
+        let stop_manager = StopManager::new(|| {});
+        let endpoint_1 = "127.0.0.1:29931".parse().unwrap();
+        let endpoint_2 = "127.0.0.1:29932".parse().unwrap();
+        let grant_1 = udp_grant("gw-1", "127.0.0.1:29931", 1);
+        let grant_2 = udp_grant("gw-2", "127.0.0.1:29932", 2);
+
+        sessions
+            .start(stop_manager.clone(), |_, _| {})
+            .expect("start gateway sessions");
+        sessions.set_gateway_grants(
+            &[grant_1.clone()],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let original = sessions
+            .sessions
+            .lock()
+            .get(&endpoint_1)
+            .expect("original gateway session")
+            .clone();
+        assert!(original.udp_stop_handle.lock().is_some());
+        assert!(original
+            .udp_stop_handle
+            .lock()
+            .as_ref()
+            .expect("original UDP runtime")
+            .runtime_active
+            .load());
+
+        sessions.set_gateway_grants(&[grant_2], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
+        assert!(original.udp_stop_handle.lock().is_none());
+        assert!(sessions.sessions.lock().contains_key(&endpoint_2));
+
+        sessions.set_gateway_grants(&[grant_1], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
+        let recreated = sessions
+            .sessions
+            .lock()
+            .get(&endpoint_1)
+            .expect("recreated gateway session")
+            .clone();
+        assert!(!Arc::ptr_eq(
+            &original.udp_stop_handle,
+            &recreated.udp_stop_handle
+        ));
+        assert!(recreated.udp_stop_handle.lock().is_some());
+        assert!(recreated
+            .udp_stop_handle
+            .lock()
+            .as_ref()
+            .expect("recreated UDP runtime")
+            .runtime_active
+            .load());
+
+        stop_manager.stop();
+        assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
     }
 }

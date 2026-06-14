@@ -216,7 +216,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                     ip_turn_packet::Protocol::Ipv4 => {
                         let source = net_packet.source();
                         let destination = net_packet.destination();
-                        let from_gateway = self.runtime.gateway_sessions.is_gateway_addr(route_key.addr);
+                        let from_gateway = self
+                            .runtime
+                            .gateway_sessions
+                            .is_gateway_addr(route_key.addr);
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
                         let mut gateway_echo_reply = None;
@@ -266,8 +269,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                     "icmp_checksum_valid": echo_meta.map(|meta| meta.checksum_valid),
                                 }),
                             );
-                            let written =
-                                write_full_device(&self.device, net_packet.payload(), "gateway ip packet inject")?;
+                            let written = write_full_device(
+                                &self.device,
+                                net_packet.payload(),
+                                "gateway ip packet inject",
+                            )?;
                             self.runtime.debug_watch.emit(
                                 "icmp",
                                 "gateway_echo_reply_injected",
@@ -1927,19 +1933,18 @@ fn should_clear_gateway_grants_from_refresh_response(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        effective_gateway_policy_rev, format_punch_endpoint, is_stale_epoch,
-        is_gateway_peer_ipturn_source,
-        log_sampled_unauthorized_server_source_drop, observed_udp_port_from_registration,
-        punch_endpoint_from_route, selected_endpoint_for_result, should_apply_gateway_policy_rev,
-        should_clear_gateway_grants_from_refresh_response,
+        effective_gateway_policy_rev, format_punch_endpoint, is_gateway_peer_ipturn_source,
+        is_stale_epoch, log_sampled_unauthorized_server_source_drop,
+        observed_udp_port_from_registration, punch_endpoint_from_route,
+        rewrite_peer_echo_request_as_reply, selected_endpoint_for_result,
+        should_apply_gateway_policy_rev, should_clear_gateway_grants_from_refresh_response,
         should_refresh_gateway_grant_after_registration,
-        should_retry_device_auth_after_challenge_expired, rewrite_peer_echo_request_as_reply,
+        should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
         ActivePunchSession, ActivePunchState,
     };
-    use crate::handle::CurrentDeviceInfo;
-    use crate::protocol::{ip_turn_packet, NetPacket, Protocol};
     use crate::data_plane::route::Route;
+    use crate::handle::CurrentDeviceInfo;
     use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{
@@ -1947,14 +1952,18 @@ mod tests {
         PunchSessionPhase, PunchStart, RefreshGatewayGrantResponse, RefreshGatewayGrantResult,
         RegistrationErrorReason,
     };
+    use crate::protocol::{ip_turn_packet, NetPacket, Protocol};
+    use crate::transport::connect_protocol::ConnectProtocol;
     use sdl_packet::icmp::icmp::IcmpPacket;
     use sdl_packet::icmp::Kind;
     use sdl_packet::ip::ipv4::packet::IpV4Packet;
-    use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
-    fn build_icmp_echo_request_packet(source: Ipv4Addr, destination: Ipv4Addr) -> NetPacket<Vec<u8>> {
+    fn build_icmp_echo_request_packet(
+        source: Ipv4Addr,
+        destination: Ipv4Addr,
+    ) -> NetPacket<Vec<u8>> {
         let mut ipv4_payload = vec![0u8; 28];
         let ipv4_len = ipv4_payload.len() as u16;
         ipv4_payload[0] = 0x45;
@@ -2050,7 +2059,10 @@ mod tests {
 
         let (_peer_ip, nat_info) = build_peer_nat_info_from_punch_start(&start);
 
-        assert_eq!(nat_info.local_ipv4(), Some(Ipv4Addr::new(192, 168, 31, 146)));
+        assert_eq!(
+            nat_info.local_ipv4(),
+            Some(Ipv4Addr::new(192, 168, 31, 146))
+        );
         assert_eq!(nat_info.ipv6(), Some(local_v6));
         assert_eq!(
             nat_info.local_udp_ipv4addr(),
