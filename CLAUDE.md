@@ -19,7 +19,7 @@ The SDL project is a Software Defined LAN system with a client-server architectu
 - Compression support: LZ4 (default), ZSTD (optional)
 - NAT traversal and P2P connectivity
 - Built-in IP proxy and port mapping
-- TUN/TAP device integration
+- TUN device integration
 
 ## Development Commands
 
@@ -59,7 +59,7 @@ The project uses Cargo features for conditional compilation:
 
 ### Network Layer
 - `handle/`: Various handlers for different aspects of the tunnel (handshaking, NAT traversal, maintenance)
-- `tun_tap_device/`: TUN/TAP device integration for packet interception
+- `tun_tap_device/`: TUN device integration for packet interception
 - `nat/`: NAT traversal and hole punching mechanisms
 
 ## Key Concepts
@@ -85,7 +85,7 @@ The project uses Cargo features for conditional compilation:
 The sdl-cli provides extensive command-line options:
 - Authentication: `-g <group>` for group, `-d <id>` for device id, `-n <name>` for device name
 - Transport: `-s <server>` for server address (control plane uses `https://host[:port]/control`)
-- Network: `-a` for TAP mode (instead of TUN), `--nic <name>` for specifying interface name
+- Network: `--nic <name>` for specifying interface name
 - Proxy: `-i <in-ip>` and `-o <out-ip>` for IP proxy configuration
 - Encryption: `-W` for client-to-server encryption
 - Advanced: `--use-channel <relay/p2p>` for forcing relay or P2P mode, `--compressor <lz4>` for enabling compression

@@ -822,6 +822,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         #[cfg(not(feature = "integrated_tun"))]
                         {
                             let device_config = crate::handle::callback::DeviceConfig::new(
+                                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                                self.runtime.config.device_name.clone(),
                                 self.runtime.config.mtu,
                                 virtual_ip,
                                 virtual_netmask,

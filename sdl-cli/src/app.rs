@@ -649,6 +649,9 @@ pub(crate) fn run_service_with_shutdown(
     saved_config: FileConfig,
     shutdown_receiver: std::sync::mpsc::Receiver<()>,
 ) -> i32 {
+    if let Err(e) = write_saved_config(&saved_config) {
+        log::warn!("write saved config at service start failed: {:?}", e);
+    }
     let running_service = match RunningService::start(config, saved_config) {
         Ok(running_service) => running_service,
         Err(code) => return code,

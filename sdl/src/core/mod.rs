@@ -44,9 +44,6 @@ pub fn default_device_name() -> String {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    #[cfg(feature = "integrated_tun")]
-    #[cfg(target_os = "windows")]
-    pub tap: bool,
     pub token: String,
     pub device_id: String,
     pub name: String,
@@ -94,9 +91,6 @@ impl Config {
     ) -> anyhow::Result<Self> {
         let name = default_device_name();
         Config::new(
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(target_os = "windows")]
-            false,
             token,
             device_id,
             name,
@@ -127,9 +121,6 @@ impl Config {
     }
 
     pub fn new(
-        #[cfg(feature = "integrated_tun")]
-        #[cfg(target_os = "windows")]
-        tap: bool,
         token: String,
         device_id: String,
         name: String,
@@ -233,9 +224,6 @@ impl Config {
             (LocalInterface::default(), None)
         };
         Ok(Self {
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(target_os = "windows")]
-            tap,
             token,
             device_id,
             name,

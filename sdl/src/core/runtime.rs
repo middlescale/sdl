@@ -53,9 +53,6 @@ pub struct RuntimeConfig {
     pub server_addr: String,
     pub mtu: u32,
     #[cfg(feature = "integrated_tun")]
-    #[cfg(target_os = "windows")]
-    pub tap: bool,
-    #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
     pub default_interface: crate::transport::socket::LocalInterface,
@@ -288,8 +285,6 @@ impl SdlRuntime {
         self.clear_applied_dns_profile();
         self.tun_device_helper.stop();
         let device_config = DeviceConfig::new(
-            #[cfg(target_os = "windows")]
-            self.config.tap,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             self.config.device_name.clone(),
             self.config.mtu,

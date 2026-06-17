@@ -45,7 +45,9 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, config::FileConfig)
 }
 
 fn default_service_file_config() -> config::FileConfig {
-    config::FileConfig::default()
+    let mut file_conf = config::FileConfig::default();
+    file_conf.normalize_defaults();
+    file_conf
 }
 
 fn load_service_file_config(conf: Option<&str>) -> anyhow::Result<config::FileConfig> {
@@ -189,10 +191,6 @@ fn override_service_file_config(
     {
         file_conf.packet_delay = packet_delay;
     }
-    #[cfg(target_os = "windows")]
-    if matches.opt_present("a") {
-        file_conf.tap = true;
-    }
     if let Some(device_name) = matches
         .opt_str("tun_name")
         .or_else(|| matches.opt_str("nic"))
@@ -233,8 +231,7 @@ pub fn parse_args_config_from(
     opts.optopt("d", "", "设备标识", "<id>");
     opts.optopt("s", "", "注册和中继服务器地址", "<server>");
     opts.optmulti("e", "", "stun服务器", "<stun-server>");
-    opts.optflag("a", "", "使用tap模式");
-    opts.optopt("", "nic", "虚拟网卡名称,windows下使用tap则必填", "<tun0>");
+    opts.optopt("", "nic", "虚拟网卡名称", "<tun0>");
     opts.optopt("", "tun_name", "指定tun网卡名称", "<sdl-tun>");
     opts.optmulti("i", "", "配置点对网(IP代理)入站时使用", "<in-ip>");
     opts.optmulti("o", "", "配置点对网出站时使用", "<out-ip>");
@@ -304,7 +301,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("--p2p-heartbeat-sec <sec>", ("P2P保活心跳间隔秒数,默认10秒", "P2P keepalive heartbeat interval in seconds, default 10s")),
         ("--p2p-route-idle-sec <sec>", ("P2P直连路由空闲清理秒数,默认30秒", "P2P direct-route idle cleanup timeout in seconds, default 30s")),
         ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
-        ("--nic <tun0>", ("指定虚拟网卡名称", "Specify virtual network card name")),
+        ("--nic <tun0>", ("指定虚拟网卡名称, Windows 下对应 Wintun/TUN 名称", "Specify virtual network card name, on Windows this is the Wintun/TUN interface name")),
         ("--tun_name <sdl-tun>", ("指定tun网卡名称", "Specify TUN interface name")),
         ("--packet-loss <0>", ("模拟丢包,取值0~1之间的小数,程序会按设定的概率主动丢包,可用于模拟弱网", "Simulate packet loss, value between 0 and 1, program actively drops packets based on set probability, useful for simulating weak networks")),
         ("--packet-delay <0>", ("模拟延迟,正整数,单位毫秒,程序将根据设定值延迟发送数据包,可用于模拟弱网", "Simulate latency, integer, in milliseconds (ms). The program will delay sending packets according to the set value and can be used to simulate weak networks")),

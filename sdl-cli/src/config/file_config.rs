@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_SERVICE_GROUP: &str = "default.ms.net";
 pub const DEFAULT_SERVICE_SERVER: &str = "https://control.middlescale.net/control";
-pub const FILE_CONFIG_VERSION: u32 = 1;
+pub const DEFAULT_CLIENT_LISTEN_PORT: u16 = 29873;
+pub const FILE_CONFIG_VERSION: u32 = 2;
 
 fn default_config_version() -> u32 {
     FILE_CONFIG_VERSION
@@ -25,8 +26,6 @@ fn default_config_version() -> u32 {
 pub struct FileConfig {
     #[serde(default = "default_config_version")]
     pub config_version: u32,
-    #[cfg(target_os = "windows")]
-    pub tap: bool,
     pub group: String,
     pub device_id: String,
     pub name: String,
@@ -62,8 +61,6 @@ impl Default for FileConfig {
         }
         Self {
             config_version: default_config_version(),
-            #[cfg(target_os = "windows")]
-            tap: false,
             group: DEFAULT_SERVICE_GROUP.to_string(),
             device_id: get_device_id(),
             name: sdl::core::default_device_name(),
@@ -77,7 +74,7 @@ impl Default for FileConfig {
             use_channel: "all".to_string(),
             cipher_model: None,
             punch_model: "all".to_string(),
-            ports: Some(vec![29873]),
+            ports: Some(vec![DEFAULT_CLIENT_LISTEN_PORT]),
             latency_first: false,
             p2p_heartbeat_interval_sec: 10,
             p2p_route_idle_timeout_sec: 30,
@@ -94,6 +91,17 @@ impl Default for FileConfig {
 }
 
 impl FileConfig {
+    pub fn normalize_defaults(&mut self) {
+        if self
+            .ports
+            .as_ref()
+            .map(|ports| ports.is_empty())
+            .unwrap_or(true)
+        {
+            self.ports = Some(vec![DEFAULT_CLIENT_LISTEN_PORT]);
+        }
+    }
+
     pub fn into_runtime_config(self) -> anyhow::Result<Config> {
         let in_ips = match args_parse::ips_parse(&self.in_ips) {
             Ok(in_ips) => in_ips,
@@ -130,8 +138,6 @@ impl FileConfig {
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = self.mapping.clone();
         let config = Config::new(
-            #[cfg(target_os = "windows")]
-            self.tap,
             self.group,
             self.device_id,
             self.name,
@@ -178,14 +184,28 @@ fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
     };
     if let serde_yaml::Value::Mapping(mapping) = &mut conf_value {
         mapping.remove(serde_yaml::Value::String("cmd".to_string()));
+        if let Some(version) = mapping.get(serde_yaml::Value::String("config_version".to_string()))
+        {
+            let version = version
+                .as_u64()
+                .ok_or_else(|| anyhow!("config_version must be an unsigned integer"))?;
+            if version != u64::from(FILE_CONFIG_VERSION) {
+                return Err(anyhow!(
+                    "unsupported config_version {}, expected {}",
+                    version,
+                    FILE_CONFIG_VERSION
+                ));
+            }
+        }
     }
-    let file_conf = match serde_yaml::from_value::<FileConfig>(conf_value) {
+    let mut file_conf = match serde_yaml::from_value::<FileConfig>(conf_value) {
         Ok(val) => val,
         Err(e) => {
             log::error!("serde_yaml::from_value {:?}", e);
             return Err(anyhow!("serde_yaml::from_value {:?}", e));
         }
     };
+    file_conf.normalize_defaults();
     if file_conf.group.is_empty() {
         return Err(anyhow!("group is_empty"));
     }
@@ -225,7 +245,8 @@ pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        read_config, FileConfig, DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
+        read_config, FileConfig, DEFAULT_CLIENT_LISTEN_PORT, DEFAULT_SERVICE_GROUP,
+        DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
     };
     use std::fs;
 
@@ -280,6 +301,43 @@ server_address: https://control.middlescale.net/control
         let (_, file_conf) =
             read_config(path.to_str().unwrap()).expect("legacy config should parse");
         assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_fills_missing_ports_with_default_listen_port() {
+        let path = write_temp_config(
+            r#"
+group: default.ms.net
+device_id: dev-missing-ports
+name: missing-ports-node
+server_address: https://control.middlescale.net/control
+"#,
+            "missing-ports",
+        );
+        let (config, file_conf) =
+            read_config(path.to_str().unwrap()).expect("config without ports should parse");
+        assert_eq!(file_conf.ports, Some(vec![DEFAULT_CLIENT_LISTEN_PORT]));
+        assert_eq!(config.ports, Some(vec![DEFAULT_CLIENT_LISTEN_PORT]));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_rejects_previous_config_version() {
+        let path = write_temp_config(
+            r#"
+config_version: 1
+group: default.ms.net
+device_id: dev-v1
+name: legacy-node
+server_address: https://control.middlescale.net/control
+"#,
+            "previous-version",
+        );
+        let err = read_config(path.to_str().unwrap()).expect_err("version 1 config should fail");
+        assert!(err
+            .to_string()
+            .contains("unsupported config_version 1, expected 2"));
         let _ = fs::remove_file(path);
     }
 

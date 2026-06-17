@@ -99,9 +99,6 @@ impl Sdl {
             server_addr: config.server_address_str.clone(),
             mtu: config.mtu.unwrap_or(1420),
             #[cfg(feature = "integrated_tun")]
-            #[cfg(target_os = "windows")]
-            tap: config.tap,
-            #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
             default_interface: default_interface.clone(),

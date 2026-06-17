@@ -1,104 +1,152 @@
 # SDL
 
-> Planned public branding: **SDL (Software Defined LAN)**.
+[日本語](README.ja.md)
 
-## Middlescale 版 SDL
+SDL stands for **Software Defined LAN**. It connects machines across WAN, Internet, and NAT environments into an overlay LAN using a control plane plus P2P or relay data paths.
 
-* fixed:
-Linux下ctrl+c 不能退出，因为使用了tun `SyncDevice::Shutdown()`,这个方法在类Unix系统不同用
+SDL started from the [vnt-dev/vnt](https://github.com/vnt-dev/vnt) codebase. It has since been substantially changed for the Middlescale control plane, service workflow, authentication model, gateway relay behavior, and the `sdl` / `sdl-service` client split.
 
+## Components
 
+| Binary | Purpose |
+| --- | --- |
+| `sdl-service` | Long-running local service. It starts the SDL runtime, TUN interface, control connection, P2P, relay, and local command socket. |
+| `sdl` | Local CLI frontend. It talks to `sdl-service` for status, auth, resume, suspend, gateway selection, and rename operations. |
 
-### 编译
-缺省 `make`是 `make build` 编译 debug 版
-`make push` 也是上传 debug 版
+## Quick Install
 
-`make release`是 build release
-
-### 安装服务
-
-- `install.sh` 现同时支持：
-  - Linux `systemd`
-  - macOS `launchd`
-- 默认会把 `sdl` / `sdl-service` 安装到 `/opt/sdl`，并把命令链接到 `/usr/local/bin`
-- 安装时会尽量保留 `env/` 下的持久文件（如 `config.json`、`device-id`、`device.key`）
-- 如果目标机器已经存在 `env/config.json`，安装脚本默认**保留旧配置**；只有显式传 `--overwrite-config` 或交互确认后才会覆盖
-- `config.json` 现在带 `config_version`；当安装包配置与本机现有配置版本不一致时，安装脚本会中止并提示你确认是否覆盖，避免静默把不兼容配置带到新服务里
-
-示例：
+Build release binaries first:
 
 ```bash
-cd sdl
+cargo build -p sdl-cli --release
+```
+
+Install as a system service:
+
+```bash
 sudo ./install.sh --source-dir ./target/release --user "$USER"
 ```
 
-如需明确用安装包里的 `env/config.json` 覆盖本机旧配置：
+The installer:
+
+- installs `sdl` and `sdl-service` under `/opt/sdl`
+- links commands into `/usr/local/bin`
+- preserves persistent files under `/opt/sdl/env`
+- installs a Linux `systemd` service named `sdl-service`
+- installs a macOS `launchd` service named `net.middlescale.sdl-service`
+
+To replace an existing `/opt/sdl/env/config.json` with the installer copy:
 
 ```bash
 sudo ./install.sh --source-dir ./target/release --user "$USER" --overwrite-config
 ```
 
-- Linux 安装后会启用 `systemd` unit：`sdl-service`
-- macOS 安装后会写入 `/Library/LaunchDaemons/net.middlescale.sdl-service.plist`
+## Run Manually
 
-### 项目定位（当前阶段）
+`sdl-service` requires administrator or root privileges because it creates and manages a virtual network interface.
 
-- 当前工作区和二进制已切到 `sdl` / `sdl-service`，产品定位是 **SDL / Software Defined LAN**，而不是传统意义上的 SD-WAN。
-- 目标是通过控制面、认证、P2P/relay 和 overlay 数据面，把分散在 WAN / Internet / NAT 后的节点组织成统一的 LAN 体验。
-- 因此后续文档会逐步使用：
-  - `SDL`
-  - `Software Defined LAN`
-  - `overlay LAN`
-
-### 状态上报说明（当前实现）
-
-- 客户端会周期上报 `ClientStatusInfo` 到控制面（默认先在 60s 后首次上报，之后每 10min 一次）。
-- 当前上报包含 NAT 类型、流量信息和 `p2p_list`。
-- 目前控制面 `DataPlaneReachable` 的判定基于 `p2p_list` 是否非空（即当前语义偏向“P2P 可达”）。
-
-
-### 自行编译
-
-<details> <summary>点击展开</summary>
-
-前提条件:安装rust编译环境([install rust](https://www.rust-lang.org/zh-CN/tools/install))
-
+```bash
+sudo sdl-service \
+  -g default.ms.net \
+  -n my-laptop \
+  -s https://control.middlescale.net/control
 ```
-到项目根目录下执行 cargo build -p sdl-cli
 
-也可按需编译，将得到更小的二进制文件，使用--no-default-features排除默认features
+After the first successful start, the service writes its effective configuration to `env/config.json`. Later starts can run without arguments and reuse that saved configuration.
 
+## Configuration
+
+The service reads configuration in this order:
+
+1. command line options
+2. `-f <config.yaml>`
+3. local `env/config.json`
+4. built-in defaults
+
+Minimal config example:
+
+```yaml
+config_version: 2
+group: default.ms.net
+device_id: my-device-id
+name: my-laptop
+server_address: https://control.middlescale.net/control
+ports:
+  - 29873
+use_channel: all
+punch_model: all
+p2p_heartbeat_interval_sec: 10
+p2p_route_idle_timeout_sec: 30
+```
+
+Notes:
+
+- `server_address` must use `https://host[:port]/control`.
+- `ports` controls local UDP listen ports. If missing, SDL fills it with `29873`.
+- `group` defaults to `default.ms.net`.
+- `device_id` is generated or reused from local state when not set explicitly.
+
+## Common Commands
+
+```bash
+sdl status
+sdl status --json
+sdl list
+sdl list --json
+sdl gateway --json
+sdl gateway --set auto
+sdl gateway --set <gateway-name>
+sdl route --json
+sdl channel_change --type relay
+sdl channel_change --json
+sdl auth --userId <user-id> [--group default.ms.net] <ticket>
+sdl rename <new-name>
+sdl suspend
+sdl resume
+```
+
+Command summary:
+
+- `sdl status` shows local service, authentication, network, route, and gateway state.
+- `sdl auth` submits a device auth ticket to the running local service.
+- `sdl rename` updates the display name stored by control; restart `sdl-service` to apply it locally.
+- `sdl suspend` pauses local traffic handling without exiting the service process.
+- `sdl resume` resumes an existing runtime or recreates it from saved config.
+- `sdl gateway --set auto` returns gateway selection to automatic mode.
+- `sdl route --json` shows the current forwarding path.
+- `sdl channel_change --type relay` switches the local runtime to relay mode.
+- If a device is waiting for authentication, `sdl status --json` exposes `auth_pending` and `last_error`.
+
+## Build
+
+Debug build:
+
+```bash
+cargo build -p sdl-cli
+```
+
+Release build:
+
+```bash
+cargo build -p sdl-cli --release
+```
+
+Minimal build without default features:
+
+```bash
 cargo build -p sdl-cli --no-default-features
 ```
 
-本地如果需要编译 Windows 版本，优先使用仓库根目录脚本：
+Windows local build helper:
 
 ```bash
 ./build-windows-local.sh
 ```
 
-- 本地脚本默认目标是 `x86_64-pc-windows-gnu`
-- 可通过环境变量覆盖，例如 `PROFILE=debug ./build-windows-local.sh`
-- GitHub Release workflow 仍保持 `x86_64-pc-windows-msvc`
+## Platform Notes
 
-`sdl-service` 无参数启动时，会默认使用：
-
-- group：`default.ms.net`
-- server：`https://control.middlescale.net/control`
-
-如果 `env/config.json` 已存在，则会优先读取这个保存下来的配置；首次带参数启动成功后也会自动写入它，后续无参数即可直接启动。
-
-如果需要覆盖，再显式传参数。服务端地址当前使用 `https://host[:port]/control`，例如：
-
-```
-./target/debug/sdl-service -g default.ms.net -d <device_id> -s https://control.example.com/control
-```
-
-前台命令可以在服务运行后修改节点显示名：
-
-```bash
-./target/debug/sdl rename office-laptop
-```
-
-
-</details>
+- Linux uses `systemd` when installed through `install.sh`.
+- macOS uses `launchd` when installed through `install.sh`.
+- Windows service support is implemented in `sdl-service.exe`; run with administrator privileges.
+- DNS profile integration is implemented for Linux, macOS, and Windows.
+- `sdl-service` prints an error when privileges are insufficient; it does not prompt for sudo automatically.
