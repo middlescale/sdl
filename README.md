@@ -4,7 +4,7 @@
 
 SDL stands for **Software Defined LAN**. It connects machines across WAN, Internet, and NAT environments into an overlay LAN using a control plane plus P2P or relay data paths.
 
-SDL started from the [vnt-dev/vnt](https://github.com/vnt-dev/vnt) codebase. It has since been substantially changed for the Middlescale control plane, service workflow, authentication model, gateway relay behavior, and the `sdl` / `sdl-service` client split.
+The product idea is inspired by Tailscale's simple private-network experience. SDL uses its own control plane and data-plane implementation, and started from the [vnt-dev/vnt](https://github.com/vnt-dev/vnt) codebase. It has since been substantially changed for the Middlescale control plane, service workflow, authentication model, gateway relay behavior, and the `sdl` / `sdl-service` client split.
 
 ## Components
 
@@ -12,6 +12,15 @@ SDL started from the [vnt-dev/vnt](https://github.com/vnt-dev/vnt) codebase. It 
 | --- | --- |
 | `sdl-service` | Long-running local service. It starts the SDL runtime, TUN interface, control connection, P2P, relay, and local command socket. |
 | `sdl` | Local CLI frontend. It talks to `sdl-service` for status, auth, resume, suspend, gateway selection, and rename operations. |
+
+## Security And Encryption
+
+SDL keeps control-plane identity and data-plane traffic separate, with a stronger key lifecycle than the original static-password model:
+
+- Each device owns a persistent local private key. The private key stays on the device and is never uploaded to the control plane.
+- Registration and authentication use the device public key plus signed challenge responses, so control can verify the device without receiving its private key.
+- Peer data packets are encrypted before they leave the TUN path. Incoming peer packets that should be encrypted are dropped if they arrive without the encrypted packet flag or fail decryption.
+- Unlike the original VNT-style fixed-password deployment model, SDL can use control-plane state to issue and refresh data-plane encryption material dynamically.
 
 ## Quick Install
 
@@ -73,7 +82,7 @@ name: my-laptop
 server_address: https://control.middlescale.net/control
 ports:
   - 29873
-use_channel: all
+use_channel: auto
 punch_model: all
 p2p_heartbeat_interval_sec: 10
 p2p_route_idle_timeout_sec: 30
@@ -83,6 +92,7 @@ Notes:
 
 - `server_address` must use `https://host[:port]/control`.
 - `ports` controls local UDP listen ports. If missing, SDL fills it with `29873`.
+- `use_channel` can be `auto`, `p2p`, or `relay`.
 - `group` defaults to `default.ms.net`.
 - `device_id` is generated or reused from local state when not set explicitly.
 

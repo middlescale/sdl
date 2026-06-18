@@ -4,7 +4,7 @@
 
 SDL は **Software Defined LAN** の略です。コントロールプレーンと P2P / リレーのデータパスを使い、WAN、インターネット、NAT 配下にある複数のマシンを 1 つのオーバーレイ LAN として接続します。
 
-SDL は [vnt-dev/vnt](https://github.com/vnt-dev/vnt) のコードベースから始まりました。その後、Middlescale のコントロールプレーン、サービス運用、認証モデル、ゲートウェイリレー、そして `sdl` / `sdl-service` のクライアント分離に合わせて大きく変更されています。
+製品コンセプトは、Tailscale のシンプルなプライベートネットワーク体験から着想を得ています。SDL は独自のコントロールプレーンとデータプレーン実装を持ち、[vnt-dev/vnt](https://github.com/vnt-dev/vnt) のコードベースから始まりました。その後、Middlescale のコントロールプレーン、サービス運用、認証モデル、ゲートウェイリレー、そして `sdl` / `sdl-service` のクライアント分離に合わせて大きく変更されています。
 
 ## コンポーネント
 
@@ -12,6 +12,15 @@ SDL は [vnt-dev/vnt](https://github.com/vnt-dev/vnt) のコードベースか�
 | --- | --- |
 | `sdl-service` | 常駐するローカルサービスです。SDL runtime、TUN インターフェース、control 接続、P2P、relay、ローカルコマンドソケットを起動します。 |
 | `sdl` | ローカル CLI フロントエンドです。`sdl-service` と通信し、status、auth、resume、suspend、gateway 選択、rename などを実行します。 |
+
+## セキュリティと暗号化
+
+SDL はコントロールプレーンの identity とデータプレーンの通信を分離し、元の固定パスワード方式より強い鍵ライフサイクルを採用しています。
+
+- 各 device は永続的なローカル秘密鍵を持ちます。この秘密鍵は device 上に残り、control plane へアップロードされません。
+- 登録と認証では device public key と署名付き challenge response を使うため、control は秘密鍵を受け取らずに device を検証できます。
+- Peer data packet は TUN 経路から出る前に暗号化されます。暗号化されるべき peer packet が暗号化フラグなしで届いた場合や復号に失敗した場合は破棄されます。
+- 元の VNT 風の固定パスワード運用とは異なり、SDL は control-plane state に基づいて data-plane encryption material を動的に発行、更新できます。
 
 ## クイックインストール
 
@@ -73,7 +82,7 @@ name: my-laptop
 server_address: https://control.middlescale.net/control
 ports:
   - 29873
-use_channel: all
+use_channel: auto
 punch_model: all
 p2p_heartbeat_interval_sec: 10
 p2p_route_idle_timeout_sec: 30
@@ -83,6 +92,7 @@ p2p_route_idle_timeout_sec: 30
 
 - `server_address` は `https://host[:port]/control` 形式で指定します。
 - `ports` はローカル UDP listen ポートです。未指定の場合、SDL は `29873` を補います。
+- `use_channel` には `auto`、`p2p`、`relay` を指定できます。
 - `group` のデフォルトは `default.ms.net` です。
 - `device_id` を明示しない場合、ローカル状態から生成または再利用されます。
 
