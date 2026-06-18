@@ -1,7 +1,9 @@
 use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
-use crate::command::server::{AuthCommand, CommandHandler, CommandServer};
+use crate::command::server::{AuthCommand, CommandHandler, CommandServer, SwitchCommand};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
-use crate::config::{write_saved_config, FileConfig};
+use crate::config::{
+    read_user_config, save_current_user_config, write_saved_config, write_user_config, FileConfig,
+};
 use crate::service_lock::ServiceInstanceGuard;
 use anyhow::Context;
 use console::style;
@@ -243,6 +245,56 @@ impl ServiceManager {
         }
     }
 
+    fn switch_user(&self, user_id: &str) -> anyhow::Result<String> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            anyhow::bail!("user_id cannot be empty");
+        }
+        if user_id.len() > 128 {
+            anyhow::bail!("user_id too long");
+        }
+
+        let _ = self.stop_service_runtime();
+
+        let current_saved_config = self.saved_config.lock().unwrap().clone();
+        save_current_user_config(&current_saved_config)?;
+
+        let mut next_saved_config = match read_user_config(user_id)? {
+            Some((_, saved)) => saved,
+            None => FileConfig::default(),
+        };
+        next_saved_config.user_id = Some(user_id.to_string());
+        write_user_config(user_id, &next_saved_config)?;
+        write_saved_config(&next_saved_config)?;
+        let mut next_config = next_saved_config.clone().into_runtime_config()?;
+        next_config.auth_user_id = None;
+        next_config.auth_group = None;
+        next_config.auth_ticket = None;
+        {
+            let mut config = self.config.lock().unwrap();
+            *config = next_config;
+        }
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            *saved_config = next_saved_config;
+        }
+
+        self.mutate_state(|state| {
+            state.runtime_running = false;
+            state.runtime_suspended = false;
+            state.auth_pending = true;
+            state.auth_message = Some(format!("reauth_required: switched to user_id={user_id}"));
+            state.last_error = None;
+            state.authenticated_user_id = None;
+            state.authenticated_group = None;
+        });
+
+        Ok(format!(
+            "switched to user_id={}; run `sdl auth --userId {} <ticket>` to authenticate",
+            user_id, user_id
+        ))
+    }
+
     fn shutdown(&self) {
         if let Err(e) = self.stop_service_runtime() {
             log::warn!("shutdown stop failed: {:?}", e);
@@ -362,7 +414,7 @@ impl CommandHandler for ServiceCommandHandler {
         self.0.saved_config.lock().unwrap().use_channel = match use_channel_type {
             UseChannelType::Relay => "relay".to_string(),
             UseChannelType::P2p => "p2p".to_string(),
-            UseChannelType::All => "all".to_string(),
+            UseChannelType::All => "auto".to_string(),
         };
         if let Ok(vnt) = self.0.current_runtime() {
             vnt.set_use_channel_type(use_channel_type);
@@ -391,10 +443,21 @@ impl CommandHandler for ServiceCommandHandler {
             config.auth_group = Some(auth.group.clone());
             config.auth_ticket = Some(auth.ticket.clone());
         }
+        {
+            let mut saved_config = self.0.saved_config.lock().unwrap();
+            saved_config.user_id = Some(auth.user_id.clone());
+        }
+        self.0.persist_saved_config();
         let vnt = self.0.current_runtime()?;
         vnt.request_device_auth(auth.user_id, auth.group, auth.ticket)
             .map(|_| "device auth request submitted to local service".to_string())
             .map_err(|e| io::Error::other(format!("auth failed: {e:?}")))
+    }
+
+    fn switch_user(&self, switch: SwitchCommand) -> io::Result<String> {
+        self.0
+            .switch_user(&switch.user_id)
+            .map_err(|e| io::Error::other(format!("switch failed: {e:?}")))
     }
 }
 

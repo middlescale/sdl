@@ -26,8 +26,8 @@ impl FromStr for UseChannelType {
         match s.to_lowercase().trim() {
             "relay" => Ok(UseChannelType::Relay),
             "p2p" => Ok(UseChannelType::P2p),
-            "all" | "auto" => Ok(UseChannelType::All),
-            _ => Err(format!("not match '{}', enum: relay/p2p/all", s)),
+            "auto" => Ok(UseChannelType::All),
+            _ => Err(format!("not match '{}', enum: relay/p2p/auto", s)),
         }
     }
 }

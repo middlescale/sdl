@@ -4,7 +4,8 @@ mod file_config;
 use crate::identifier;
 #[cfg(feature = "file_config")]
 pub use file_config::{
-    read_config, read_saved_config, saved_config_path, write_saved_config, FileConfig,
+    read_config, read_saved_config, read_user_config, save_current_user_config, saved_config_path,
+    switch_saved_config_to_user, write_saved_config, write_user_config, FileConfig,
     DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER,
 };
 

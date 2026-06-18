@@ -14,6 +14,11 @@ pub struct AuthCommand {
     pub ticket: String,
 }
 
+#[derive(Deserialize)]
+pub struct SwitchCommand {
+    pub user_id: String,
+}
+
 pub struct CommandServer {}
 
 impl CommandServer {
@@ -34,6 +39,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String>;
     fn rename(&self, new_name: &str) -> io::Result<String>;
     fn auth(&self, auth: AuthCommand) -> io::Result<String>;
+    fn switch_user(&self, switch: SwitchCommand) -> io::Result<String>;
 }
 
 impl CommandServer {
@@ -129,6 +135,16 @@ where
                         Err(err) => serde_yaml::to_string(&format!("error {}", err))
                             .unwrap_or_else(|e| format!("error {:?}", e)),
                     }
+                } else if let Some(value) = cmd.strip_prefix("switch:") {
+                    match serde_json::from_str::<SwitchCommand>(value.trim()) {
+                        Ok(switch) => {
+                            let _ = crate::command::service_state::clear_service_state();
+                            serde_yaml::to_string(&handler.switch_user(switch)?)
+                                .unwrap_or_else(|e| format!("error {:?}", e))
+                        }
+                        Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                            .unwrap_or_else(|e| format!("error {:?}", e)),
+                    }
                 } else {
                     format!(
                     "command '{}' not found.  Try to enter: 'route'/'list'/'resume'/'suspend' \n",
@@ -185,6 +201,9 @@ mod tests {
                 auth.ticket.len()
             ))
         }
+        fn switch_user(&self, switch: SwitchCommand) -> io::Result<String> {
+            Ok(format!("switch:{}", switch.user_id))
+        }
     }
 
     #[test]
@@ -211,6 +230,20 @@ mod tests {
         let out = command("rename:desktop windows", &handler).unwrap();
         let parsed: String = serde_yaml::from_str(&out).unwrap();
         assert_eq!(parsed, "desktop windows");
+    }
+
+    #[test]
+    fn switch_command_parses_json_payload() {
+        let handler = StubHandler;
+        let payload = serde_json::json!({
+            "user_id": "sdl-user-1",
+        });
+        let cmd = format!("switch:{}", serde_json::to_string(&payload).unwrap());
+
+        let out = command(&cmd, &handler).unwrap();
+        let parsed: String = serde_yaml::from_str(&out).unwrap();
+
+        assert_eq!(parsed, "switch:sdl-user-1");
     }
 
     #[test]
@@ -286,6 +319,9 @@ mod tests {
             fn auth(&self, _auth: AuthCommand) -> io::Result<String> {
                 Err(io::Error::other("unused"))
             }
+            fn switch_user(&self, _switch: SwitchCommand) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
         }
 
         let handler = StatusHandler;
@@ -328,6 +364,9 @@ mod tests {
             Err(io::Error::other("rename failed: timed out"))
         }
         fn auth(&self, _auth: AuthCommand) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn switch_user(&self, _switch: SwitchCommand) -> io::Result<String> {
             Err(io::Error::other("unused"))
         }
     }

@@ -78,7 +78,7 @@ fn use_channel_to_str(use_channel: UseChannelType) -> &'static str {
     match use_channel {
         UseChannelType::Relay => "relay",
         UseChannelType::P2p => "p2p",
-        UseChannelType::All => "all",
+        UseChannelType::All => "auto",
     }
 }
 
@@ -300,7 +300,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
         ("--p2p-heartbeat-sec <sec>", ("P2P保活心跳间隔秒数,默认10秒", "P2P keepalive heartbeat interval in seconds, default 10s")),
         ("--p2p-route-idle-sec <sec>", ("P2P直连路由空闲清理秒数,默认30秒", "P2P direct-route idle cleanup timeout in seconds, default 30s")),
-        ("--use-channel <p2p>", ("使用通道 relay/p2p/all,默认两者都使用", "Use channel relay/p2p/all, defaults to using both")),
+        ("--use-channel <auto|p2p|relay>", ("使用通道 auto/p2p/relay,默认自动选择", "Use channel auto/p2p/relay, defaults to automatic selection")),
         ("--nic <tun0>", ("指定虚拟网卡名称, Windows 下对应 Wintun/TUN 名称", "Specify virtual network card name, on Windows this is the Wintun/TUN interface name")),
         ("--tun_name <sdl-tun>", ("指定tun网卡名称", "Specify TUN interface name")),
         ("--packet-loss <0>", ("模拟丢包,取值0~1之间的小数,程序会按设定的概率主动丢包,可用于模拟弱网", "Simulate packet loss, value between 0 and 1, program actively drops packets based on set probability, useful for simulating weak networks")),

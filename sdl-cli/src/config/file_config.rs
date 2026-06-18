@@ -22,11 +22,19 @@ fn default_config_version() -> u32 {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+struct ActiveConfig {
+    #[serde(default = "default_config_version")]
+    config_version: u32,
+    active_user_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct FileConfig {
     #[serde(default = "default_config_version")]
     pub config_version: u32,
     pub group: String,
+    pub user_id: Option<String>,
     pub device_id: String,
     pub name: String,
     pub server_address: String,
@@ -62,6 +70,7 @@ impl Default for FileConfig {
         Self {
             config_version: default_config_version(),
             group: DEFAULT_SERVICE_GROUP.to_string(),
+            user_id: None,
             device_id: get_device_id(),
             name: sdl::core::default_device_name(),
             server_address: DEFAULT_SERVICE_SERVER.to_string(),
@@ -71,7 +80,7 @@ impl Default for FileConfig {
             mtu: None,
             tcp: false,
             ip: None,
-            use_channel: "all".to_string(),
+            use_channel: "auto".to_string(),
             cipher_model: None,
             punch_model: "all".to_string(),
             ports: Some(vec![DEFAULT_CLIENT_LISTEN_PORT]),
@@ -174,6 +183,30 @@ pub fn saved_config_path() -> std::io::Result<PathBuf> {
     Ok(crate::cli::app_home()?.join("config.json"))
 }
 
+fn encode_user_id_for_path(user_id: &str) -> String {
+    let mut out = String::new();
+    for byte in user_id.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    if out.is_empty() {
+        "_".to_string()
+    } else {
+        out
+    }
+}
+
+pub fn user_config_path(user_id: &str) -> std::io::Result<PathBuf> {
+    let dir = crate::cli::app_home()?.join("users");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)?;
+    }
+    let _ = crate::fs_access::ensure_user_access(&dir, 0o700);
+    Ok(dir.join(format!("{}.json", encode_user_id_for_path(user_id))))
+}
+
 fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
     let mut conf_value = match serde_yaml::from_str::<serde_yaml::Value>(conf) {
         Ok(val) => val,
@@ -206,6 +239,9 @@ fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
         }
     };
     file_conf.normalize_defaults();
+    if file_conf.use_channel.trim().eq_ignore_ascii_case("all") {
+        file_conf.use_channel = "auto".to_string();
+    }
     if file_conf.group.is_empty() {
         return Err(anyhow!("group is_empty"));
     }
@@ -231,22 +267,113 @@ pub fn read_saved_config() -> anyhow::Result<Option<(Config, FileConfig)>> {
     if !path.exists() {
         return Ok(None);
     }
-    read_config_from_path(&path).map(Some)
+    let contents = std::fs::read_to_string(&path)?;
+    if let Ok(active_config) = serde_yaml::from_str::<ActiveConfig>(&contents) {
+        if active_config.config_version != FILE_CONFIG_VERSION {
+            return Err(anyhow!(
+                "unsupported config_version {}, expected {}",
+                active_config.config_version,
+                FILE_CONFIG_VERSION
+            ));
+        }
+        let user_id = active_config.active_user_id.trim();
+        if user_id.is_empty() {
+            return Err(anyhow!("active_user_id cannot be empty"));
+        }
+        let mut file_conf = match read_user_config(user_id)? {
+            Some((_, saved)) => saved,
+            None => FileConfig::default(),
+        };
+        file_conf.user_id = Some(user_id.to_string());
+        write_user_config(user_id, &file_conf)?;
+        let config = file_conf.clone().into_runtime_config()?;
+        return Ok(Some((config, file_conf)));
+    }
+
+    let (_, file_conf) = read_config_from_path(&path)?;
+    if let Some(user_id) = file_conf.user_id.as_deref() {
+        write_user_config(user_id, &file_conf)?;
+        write_active_user_id(user_id)?;
+    }
+    let config = file_conf.clone().into_runtime_config()?;
+    Ok(Some((config, file_conf)))
+}
+
+pub fn write_active_user_id(user_id: &str) -> anyhow::Result<()> {
+    let user_id = user_id.trim();
+    if user_id.is_empty() {
+        return Err(anyhow!("active_user_id cannot be empty"));
+    }
+    let path = saved_config_path()?;
+    let contents = serde_json::to_string_pretty(&ActiveConfig {
+        config_version: FILE_CONFIG_VERSION,
+        active_user_id: user_id.to_string(),
+    })?;
+    std::fs::write(&path, contents)?;
+    crate::fs_access::ensure_user_access(&path, 0o600)?;
+    Ok(())
 }
 
 pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
+    if let Some(user_id) = file_conf.user_id.as_deref() {
+        write_user_config(user_id, file_conf)?;
+        write_active_user_id(user_id)?;
+        return Ok(());
+    }
+
     let path = saved_config_path()?;
     let contents = serde_json::to_string_pretty(file_conf)?;
-    std::fs::write(path, contents)?;
-    crate::fs_access::ensure_user_access(&saved_config_path()?, 0o600)?;
+    std::fs::write(&path, contents)?;
+    crate::fs_access::ensure_user_access(&path, 0o600)?;
     Ok(())
+}
+
+pub fn read_user_config(user_id: &str) -> anyhow::Result<Option<(Config, FileConfig)>> {
+    let path = user_config_path(user_id)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_config_from_path(&path).map(Some)
+}
+
+pub fn write_user_config(user_id: &str, file_conf: &FileConfig) -> anyhow::Result<()> {
+    let path = user_config_path(user_id)?;
+    let mut file_conf = file_conf.clone();
+    file_conf.user_id = Some(user_id.to_string());
+    let contents = serde_json::to_string_pretty(&file_conf)?;
+    std::fs::write(&path, contents)?;
+    crate::fs_access::ensure_user_access(&path, 0o600)?;
+    Ok(())
+}
+
+pub fn save_current_user_config(file_conf: &FileConfig) -> anyhow::Result<()> {
+    if let Some(user_id) = file_conf.user_id.as_deref() {
+        write_user_config(user_id, file_conf)?;
+    }
+    Ok(())
+}
+
+pub fn switch_saved_config_to_user(user_id: &str) -> anyhow::Result<FileConfig> {
+    let user_id = user_id.trim();
+    if user_id.is_empty() {
+        return Err(anyhow!("user_id cannot be empty"));
+    }
+
+    let mut next = match read_user_config(user_id)? {
+        Some((_, saved)) => saved,
+        None => FileConfig::default(),
+    };
+    next.user_id = Some(user_id.to_string());
+    write_user_config(user_id, &next)?;
+    write_active_user_id(user_id)?;
+    Ok(next)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        read_config, FileConfig, DEFAULT_CLIENT_LISTEN_PORT, DEFAULT_SERVICE_GROUP,
-        DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
+        encode_user_id_for_path, read_config, FileConfig, DEFAULT_CLIENT_LISTEN_PORT,
+        DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
     };
     use std::fs;
 
@@ -281,10 +408,81 @@ server_address: https://control.middlescale.net/control
         let file_conf = FileConfig::default();
         assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
         assert_eq!(file_conf.group, DEFAULT_SERVICE_GROUP);
+        assert_eq!(file_conf.user_id, None);
         assert_eq!(file_conf.server_address, DEFAULT_SERVICE_SERVER);
+        assert_eq!(file_conf.use_channel, "auto");
         assert_eq!(file_conf.ports, Some(vec![29873]));
         assert_eq!(file_conf.p2p_heartbeat_interval_sec, 10);
         assert_eq!(file_conf.p2p_route_idle_timeout_sec, 30);
+    }
+
+    #[test]
+    fn read_config_normalizes_legacy_all_channel_to_auto() {
+        let path = write_temp_config(
+            r#"
+group: user.ms.net
+device_id: dev-user
+name: user-node
+server_address: https://control.middlescale.net/control
+use_channel: all
+"#,
+            "legacy-channel-all",
+        );
+        let (_, file_conf) = read_config(path.to_str().unwrap()).expect("legacy all should parse");
+        assert_eq!(file_conf.use_channel, "auto");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_accepts_user_id_field_without_auth_ticket() {
+        let path = write_temp_config(
+            r#"
+group: user.ms.net
+user_id: sdl-user-1
+device_id: dev-user
+name: user-node
+server_address: https://control.middlescale.net/control
+"#,
+            "user-id",
+        );
+        let (config, file_conf) =
+            read_config(path.to_str().unwrap()).expect("user_id config should parse");
+        assert_eq!(file_conf.user_id.as_deref(), Some("sdl-user-1"));
+        assert_eq!(config.auth_user_id, None);
+        assert_eq!(config.auth_group, None);
+        assert_eq!(config.auth_ticket, None);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn encode_user_id_for_path_keeps_common_id_chars() {
+        assert_eq!(
+            encode_user_id_for_path("sdl-user_1.ms.net"),
+            "sdl-user_1.ms.net"
+        );
+        assert_eq!(
+            encode_user_id_for_path("user/name@example.com"),
+            "user%2Fname%40example.com"
+        );
+    }
+
+    #[test]
+    fn switching_new_user_starts_from_default_not_current_config() {
+        let mut current = FileConfig::default();
+        current.user_id = Some("sdl-current".to_string());
+        current.group = "custom.ms.net".to_string();
+        current.name = "custom-node".to_string();
+
+        let mut next = match None::<FileConfig> {
+            Some(saved) => saved,
+            None => FileConfig::default(),
+        };
+        next.user_id = Some("sdl-next".to_string());
+
+        assert_eq!(next.user_id.as_deref(), Some("sdl-next"));
+        assert_eq!(next.group, DEFAULT_SERVICE_GROUP);
+        assert_ne!(next.group, current.group);
+        assert_ne!(next.name, current.name);
     }
 
     #[test]

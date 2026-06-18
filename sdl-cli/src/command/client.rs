@@ -55,6 +55,13 @@ impl CommandClient {
         let cmd = format!("auth:{}", serde_json::to_string(&cmd).unwrap());
         self.send_string_cmd(cmd.as_bytes())
     }
+    pub fn switch_user(&mut self, user_id: &str) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "user_id": user_id,
+        });
+        let cmd = format!("switch:{}", serde_json::to_string(&cmd).unwrap());
+        self.send_string_cmd(cmd.as_bytes())
+    }
     fn send_cmd<V: DeserializeOwned>(&mut self, cmd: &[u8]) -> io::Result<V> {
         let mut stream = ipc::connect_stream()?;
         ipc::write_frame(&mut stream, cmd)?;
