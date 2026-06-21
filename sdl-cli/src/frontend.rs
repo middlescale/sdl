@@ -1,6 +1,5 @@
 use crate::command::client::CommandClient;
-use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
-use crate::config::switch_saved_config_to_user;
+use crate::command::service_state::read_service_state;
 use crate::console_out;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -207,19 +206,6 @@ fn parse_switch_args(args: &[String]) -> Result<String, &'static str> {
         return Err("user id cannot be empty");
     }
     Ok(user_id)
-}
-
-fn switch_saved_config_without_service(user_id: &str) -> Result<String, String> {
-    switch_saved_config_to_user(user_id)
-        .map_err(|e| format!("switch saved config failed: {}", e))?;
-    let mut state = LocalServiceState::default();
-    state.auth_pending = true;
-    state.auth_message = Some(format!("reauth_required: switched to user_id={user_id}"));
-    write_service_state(&state).map_err(|e| format!("write service state failed: {}", e))?;
-    Ok(format!(
-        "switched to user_id={}; start sdl-service and run `sdl auth --userId {} <ticket>` to authenticate",
-        user_id, user_id
-    ))
 }
 
 fn handle_list(args: &[String]) -> i32 {
@@ -622,40 +608,23 @@ fn handle_switch(args: &[String]) -> i32 {
             }
             0
         }
-        Err(ipc_error) => match switch_saved_config_without_service(&user_id) {
-            Ok(result) => {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "ok": true,
-                            "result": result,
-                            "service_running": false
-                        }))
-                        .unwrap()
-                    );
-                } else {
-                    println!("{}", result);
-                }
-                0
+        Err(ipc_error) => {
+            let message = "sdl-service is not running; start sdl-service and retry `sdl switch`";
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": false,
+                        "error": message,
+                        "ipc_error": ipc_error.to_string()
+                    }))
+                    .unwrap()
+                );
+            } else {
+                eprintln!("switch error: {}; ipc error: {}", message, ipc_error);
             }
-            Err(config_error) => {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "ok": false,
-                            "error": config_error,
-                            "ipc_error": ipc_error.to_string()
-                        }))
-                        .unwrap()
-                    );
-                } else {
-                    eprintln!("switch error: {}; ipc error: {}", config_error, ipc_error);
-                }
-                1
-            }
-        },
+            1
+        }
     }
 }
 

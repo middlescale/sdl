@@ -44,6 +44,18 @@ pub fn parse_args_config() -> anyhow::Result<Option<(Config, config::FileConfig)
     parse_args_config_from(std::env::args().collect())
 }
 
+pub(crate) fn ensure_service_device_key_path() -> io::Result<()> {
+    if std::env::var_os("SDL_DEVICE_KEY_PATH")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let path = app_home()?.join("device.key");
+    std::env::set_var("SDL_DEVICE_KEY_PATH", path);
+    Ok(())
+}
+
 fn default_service_file_config() -> config::FileConfig {
     let mut file_conf = config::FileConfig::default();
     file_conf.normalize_defaults();
@@ -214,15 +226,127 @@ fn override_service_file_config(
     Ok(file_conf)
 }
 
+/// Initialize the logging backend.
+///
+/// Platform split:
+/// - Linux: env_logger to stderr. systemd captures stderr into journald, so
+///   `journalctl -u sdl-service` works and we do NOT double-write to a file.
+/// - macOS / Windows: a log4rs RollingFileAppender writes to
+///   `<install_dir>/log/sdl-service.log` (10MB x 5 archives), because launchd's
+///   stdout/stderr redirection is plist-dependent and the Windows SCM does not
+///   redirect a service's stdout/stderr at all.
+///
+/// An optional `log4rs.yaml` placed next to the binary (under `app_home()` /
+/// the exe directory) is honored first on every platform as an advanced
+/// override. `RUST_LOG` sets the level (default info) on non-Linux platforms
+/// and is the env_logger level on Linux.
+#[cfg(feature = "log")]
+fn init_logging() {
+    // Honor an explicit log4rs.yaml placed under app_home() (absolute path, so
+    // it works even when the service CWD is not the install dir, e.g. Windows
+    // services start with CWD = System32).
+    let yaml_path = match app_home() {
+        Ok(p) => p.join("log4rs.yaml"),
+        Err(_) => PathBuf::from("log4rs.yaml"),
+    };
+    if yaml_path.exists() {
+        if log4rs::init_file(&yaml_path, Default::default()).is_ok() {
+            return;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // journald captures stderr; no file appender, no double-write.
+        let _ = env_logger::builder().is_test(false).try_init();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if !init_file_logger() {
+            // Fallback so logs are at least visible on stderr during manual runs.
+            let _ = env_logger::builder().is_test(false).try_init();
+        }
+    }
+}
+
+#[cfg(all(feature = "log", not(target_os = "linux")))]
+fn init_file_logger() -> bool {
+    use log::LevelFilter;
+    use log4rs::append::rolling_file::policy::compound::{
+        roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger, CompoundPolicy,
+    };
+    use log4rs::append::rolling_file::RollingFileAppender;
+    use log4rs::config::{Appender, Config, Root};
+    use log4rs::encode::pattern::PatternEncoder;
+
+    // <install_dir>/log  (app_home() == <install_dir>/env)
+    let log_dir = match app_home()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+    {
+        Some(dir) => dir.join("log"),
+        None => return false,
+    };
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return false;
+    }
+    let log_path = log_dir.join("sdl-service.log");
+    let archive_pattern = log_dir.join("sdl-service.log.{}");
+    let archive_pattern = archive_pattern.to_string_lossy().into_owned();
+
+    let trigger = SizeTrigger::new(10 * 1024 * 1024); // 10MB
+    let roller = match FixedWindowRoller::builder()
+        .base(0)
+        .build(&archive_pattern, 5)
+    {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
+
+    let logfile = match RollingFileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S)} {l} {m}\n",
+        )))
+        .build(&log_path, Box::new(policy))
+    {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+
+    let level = rust_log_level(LevelFilter::Info);
+    let config = match Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(Root::builder().appender("logfile").build(level))
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    log4rs::init_config(config).is_ok()
+}
+
+/// Parse RUST_LOG into a LevelFilter, defaulting to `default`. Only the simple
+/// level form (info/debug/warn/error/trace/off) is honored; module=level syntax
+/// falls back to the default.
+#[cfg(all(feature = "log", not(target_os = "linux")))]
+fn rust_log_level(default: log::LevelFilter) -> log::LevelFilter {
+    use std::str::FromStr;
+    let raw = match std::env::var("RUST_LOG") {
+        Ok(v) => v,
+        Err(_) => return default,
+    };
+    // Take the first comma-separated token's level part (after any `module=`).
+    let token = raw.split(',').next().unwrap_or("").trim();
+    let level_str = token.rsplit('=').next().unwrap_or("");
+    log::LevelFilter::from_str(level_str).unwrap_or(default)
+}
+
 pub fn parse_args_config_from(
     args: Vec<String>,
 ) -> anyhow::Result<Option<(Config, config::FileConfig)>> {
     #[cfg(feature = "log")]
     {
-        if let Err(e) = log4rs::init_file("log4rs.yaml", Default::default()) {
-            let _ = env_logger::builder().is_test(false).try_init();
-            log::warn!("log4rs init failed, fallback to env_logger: {:?}", e);
-        }
+        init_logging();
     }
     let program = args[0].clone();
     let mut opts = Options::new();

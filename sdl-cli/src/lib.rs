@@ -8,7 +8,6 @@ pub mod config;
 pub mod console_out;
 pub mod frontend;
 pub mod fs_access;
-pub mod identifier;
 pub mod root_check;
 mod service_lock;
 #[cfg(target_os = "windows")]

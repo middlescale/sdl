@@ -97,6 +97,99 @@ copy_env_file_if_present() {
   fi
 }
 
+generate_device_id() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+    return 0
+  fi
+
+  local hex
+  hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '%s-%s-%s-%s-%s\n' \
+    "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
+}
+
+ensure_device_id_file() {
+  local path="${INSTALL_DIR}/env/device-id"
+  if [[ -f "${path}" ]]; then
+    if [[ ! -s "${path}" ]]; then
+      echo "invalid empty device-id at ${path}; remove it to generate a new identity" >&2
+      exit 1
+    fi
+    log_step "Keeping existing device-id"
+    return 0
+  fi
+
+  log_step "Generating persistent device-id"
+  generate_device_id > "${path}"
+  chmod 600 "${path}"
+}
+
+target_home_dir() {
+  if [[ "${OS_NAME}" == "Darwin" ]]; then
+    dscl . -read "/Users/${TARGET_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true
+    return 0
+  fi
+  getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6 || true
+}
+
+legacy_device_key_dirs() {
+  local home
+  home="$(target_home_dir)"
+  if [[ -n "${home}" ]]; then
+    printf '%s\n' "${home}/.sdl/identity"
+  fi
+  if [[ "${TARGET_USER}" != "root" ]]; then
+    if [[ "${OS_NAME}" == "Darwin" ]]; then
+      printf '%s\n' "/var/root/.sdl/identity"
+    else
+      printf '%s\n' "/root/.sdl/identity"
+    fi
+  fi
+}
+
+warn_legacy_device_key_if_present() {
+  local candidates=()
+  local dir key size
+
+  while IFS= read -r dir; do
+    [[ -d "${dir}" ]] || continue
+    while IFS= read -r key; do
+      [[ -f "${key}" ]] || continue
+      size="$(wc -c < "${key}" | tr -d ' ')"
+      if [[ "${size}" == "32" ]]; then
+        candidates+=("${key}")
+      fi
+    done < <(find "${dir}" -maxdepth 1 -type f -name '*.key' -print)
+  done < <(legacy_device_key_dirs)
+
+  if [[ "${#candidates[@]}" -gt 0 ]]; then
+    echo "warning: found legacy per-user SDL device key(s), but this installer does not migrate legacy identity:" >&2
+    printf '  %s\n' "${candidates[@]}" >&2
+    echo "warning: a new machine device identity will be generated; run 'sdl auth' after installation." >&2
+  fi
+}
+
+ensure_device_key_file() {
+  local path="${INSTALL_DIR}/env/device.key"
+  if [[ -f "${path}" ]]; then
+    local size
+    size="$(wc -c < "${path}" | tr -d ' ')"
+    if [[ "${size}" != "32" ]]; then
+      echo "invalid device key length at ${path}: expected 32 bytes, got ${size}" >&2
+      exit 1
+    fi
+    log_step "Keeping existing device key"
+    return 0
+  fi
+
+  warn_legacy_device_key_if_present
+
+  log_step "Generating persistent device key"
+  dd if=/dev/urandom of="${path}" bs=32 count=1 2>/dev/null
+  chmod 600 "${path}"
+}
+
 backup_existing_file() {
   local path="$1"
   local backup_path="${path}.bak.$(date +%Y%m%d%H%M%S)"
@@ -230,10 +323,12 @@ prepare_install_tree() {
   install -m 755 "${SOURCE_DIR}/sdl-service" "${INSTALL_DIR}/sdl-service"
 
   log_step "Copying persisted env files (if present)"
-  for name in device-id device.key service-state.json; do
+  for name in service-state.json; do
     copy_env_file_if_present "${name}"
   done
   install_config_file_if_present
+  ensure_device_id_file
+  ensure_device_key_file
 
   apply_env_ownership
 

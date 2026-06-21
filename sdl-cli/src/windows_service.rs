@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -62,6 +63,19 @@ fn run_service(arguments: Vec<OsString>) -> windows_service::Result<()> {
     )?;
 
     let service_args = rebuild_service_arguments(arguments);
+    if let Err(err) = crate::cli::ensure_service_device_key_path() {
+        startup_reporter.stop();
+        let _ = report_service_status(
+            &status_handle,
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            SERVICE_EXIT_PARSE_ARGS_FAILED,
+            0,
+            Duration::default(),
+        );
+        log::error!("prepare device key path failed: {:?}", err);
+        return Err(WindowsServiceError::Winapi(io::Error::other(err)));
+    }
     let (config, saved_config) = match crate::cli::parse_args_config_from(service_args) {
         Ok(Some(config)) => config,
         Ok(None) => {

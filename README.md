@@ -33,7 +33,14 @@ cargo build -p sdl-cli --release
 Install as a system service:
 
 ```bash
+# Linux/macOS
 sudo ./install.sh --source-dir ./target/release --user "$USER"
+```
+
+On Windows, run from an elevated PowerShell in an unpacked release directory:
+
+```powershell
+.\install.ps1
 ```
 
 The installer:
@@ -157,6 +164,8 @@ Windows local build helper:
 
 - Linux uses `systemd` when installed through `install.sh`.
 - macOS uses `launchd` when installed through `install.sh`.
-- Windows service support is implemented in `sdl-service.exe`; run with administrator privileges.
+- Windows uses a native SCM service when installed through `install.ps1` (run in an elevated PowerShell). `sdl-service.exe` already implements the service entrypoint; the installer lays out binaries, registers the service, and attempts to start it as a best-effort check. Use `.\install.ps1 -NoStart` to register without starting. After installation, normal `sdl` CLI commands can run as a non-admin user.
+- Installers do not copy `device-id` or `device.key` from the release package. They generate `<install_dir>/env/device-id` and `<install_dir>/env/device.key` only when missing, and never overwrite existing files. Older per-user identity keys are not migrated; if the installer sees a legacy `identity/*.key`, it warns that a new machine identity will be generated and `sdl auth` is required after installation. `sdl-service` uses `<install_dir>/env/device.key` through `SDL_DEVICE_KEY_PATH`, so device identity survives reinstall as long as the `env` directory is preserved.
 - DNS profile integration is implemented for Linux, macOS, and Windows.
 - `sdl-service` prints an error when privileges are insufficient; it does not prompt for sudo automatically.
+- Service logs: on Linux `sdl-service` logs to stderr (captured by journald, view with `journalctl -u sdl-service`); on macOS and Windows it writes a rolling file at `<install_dir>/log/sdl-service.log` (10MB × 5 archives, level via `RUST_LOG`, default `info`). An optional `<install_dir>/env/log4rs.yaml` overrides this on every platform.

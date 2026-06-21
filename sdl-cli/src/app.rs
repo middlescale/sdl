@@ -693,6 +693,11 @@ pub fn run_service_process(args: Vec<String>) -> i32 {
 }
 
 pub fn run_service_from_args(args: Vec<String>) -> i32 {
+    if let Err(e) = crate::cli::ensure_service_device_key_path() {
+        log::error!("prepare device key path failed: {:?}", e);
+        println!("{}", style(format!("Error {:?}", e)).red());
+        return 1;
+    }
     let (config, saved_config) = match crate::cli::parse_args_config_from(args) {
         Ok(rs) => match rs {
             Some(rs) => rs,
