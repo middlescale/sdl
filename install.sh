@@ -159,6 +159,38 @@ config_version_of() {
   printf '%s\n' "${version}"
 }
 
+json_string_value_of() {
+  local path="$1"
+  local key="$2"
+  if [[ ! -f "${path}" ]]; then
+    return 1
+  fi
+  sed -nE 's/.*"'"${key}"'"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "${path}" | head -n 1
+}
+
+encode_profile_name() {
+  local input="$1"
+  local out=""
+  local i ch hex
+  LC_ALL=C
+  for ((i = 0; i < ${#input}; i++)); do
+    ch="${input:i:1}"
+    case "${ch}" in
+      [a-zA-Z0-9._-])
+        out+="${ch}"
+        ;;
+      *)
+        printf -v hex '%02X' "'${ch}"
+        out+="%${hex}"
+        ;;
+    esac
+  done
+  if [[ -z "${out}" ]]; then
+    out="_"
+  fi
+  printf '%s\n' "${out}"
+}
+
 migrate_config_file_if_supported() {
   local target_path="$1"
   local existing_version="$2"
@@ -179,6 +211,51 @@ migrate_config_file_if_supported() {
   chmod 600 "${tmp_path}"
   mv "${tmp_path}" "${target_path}"
   return 0
+}
+
+migrate_legacy_config_to_profile_if_possible() {
+  local target_path="${INSTALL_DIR}/env/config.json"
+  local state_path="${INSTALL_DIR}/env/service-state.json"
+  if [[ ! -f "${target_path}" ]]; then
+    return 0
+  fi
+  if grep -Eq '"active_user_id"[[:space:]]*:' "${target_path}"; then
+    return 0
+  fi
+  if [[ "$(config_version_of "${target_path}")" != "2" ]]; then
+    return 0
+  fi
+
+  local user_id profile_name profile_path tmp_profile tmp_active
+  user_id="$(json_string_value_of "${state_path}" "authenticated_user_id" || true)"
+  if [[ -z "${user_id}" ]]; then
+    return 0
+  fi
+
+  profile_name="$(encode_profile_name "${user_id}")"
+  profile_path="${INSTALL_DIR}/profiles/${profile_name}.json"
+  if [[ ! -f "${profile_path}" ]]; then
+    log_step "Migrating legacy config.json to profile for user_id=${user_id}"
+    tmp_profile="$(mktemp "${profile_path}.tmp.XXXXXX")"
+    if grep -Eq '"user_id"[[:space:]]*:' "${target_path}"; then
+      sed -E 's/"user_id"[[:space:]]*:[[:space:]]*null/"user_id": "'"${user_id}"'"/' "${target_path}" > "${tmp_profile}"
+    else
+      sed -E '0,/"config_version"[[:space:]]*:[[:space:]]*2/s//"config_version": 2,\n  "user_id": "'"${user_id}"'"/' "${target_path}" > "${tmp_profile}"
+    fi
+    chmod 600 "${tmp_profile}"
+    mv "${tmp_profile}" "${profile_path}"
+  fi
+
+  backup_existing_file "${target_path}"
+  tmp_active="$(mktemp "${target_path}.tmp.XXXXXX")"
+  cat > "${tmp_active}" <<EOF
+{
+  "config_version": 2,
+  "active_user_id": "${user_id}"
+}
+EOF
+  chmod 600 "${tmp_active}"
+  mv "${tmp_active}" "${target_path}"
 }
 
 overwrite_config_file() {
@@ -304,6 +381,7 @@ prepare_install_tree() {
     copy_env_file_if_present "${name}"
   done
   install_config_file_if_present
+  migrate_legacy_config_to_profile_if_possible
   ensure_device_id_file
   ensure_device_key_file
 
