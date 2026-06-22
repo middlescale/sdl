@@ -29,7 +29,6 @@ SERVICE_NAME="sdl-service"
 TARGET_USER="${SUDO_USER:-root}"
 OS_NAME="$(uname -s)"
 CONFIG_INSTALL_MODE="preserve"
-CONFIG_VERSION_FALLBACK="1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -157,10 +156,29 @@ config_version_of() {
     return 1
   fi
   version="$(sed -nE 's/.*"config_version"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "${path}" | head -n 1)"
-  if [[ -z "${version}" ]]; then
-    version="${CONFIG_VERSION_FALLBACK}"
-  fi
   printf '%s\n' "${version}"
+}
+
+migrate_config_file_if_supported() {
+  local target_path="$1"
+  local existing_version="$2"
+  local source_version="$3"
+  if [[ "${existing_version}" != "1" || "${source_version}" != "2" ]]; then
+    return 1
+  fi
+
+  log_step "Migrating existing config.json from config_version=1 to config_version=2"
+  backup_existing_file "${target_path}"
+  local tmp_path
+  tmp_path="$(mktemp "${target_path}.tmp.XXXXXX")"
+  sed -E \
+    -e 's/"config_version"[[:space:]]*:[[:space:]]*1/"config_version": 2/' \
+    -e 's/"use_channel"[[:space:]]*:[[:space:]]*"all"/"use_channel": "auto"/' \
+    -e 's/"ports"[[:space:]]*:[[:space:]]*null/"ports": [29873]/' \
+    "${target_path}" > "${tmp_path}"
+  chmod 600 "${tmp_path}"
+  mv "${tmp_path}" "${target_path}"
+  return 0
 }
 
 overwrite_config_file() {
@@ -218,7 +236,10 @@ install_config_file_if_present() {
 
   source_version="$(config_version_of "${source_path}")"
   existing_version="$(config_version_of "${target_path}")"
-  if [[ "${source_version}" != "${existing_version}" ]]; then
+  if [[ -n "${source_version}" && -n "${existing_version}" && "${source_version}" != "${existing_version}" ]]; then
+    if migrate_config_file_if_supported "${target_path}" "${existing_version}" "${source_version}"; then
+      return 0
+    fi
     local mismatch_message="Existing config.json uses config_version=${existing_version}, installer config uses config_version=${source_version}. Keeping the old file may be incompatible with this build."
     if [[ "${CONFIG_INSTALL_MODE}" == "overwrite" ]]; then
       log_step "${mismatch_message}"
