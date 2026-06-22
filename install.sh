@@ -116,58 +116,13 @@ ensure_device_id_file() {
       echo "invalid empty device-id at ${path}; remove it to generate a new identity" >&2
       exit 1
     fi
-    log_step "Keeping existing device-id"
+    log_step "Keeping existing device-id from install env"
     return 0
   fi
 
   log_step "Generating persistent device-id"
   generate_device_id > "${path}"
   chmod 600 "${path}"
-}
-
-target_home_dir() {
-  if [[ "${OS_NAME}" == "Darwin" ]]; then
-    dscl . -read "/Users/${TARGET_USER}" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true
-    return 0
-  fi
-  getent passwd "${TARGET_USER}" 2>/dev/null | cut -d: -f6 || true
-}
-
-legacy_device_key_dirs() {
-  local home
-  home="$(target_home_dir)"
-  if [[ -n "${home}" ]]; then
-    printf '%s\n' "${home}/.sdl/identity"
-  fi
-  if [[ "${TARGET_USER}" != "root" ]]; then
-    if [[ "${OS_NAME}" == "Darwin" ]]; then
-      printf '%s\n' "/var/root/.sdl/identity"
-    else
-      printf '%s\n' "/root/.sdl/identity"
-    fi
-  fi
-}
-
-warn_legacy_device_key_if_present() {
-  local candidates=()
-  local dir key size
-
-  while IFS= read -r dir; do
-    [[ -d "${dir}" ]] || continue
-    while IFS= read -r key; do
-      [[ -f "${key}" ]] || continue
-      size="$(wc -c < "${key}" | tr -d ' ')"
-      if [[ "${size}" == "32" ]]; then
-        candidates+=("${key}")
-      fi
-    done < <(find "${dir}" -maxdepth 1 -type f -name '*.key' -print)
-  done < <(legacy_device_key_dirs)
-
-  if [[ "${#candidates[@]}" -gt 0 ]]; then
-    echo "warning: found legacy per-user SDL device key(s), but this installer does not migrate legacy identity:" >&2
-    printf '  %s\n' "${candidates[@]}" >&2
-    echo "warning: a new machine device identity will be generated; run 'sdl auth' after installation." >&2
-  fi
 }
 
 ensure_device_key_file() {
@@ -179,11 +134,9 @@ ensure_device_key_file() {
       echo "invalid device key length at ${path}: expected 32 bytes, got ${size}" >&2
       exit 1
     fi
-    log_step "Keeping existing device key"
+    log_step "Keeping existing device key from install env"
     return 0
   fi
-
-  warn_legacy_device_key_if_present
 
   log_step "Generating persistent device key"
   dd if=/dev/urandom of="${path}" bs=32 count=1 2>/dev/null
@@ -303,6 +256,8 @@ apply_env_ownership() {
   log_step "Applying env ownership for ${TARGET_USER} (${TARGET_UID}:${TARGET_GID})"
   chown "${TARGET_UID}:${TARGET_GID}" "${INSTALL_DIR}/env"
   chmod 700 "${INSTALL_DIR}/env"
+  chown "${TARGET_UID}:${TARGET_GID}" "${INSTALL_DIR}/profiles"
+  chmod 700 "${INSTALL_DIR}/profiles"
   for name in config.json device-id device.key service-state.json; do
     if [[ -f "${INSTALL_DIR}/env/${name}" ]]; then
       chown "${TARGET_UID}:${TARGET_GID}" "${INSTALL_DIR}/env/${name}"
@@ -315,6 +270,7 @@ prepare_install_tree() {
   log_step "Preparing install directories under ${INSTALL_DIR}"
   install -d -m 755 "${INSTALL_DIR}"
   install -d -m 700 "${INSTALL_DIR}/env"
+  install -d -m 700 "${INSTALL_DIR}/profiles"
   install -d -m 755 "${INSTALL_DIR}/log"
   install -d -m 755 "${LINK_DIR}"
 

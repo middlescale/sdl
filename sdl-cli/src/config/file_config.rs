@@ -199,7 +199,7 @@ fn encode_user_id_for_path(user_id: &str) -> String {
 }
 
 pub fn user_config_path(user_id: &str) -> std::io::Result<PathBuf> {
-    let dir = crate::cli::app_home()?.join("users");
+    let dir = crate::cli::profiles_home()?;
     if !dir.exists() {
         std::fs::create_dir_all(&dir)?;
     }

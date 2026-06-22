@@ -24,15 +24,27 @@ fn executable_root_from(path: PathBuf) -> PathBuf {
     }
 }
 
-pub fn app_home() -> io::Result<PathBuf> {
-    let root_path = match std::env::current_exe() {
-        Ok(path) => executable_root_from(path),
+pub(crate) fn install_root() -> io::Result<PathBuf> {
+    match std::env::current_exe() {
+        Ok(path) => Ok(executable_root_from(path)),
         Err(e) => {
             log::warn!("current_exe err:{:?}", e);
-            PathBuf::new()
+            Ok(PathBuf::new())
         }
-    };
-    let path = root_path.join("env");
+    }
+}
+
+pub fn app_home() -> io::Result<PathBuf> {
+    let path = install_root()?.join("env");
+    if !path.exists() {
+        std::fs::create_dir_all(&path)?;
+    }
+    let _ = crate::fs_access::ensure_user_access(&path, 0o700);
+    Ok(path)
+}
+
+pub(crate) fn profiles_home() -> io::Result<PathBuf> {
+    let path = install_root()?.join("profiles");
     if !path.exists() {
         std::fs::create_dir_all(&path)?;
     }

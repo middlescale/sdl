@@ -158,7 +158,7 @@ Windows ローカルビルド helper:
 - Linux では `install.sh` により `systemd` が使われます。
 - macOS では `install.sh` により `launchd` が使われます。
 - Windows では、管理者権限の PowerShell で `install.ps1` を実行すると native SCM service として登録されます。`sdl-service.exe` は service entrypoint を実装済みで、installer は binary の配置、service 登録、best-effort の起動確認を行います。起動せず登録だけ行う場合は `.\install.ps1 -NoStart` を使います。Install 後、通常の `sdl` CLI command は非管理者 user でも実行できます。
-- Installer は release package から `device-id` や `device.key` を copy しません。`<install_dir>/env/device-id` と `<install_dir>/env/device.key` がない場合だけ生成し、既存 file は上書きしません。古い per-user identity key は移行しません。Installer が legacy `identity/*.key` を見つけた場合は、新しい machine identity が生成され、install 後に `sdl auth` が必要になることを警告します。`sdl-service` は `SDL_DEVICE_KEY_PATH` 経由で `<install_dir>/env/device.key` を使うため、`env` directory を保持する限り reinstall 後も device identity は維持されます。
+- Installer は `<install_dir>/env/device-id` と `<install_dir>/env/device.key` がない場合だけ生成し、既存の installed identity file は上書きしません。Linux と macOS では install directory の `env` にある identity を保持します。Windows では target file がない場合、unpack した release directory の `env` にある legacy `device-id` / `device.key` も移行します。`sdl-service` は `SDL_DEVICE_KEY_PATH` 経由で `<install_dir>/env/device.key` を使うため、installed `env` directory を保持する限り reinstall 後も device identity は維持されます。
 - DNS profile 連携は Linux、macOS、Windows に対応しています。
 - 権限が不足している場合、`sdl-service` はエラーを表示します。sudo パスワード入力は自動で表示しません。
 - Service log: Linux では `sdl-service` は stderr に出力し、journald で取得されます（`journalctl -u sdl-service`）。macOS と Windows では `<install_dir>/log/sdl-service.log` に rolling file として出力されます（10MB x 5 archives、level は `RUST_LOG`、default は `info`）。任意の `<install_dir>/env/log4rs.yaml` を置くと、全 platform でこの設定が優先されます。
