@@ -191,11 +191,9 @@ encode_profile_name() {
   printf '%s\n' "${out}"
 }
 
-migrate_config_file_if_supported() {
+migrate_config_file_v1_to_v2() {
   local target_path="$1"
-  local existing_version="$2"
-  local source_version="$3"
-  if [[ "${existing_version}" != "1" || "${source_version}" != "2" ]]; then
+  if [[ "$(config_version_of "${target_path}")" != "1" ]]; then
     return 1
   fi
 
@@ -299,6 +297,9 @@ install_config_file_if_present() {
   local source_version existing_version
   if [[ ! -f "${source_path}" ]]; then
     log_step "No installer env/config.json found; keeping any existing config.json"
+    if [[ -f "${target_path}" ]]; then
+      migrate_config_file_v1_to_v2 "${target_path}" || true
+    fi
     return 0
   fi
   if [[ ! -f "${target_path}" ]]; then
@@ -314,7 +315,7 @@ install_config_file_if_present() {
   source_version="$(config_version_of "${source_path}")"
   existing_version="$(config_version_of "${target_path}")"
   if [[ -n "${source_version}" && -n "${existing_version}" && "${source_version}" != "${existing_version}" ]]; then
-    if migrate_config_file_if_supported "${target_path}" "${existing_version}" "${source_version}"; then
+    if [[ "${existing_version}" == "1" && "${source_version}" == "2" ]] && migrate_config_file_v1_to_v2 "${target_path}"; then
       return 0
     fi
     local mismatch_message="Existing config.json uses config_version=${existing_version}, installer config uses config_version=${source_version}. Keeping the old file may be incompatible with this build."
