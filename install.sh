@@ -205,6 +205,8 @@ migrate_config_file_v1_to_v2() {
     -e 's/"config_version"[[:space:]]*:[[:space:]]*1/"config_version": 2/' \
     -e 's/"use_channel"[[:space:]]*:[[:space:]]*"all"/"use_channel": "auto"/' \
     -e 's/"ports"[[:space:]]*:[[:space:]]*null/"ports": [29873]/' \
+    -e '/"in_ips"[[:space:]]*:/d' \
+    -e '/"out_ips"[[:space:]]*:/d' \
     "${target_path}" > "${tmp_path}"
   chmod 600 "${tmp_path}"
   mv "${tmp_path}" "${target_path}"
@@ -382,6 +384,7 @@ prepare_install_tree() {
     copy_env_file_if_present "${name}"
   done
   install_config_file_if_present
+  migrate_config_file_v1_to_v2 "${INSTALL_DIR}/env/config.json" || true
   migrate_legacy_config_to_profile_if_possible
   ensure_device_id_file
   ensure_device_key_file
