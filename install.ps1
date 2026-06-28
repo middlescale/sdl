@@ -153,6 +153,19 @@ function Backup-File([string]$path) {
     Log-Step "Backed up $path to $bak"
 }
 
+function Write-JsonFile([string]$path, [object]$value) {
+    $json = $value | ConvertTo-Json -Depth 20
+    [System.IO.File]::WriteAllText($path, $json + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+}
+
+function Set-JsonProperty([object]$object, [string]$name, [object]$value) {
+    if ($object.PSObject.Properties.Name -contains $name) {
+        $object.$name = $value
+    } else {
+        $object | Add-Member -NotePropertyName $name -NotePropertyValue $value
+    }
+}
+
 function Install-ConfigFile {
     $src = Join-Path $SourceDir "env\config.json"
     $dst = Join-Path $InstallDir "env\config.json"
@@ -172,6 +185,10 @@ function Install-ConfigFile {
     $srcVer = Get-ConfigVersion $src
     $dstVer = Get-ConfigVersion $dst
     if ($srcVer -ne $dstVer) {
+        if (($dstVer -eq "1") -and ($srcVer -eq "2")) {
+            Migrate-ConfigFileV1ToV2 $dst | Out-Null
+            return
+        }
         $mismatch = "Existing config.json uses config_version=$dstVer, installer config uses config_version=$srcVer. Keeping the old file may be incompatible with this build."
         if ($ConfigMode -eq "overwrite") {
             Log-Step $mismatch
@@ -188,6 +205,89 @@ function Install-ConfigFile {
         return
     }
     Log-Step "Keeping existing config.json (default preserve behavior)"
+}
+
+function Migrate-ConfigFileV1ToV2([string]$path) {
+    if ((Get-ConfigVersion $path) -ne "1") { return $false }
+
+    Log-Step "Migrating existing config.json from config_version=1 to config_version=2"
+    Backup-File $path
+    $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    Set-JsonProperty $config "config_version" 2
+    if (($null -ne $config.use_channel) -and ([string]$config.use_channel).Trim().Equals("all", [StringComparison]::OrdinalIgnoreCase)) {
+        $config.use_channel = "auto"
+    }
+    if (($null -eq $config.ports) -or ($config.ports.Count -eq 0)) {
+        Set-JsonProperty $config "ports" @(29873)
+    }
+    $config.PSObject.Properties.Remove("in_ips")
+    $config.PSObject.Properties.Remove("out_ips")
+    Write-JsonFile $path $config
+    return $true
+}
+
+function Get-JsonStringValue([string]$path, [string]$name) {
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        $value = $json.$name
+        if ($null -eq $value) { return $null }
+        return ([string]$value).Trim()
+    } catch {
+        return $null
+    }
+}
+
+function Encode-ProfileName([string]$value) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($value)
+    $builder = New-Object System.Text.StringBuilder
+    foreach ($byte in $bytes) {
+        $ch = [char]$byte
+        if ((($byte -ge [byte][char]'a') -and ($byte -le [byte][char]'z')) -or
+            (($byte -ge [byte][char]'A') -and ($byte -le [byte][char]'Z')) -or
+            (($byte -ge [byte][char]'0') -and ($byte -le [byte][char]'9')) -or
+            ($ch -eq '.') -or ($ch -eq '_') -or ($ch -eq '-')) {
+            [void]$builder.Append($ch)
+        } else {
+            [void]$builder.Append(("%{0:X2}" -f $byte))
+        }
+    }
+    $encoded = $builder.ToString()
+    if (-not $encoded) { return "_" }
+    return $encoded
+}
+
+function Migrate-LegacyConfigToProfileIfPossible([string]$configPath, [string]$statePath, [string]$profilesPath) {
+    if (-not (Test-Path -LiteralPath $configPath)) { return }
+    try {
+        $active = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        if ($null -ne $active.active_user_id) { return }
+    } catch {
+        return
+    }
+    if ((Get-ConfigVersion $configPath) -ne "2") { return }
+
+    $userId = Get-JsonStringValue $statePath "authenticated_user_id"
+    if (-not $userId) { return }
+
+    $profileName = Encode-ProfileName $userId
+    $profilePath = Join-Path $profilesPath "$profileName.json"
+    if (-not (Test-Path -LiteralPath $profilePath)) {
+        Log-Step "Migrating legacy config.json to profile for user_id=$userId"
+        $profile = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+        if ($profile.PSObject.Properties.Name -contains "user_id") {
+            $profile.user_id = $userId
+        } else {
+            Set-JsonProperty $profile "user_id" $userId
+        }
+        Write-JsonFile $profilePath $profile
+    }
+
+    Backup-File $configPath
+    Write-JsonFile $configPath ([ordered]@{
+        config_version = 2
+        active_user_id = $userId
+    })
 }
 
 function Copy-EnvFileIfExists([string]$name) {
@@ -380,6 +480,11 @@ if (Test-Path -LiteralPath $wintunLicense) {
 Log-Step "Copying persisted env files (if present)"
 foreach ($name in "service-state.json") { Copy-EnvFileIfExists $name }
 Install-ConfigFile
+Migrate-ConfigFileV1ToV2 (Join-Path $envDir "config.json") | Out-Null
+Migrate-LegacyConfigToProfileIfPossible `
+    (Join-Path $envDir "config.json") `
+    (Join-Path $envDir "service-state.json") `
+    $profilesDir
 $deviceIdPath = Join-Path $envDir "device-id"
 $deviceKeyPath = Join-Path $envDir "device.key"
 Ensure-DeviceIdFile $deviceIdPath
