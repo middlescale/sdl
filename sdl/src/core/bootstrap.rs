@@ -8,8 +8,9 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::control::ControlSession;
+use crate::core::ExitNodeRoute;
 use crate::core::{
-    runtime::{AuthRequestConfig, RenameRequestOutcome},
+    runtime::{AuthRequestConfig, ExitNodeLocalState, RenameRequestOutcome},
     Config, RuntimeConfig, SdlRuntime,
 };
 use crate::data_plane::data_channel::DataChannel;
@@ -19,7 +20,6 @@ use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::stats::DataPlaneStats;
-use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::recv_data::RecvDataHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::{NatInfo, Punch};
@@ -89,6 +89,7 @@ impl Sdl {
             group: config.auth_group.clone(),
             ticket: config.auth_ticket.clone(),
         }));
+        let exit_node_state = Arc::new(RwLock::new(ExitNodeLocalState::default()));
         let runtime_config = RuntimeConfig {
             name: config.name.clone(),
             token: config.token.clone(),
@@ -103,6 +104,7 @@ impl Sdl {
             device_name: config.device_name.clone(),
             default_interface: default_interface.clone(),
             auth_request: auth_request.clone(),
+            exit_node_state: exit_node_state.clone(),
         };
         // 服务停止管理器
         let stop_manager = {
@@ -129,8 +131,7 @@ impl Sdl {
             config.local_ipv4.is_none(),
             config.punch_model,
         );
-        let external_route = ExternalRoute::new(config.in_ips.clone());
-        let out_external_route = AllowExternalRoute::new(config.out_ips.clone());
+        let exit_node_route = ExitNodeRoute::new();
         let punch_coordinator = PunchCoordinator::new();
         let debug_watch = DebugWatch::default();
         let gateway_sessions = GatewaySessions::new(
@@ -216,9 +217,15 @@ impl Sdl {
                         "peer_ip": peer_ip.to_string(),
                     }),
                 );
-                control_session.trigger_status_report_with_nat_ready(
+                control_session.request_punch_status_report_with_nat_ready(
                     crate::proto::message::PunchTriggerReason::PunchTriggerRouteTimeout,
                 );
+            }));
+        }
+        {
+            let callback = callback.clone();
+            route_manager.set_direct_route_update_handler(Arc::new(move |peer_ip| {
+                callback.direct_route_changed(peer_ip);
             }));
         }
         let runtime = Arc::new_cyclic(|weak_runtime| {
@@ -232,7 +239,7 @@ impl Sdl {
                     data_channel.clone(),
                     current_device.clone(),
                     gateway_sessions.clone(),
-                    external_route.clone(),
+                    exit_node_route.clone(),
                     peer_state.clone(),
                     peer_crypto.clone(),
                     config.compressor,
@@ -248,6 +255,7 @@ impl Sdl {
                 pending_dns_queries: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 rename_request_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 pending_rename_requests: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                exit_node_state: exit_node_state.clone(),
                 current_device: current_device.clone(),
                 device_signing_key: device_signing_key.clone(),
                 peer_crypto: peer_crypto.clone(),
@@ -256,8 +264,7 @@ impl Sdl {
                 nat_test: nat_test.clone(),
                 peer_state: peer_state.clone(),
                 peer_nat_info_map: peer_nat_info_map.clone(),
-                external_route: external_route.clone(),
-                out_external_route: out_external_route.clone(),
+                exit_node_route: exit_node_route.clone(),
                 control_session: control_session.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 route_manager: route_manager.clone(),
@@ -439,7 +446,7 @@ impl Sdl {
             .set_use_channel_type(use_channel_type);
         self.runtime
             .control_session
-            .trigger_status_report_with_nat_ready(
+            .request_punch_status_report_with_nat_ready(
                 crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
             );
     }
@@ -484,6 +491,26 @@ impl Sdl {
                 anyhow::bail!("rename response channel disconnected")
             }
         }
+    }
+    pub fn set_exit_node_state(&self, state: ExitNodeLocalState) {
+        let should_report_status = {
+            let previous = self.runtime.exit_node_state.read().clone();
+            previous.enabled != state.enabled || previous.local_ready != state.local_ready
+        };
+        {
+            let mut guard = self.runtime.exit_node_state.write();
+            if *guard == state {
+                return;
+            }
+            *guard = state;
+        }
+        self.runtime.apply_selected_exit_node_route();
+        if should_report_status {
+            self.runtime.control_session.report_client_status();
+        }
+    }
+    pub fn exit_node_state(&self) -> ExitNodeLocalState {
+        self.runtime.exit_node_state.read().clone()
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
         let current_device = self.runtime.current_device.load();

@@ -4,9 +4,9 @@ pub mod cipher;
 pub mod control;
 pub mod core;
 pub mod data_plane;
-mod external_route;
 pub mod handle;
 pub mod nat;
+pub mod net;
 #[cfg(feature = "port_mapping")]
 mod port_mapping;
 mod proto;

@@ -1,4 +1,3 @@
-use crate::args_parse::{ips_parse, out_ips_parse};
 use crate::config;
 use anyhow::anyhow;
 use console::style;
@@ -143,26 +142,6 @@ fn override_service_file_config(
     }
     if matches.opt_present("e") {
         file_conf.stun_server = matches.opt_strs("e");
-    }
-    if matches.opt_present("i") {
-        let raw_in_ips = matches.opt_strs("i");
-        ips_parse(&raw_in_ips).map_err(|e| {
-            print_usage(program, opts.clone());
-            println!();
-            println!("-i: {:?} {}", raw_in_ips, e);
-            anyhow!("example: -i 192.168.0.0/24,10.26.0.3")
-        })?;
-        file_conf.in_ips = raw_in_ips;
-    }
-    if matches.opt_present("o") {
-        let raw_out_ips = matches.opt_strs("o");
-        out_ips_parse(&raw_out_ips).map_err(|e| {
-            print_usage(program, opts.clone());
-            println!();
-            println!("-o: {:?} {}", raw_out_ips, e);
-            anyhow!("example: -o 0.0.0.0/0")
-        })?;
-        file_conf.out_ips = raw_out_ips;
     }
     if let Some(mtu) = matches.opt_str("u") {
         file_conf.mtu = Some(u32::from_str(&mtu).map_err(|e| {
@@ -369,8 +348,6 @@ pub fn parse_args_config_from(
     opts.optmulti("e", "", "stun服务器", "<stun-server>");
     opts.optopt("", "nic", "虚拟网卡名称", "<tun0>");
     opts.optopt("", "tun_name", "指定tun网卡名称", "<sdl-tun>");
-    opts.optmulti("i", "", "配置点对网(IP代理)入站时使用", "<in-ip>");
-    opts.optmulti("o", "", "配置点对网出站时使用", "<out-ip>");
     opts.optopt("u", "", "自定义mtu(默认为1430)", "<mtu>");
     opts.optopt("", "ip", "指定虚拟ip", "<ip>");
     opts.optflag("", "relay", "仅使用服务器转发");
@@ -426,8 +403,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("-d <id>", ("设备唯一标识符,不使用--ip参数时,服务端凭此参数分配虚拟ip,注意不能重复", "Device unique identifier, used by the server to allocate virtual IP when --ip parameter is not used, must be unique")),
         ("-s <server>", ("注册和中继服务器地址,当前使用https://host[:port]/control", "Registration and relay server address, use https://host[:port]/control")),
         ("-e <stun-server>", ("stun服务器,用于探测NAT类型,可使用多个地址,如-e stun.miwifi.com -e turn.cloudflare.com", "STUN server for detecting NAT type, can specify multiple addresses, e.g., -e stun.miwifi.com -e turn.cloudflare.com")),
-        ("-i <in-ip>", ("配置点对网(IP代理)时使用,-i 192.168.0.0/24,10.26.0.3表示允许接收网段192.168.0.0/24的数据并转发到10.26.0.3,可指定多个网段", "Used when configuring point-to-point network (IP proxy), -i 192.168.0.0/24,10.26.0.3 allows receiving data from subnet 192.168.0.0/24 and forwarding to 10.26.0.3, specify multiple subnets")),
-        ("-o <out-ip>", ("配置点对网时使用,-o 192.168.0.0/24表示允许将数据转发到192.168.0.0/24,可指定多个网段", "Used when configuring point-to-point network, -o 192.168.0.0/24 allows forwarding data to 192.168.0.0/24, specify multiple subnets")),
         ("-u <mtu>", ("自定义mtu(默认为1420)", "Customize MTU (default is 1420)")),
         ("-f <conf_file>", ("读取配置文件中的配置", "Read configuration from file")),
         ("--ip <ip>", ("指定虚拟ip,指定的ip不能和其他设备重复,必须有效并且在服务端所属网段下,默认情况由服务端分配", "Specify virtual IP, must be unique and valid within server subnet, by default allocated by server")),
@@ -497,14 +472,6 @@ fn print_usage(program: &str, _opts: Options) {
         get_description("-e <stun-server>", &language)
     );
 
-    println!(
-        "  -i <in-ip>          {}",
-        get_description("-i <in-ip>", &language)
-    );
-    println!(
-        "  -o <out-ip>         {}",
-        get_description("-o <out-ip>", &language)
-    );
     println!(
         "  -u <mtu>            {}",
         get_description("-u <mtu>", &language)

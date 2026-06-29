@@ -282,6 +282,9 @@ message DeviceInfo {
     bytes device_pub_key = 8;
     bytes online_kx_pub = 9;
     ChannelMode preferred_channel_mode = 10;
+    bool exit_node_advertised = 11;
+    bool exit_node_approved = 12;
+    bool exit_node_usable = 13;
 }
 
 message DeviceList {
@@ -313,10 +316,13 @@ enum PunchNatModel {
 }
 enum PunchTriggerReason {
     PunchTriggerUnknown = 0;
+    // Legacy status report trigger that may schedule punch recovery.
     PunchTriggerStatusUpdate = 1;
     PunchTriggerRouteTimeout = 2;
     PunchTriggerReconnectRecovery = 3;
     PunchTriggerManualRequest = 4;
+    // Status-only report; control must not dispatch punch start packets.
+    StatusReportOnly = 5;
 }
 enum PunchSessionPhase {
     PunchPhaseUnknown = 0;
@@ -406,6 +412,8 @@ message ClientStatusInfo {
     PunchTriggerReason punch_trigger_reason = 11;
     repeated PunchEndpoint local_udp_endpoints = 12;
     ChannelMode preferred_channel_mode = 13;
+    bool exit_node_advertised = 14;
+    bool exit_node_local_ready = 15;
 }
 message RouteItem {
     fixed32 next_ip = 1;

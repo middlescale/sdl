@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Info {
@@ -26,8 +26,6 @@ pub struct Info {
     pub local_addr: String,
     pub ipv6_addr: String,
     pub port_mapping_list: Vec<(bool, SocketAddr, String)>,
-    pub in_ips: Vec<(u32, u32, Ipv4Addr)>,
-    pub out_ips: Vec<(u32, u32)>,
     pub udp_listen_addr: Vec<String>,
 }
 
@@ -40,6 +38,19 @@ pub struct GatewayItem {
     pub grant_state: String,
     pub rt_ms: String,
     pub active: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct ExitNodeStatus {
+    pub enabled: bool,
+    pub advertised: bool,
+    pub local_ready: bool,
+    pub egress_interface: String,
+    pub selected_device_id: String,
+    pub selected_name: String,
+    pub selected_virtual_ip: String,
+    pub selected_usable: bool,
+    pub note: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

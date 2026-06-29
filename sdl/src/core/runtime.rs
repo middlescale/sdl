@@ -14,12 +14,12 @@ use serde_json::{json, Map, Value};
 
 use crate::cipher::CipherModel;
 use crate::control::ControlSession;
+use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
-use crate::external_route::{AllowExternalRoute, ExternalRoute};
 use crate::handle::{CurrentDeviceInfo, PeerDeviceInfo};
 use crate::nat::punch::NatInfo;
 use crate::nat::punch_workers::PunchCoordinator;
@@ -57,6 +57,7 @@ pub struct RuntimeConfig {
     pub device_name: Option<String>,
     pub default_interface: crate::transport::socket::LocalInterface,
     pub auth_request: Arc<RwLock<AuthRequestConfig>>,
+    pub exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +71,14 @@ pub struct PendingDnsQuery {
 pub struct PendingRenameRequest {
     pub responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
     pub created_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExitNodeLocalState {
+    pub enabled: bool,
+    pub local_ready: bool,
+    pub egress_interface: Option<String>,
+    pub selected_device_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +96,7 @@ pub struct SdlRuntime {
     pub pending_dns_queries: Arc<Mutex<HashMap<u64, PendingDnsQuery>>>,
     pub rename_request_seq: Arc<AtomicU64>,
     pub pending_rename_requests: Arc<Mutex<HashMap<u64, PendingRenameRequest>>>,
+    pub exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
     pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub device_signing_key: Arc<SigningKey>,
     pub peer_crypto: Arc<PeerCryptoManager>,
@@ -95,8 +105,7 @@ pub struct SdlRuntime {
     pub nat_test: NatTest,
     pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
     pub peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>>,
-    pub external_route: ExternalRoute,
-    pub out_external_route: AllowExternalRoute,
+    pub exit_node_route: ExitNodeRoute,
     pub control_session: ControlSession,
     pub gateway_sessions: GatewaySessions,
     pub route_manager: RouteManager,
@@ -128,6 +137,38 @@ pub struct SdlRuntime {
 }
 
 impl SdlRuntime {
+    pub(crate) fn apply_selected_exit_node_route(&self) {
+        let selected_device_id = self
+            .exit_node_state
+            .read()
+            .selected_device_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let Some(selected_device_id) = selected_device_id else {
+            self.exit_node_route.set_default_next_hop(None);
+            return;
+        };
+        let selected_peer_ip = self
+            .peer_state
+            .lock()
+            .devices
+            .values()
+            .find(|peer| {
+                peer.device_id == selected_device_id
+                    && peer.exit_node_usable
+                    && peer.status.is_online()
+            })
+            .map(|peer| peer.virtual_ip);
+        self.exit_node_route.set_default_next_hop(selected_peer_ip);
+        if selected_peer_ip.is_none() {
+            log::warn!(
+                "selected exit node is not currently usable: {}",
+                selected_device_id
+            );
+        }
+    }
+
     pub fn route_manager(&self) -> RouteManager {
         self.route_manager.clone()
     }
@@ -292,7 +333,6 @@ impl SdlRuntime {
             current_device.virtual_netmask,
             current_device.virtual_gateway,
             current_device.virtual_network,
-            self.external_route.to_route(),
         );
         let device = create_device(device_config, callback).map_err(|e| anyhow!("{}", e))?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

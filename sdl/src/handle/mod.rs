@@ -38,6 +38,9 @@ pub struct PeerDeviceInfo {
     pub device_pub_key: Vec<u8>,
     pub online_kx_pub: Vec<u8>,
     pub preferred_channel_mode: crate::proto::message::ChannelMode,
+    pub exit_node_advertised: bool,
+    pub exit_node_approved: bool,
+    pub exit_node_usable: bool,
 }
 
 impl PeerDeviceInfo {
@@ -49,6 +52,9 @@ impl PeerDeviceInfo {
         device_pub_key: Vec<u8>,
         online_kx_pub: Vec<u8>,
         preferred_channel_mode: crate::proto::message::ChannelMode,
+        exit_node_advertised: bool,
+        exit_node_approved: bool,
+        exit_node_usable: bool,
     ) -> Self {
         Self {
             virtual_ip,
@@ -58,6 +64,9 @@ impl PeerDeviceInfo {
             device_pub_key,
             online_kx_pub,
             preferred_channel_mode,
+            exit_node_advertised,
+            exit_node_approved,
+            exit_node_usable,
         }
     }
 }
@@ -188,8 +197,16 @@ impl CurrentDeviceInfo {
         ip == &CONTROL_VIP
     }
     #[inline]
+    pub fn contains_virtual_ip(&self, ip: Ipv4Addr) -> bool {
+        u32::from(ip) & u32::from(self.virtual_netmask) == u32::from(self.virtual_network)
+    }
+    #[inline]
+    pub fn is_outside_virtual_network(&self, ip: Ipv4Addr) -> bool {
+        !self.contains_virtual_ip(ip)
+    }
+    #[inline]
     pub fn not_in_network(&self, ip: Ipv4Addr) -> bool {
-        u32::from(ip) & u32::from(self.virtual_netmask) != u32::from(self.virtual_network)
+        self.is_outside_virtual_network(ip)
     }
 }
 pub fn change_status(

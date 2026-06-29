@@ -1,5 +1,10 @@
-use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
-use crate::command::server::{AuthCommand, CommandHandler, CommandServer, SwitchCommand};
+use crate::command::entity::{
+    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+};
+use crate::command::server::{
+    AuthCommand, CommandHandler, CommandServer, ExitNodeDisableCommand, ExitNodeEnableCommand,
+    ExitNodeUseCommand, SwitchCommand,
+};
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{
     read_user_config, save_current_user_config, write_saved_config, write_user_config, FileConfig,
@@ -7,10 +12,12 @@ use crate::config::{
 use crate::service_lock::ServiceInstanceGuard;
 use anyhow::Context;
 use console::style;
-use sdl::core::{Config, RenameRequestOutcome, Sdl};
+use sdl::core::{Config, ExitNodeLocalState, RenameRequestOutcome, Sdl};
 use sdl::data_plane::use_channel_type::UseChannelType;
+use sdl::net::exit_node;
 use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use std::io;
+use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -162,8 +169,6 @@ impl ServiceManager {
             local_addr: String::new(),
             ipv6_addr: String::new(),
             port_mapping_list,
-            in_ips: config.in_ips,
-            out_ips: config.out_ips,
             udp_listen_addr: vec![],
         }
     }
@@ -181,12 +186,287 @@ impl ServiceManager {
         let config = self.current_config();
         let callback = ServiceCallback::new(Arc::downgrade(self));
         let vnt = Arc::new(Sdl::new(config, callback)?);
+        if let Err(err) = self.reapply_exit_node_server_state() {
+            log::warn!("failed to reapply exit-node system state: {err:?}");
+        }
+        vnt.set_exit_node_state(self.exit_node_state_from_saved_config());
         *self.runtime.lock().unwrap() = Some(vnt.clone());
         self.mutate_state(|state| {
             state.runtime_running = true;
             state.runtime_suspended = false;
         });
         Ok(vnt)
+    }
+
+    fn exit_node_state_from_saved_config(&self) -> ExitNodeLocalState {
+        let saved_config = self.saved_config.lock().unwrap();
+        let enabled = saved_config.exit_node.enabled;
+        ExitNodeLocalState {
+            enabled,
+            local_ready: exit_node::local_ready(enabled, &saved_config.exit_node.egress_interface),
+            egress_interface: saved_config.exit_node.egress_interface.clone(),
+            selected_device_id: saved_config.exit_node.selected_device_id.clone(),
+        }
+    }
+
+    fn saved_exit_node_tun_name(saved_config: &FileConfig) -> String {
+        saved_config
+            .exit_node
+            .tun_name
+            .as_deref()
+            .unwrap_or("sdl-tun")
+            .trim()
+            .to_string()
+    }
+
+    fn reapply_exit_node_server_state(&self) -> anyhow::Result<()> {
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        let tun_name = Self::saved_exit_node_tun_name(&saved_config);
+        if saved_config.exit_node.enabled {
+            let egress_interface = saved_config
+                .exit_node
+                .egress_interface
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("exit-node enabled but egress_interface is not configured")
+                })?;
+            exit_node::setup_server_routing(egress_interface, &tun_name)?;
+        }
+        Ok(())
+    }
+
+    fn reapply_exit_node_client_state(&self) -> anyhow::Result<()> {
+        let runtime = self.current_runtime()?;
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.as_deref() else {
+            return Ok(());
+        };
+        let tun_name = Self::saved_exit_node_tun_name(&saved_config);
+        let excludes = exit_node::merge_excludes(
+            &runtime,
+            Some(selected_device_id),
+            &saved_config.exit_node.route_excludes,
+        )?;
+        exit_node::setup_client_routing(&tun_name, &excludes)?;
+        runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+        Ok(())
+    }
+
+    fn request_exit_node_client_state_reapply(self: &Arc<Self>) {
+        let manager = self.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = manager.reapply_exit_node_client_state() {
+                log::warn!("failed to reapply exit-node client routing: {err:?}");
+            }
+        });
+    }
+
+    fn exit_node_status(&self) -> ExitNodeStatus {
+        let saved = self.saved_config.lock().unwrap().clone();
+        let runtime_state = self
+            .runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|runtime| !runtime.is_stopped())
+            .map(|runtime| runtime.exit_node_state());
+        let enabled = runtime_state
+            .as_ref()
+            .map(|state| state.enabled)
+            .unwrap_or(saved.exit_node.enabled);
+        let local_ready = runtime_state
+            .as_ref()
+            .map(|state| state.local_ready)
+            .unwrap_or(false);
+        let egress_interface = runtime_state
+            .as_ref()
+            .and_then(|state| state.egress_interface.clone())
+            .or_else(|| saved.exit_node.egress_interface.clone())
+            .unwrap_or_default();
+        let selected_device_id = runtime_state
+            .as_ref()
+            .and_then(|state| state.selected_device_id.clone())
+            .or_else(|| saved.exit_node.selected_device_id.clone())
+            .unwrap_or_default();
+        let mut selected_name = String::new();
+        let mut selected_virtual_ip = String::new();
+        let mut selected_usable = false;
+        if !selected_device_id.is_empty() {
+            if let Ok(runtime) = self.current_runtime() {
+                if let Some(peer) = runtime
+                    .device_list()
+                    .into_iter()
+                    .find(|peer| peer.device_id == selected_device_id)
+                {
+                    selected_name = peer.name;
+                    selected_virtual_ip = peer.virtual_ip.to_string();
+                    selected_usable = peer.exit_node_usable;
+                }
+            }
+        }
+        let note = if enabled && local_ready {
+            "advertising exit-node capability".to_string()
+        } else if enabled {
+            "exit-node is enabled, but this platform is not ready to advertise it".to_string()
+        } else if !selected_device_id.is_empty() && !selected_usable {
+            "selected exit node is not currently usable".to_string()
+        } else {
+            "exit-node is disabled".to_string()
+        };
+        ExitNodeStatus {
+            enabled,
+            advertised: enabled,
+            local_ready,
+            egress_interface,
+            selected_device_id,
+            selected_name,
+            selected_virtual_ip,
+            selected_usable,
+            note,
+        }
+    }
+
+    fn enable_exit_node(&self, egress_interface: &str, tun_name: &str) -> anyhow::Result<String> {
+        let egress_interface = egress_interface.trim();
+        if egress_interface.is_empty() {
+            anyhow::bail!("egress_interface cannot be empty");
+        }
+        if egress_interface.len() > 64 {
+            anyhow::bail!("egress_interface too long");
+        }
+        {
+            let saved_config = self.saved_config.lock().unwrap();
+            if saved_config.exit_node.selected_device_id.is_some() {
+                anyhow::bail!(
+                    "cannot enable this node as an exit node while it is using another exit node; run `sdl exit-node clear` first"
+                );
+            }
+        }
+        let setup_result = exit_node::setup_server_routing(egress_interface, tun_name)?;
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.enabled = true;
+            saved_config.exit_node.egress_interface = Some(egress_interface.to_string());
+            saved_config.exit_node.tun_name = Some(tun_name.to_string());
+        }
+        self.persist_saved_config();
+        let state = self.exit_node_state_from_saved_config();
+        if let Ok(runtime) = self.current_runtime() {
+            runtime.set_exit_node_state(state);
+        }
+        Ok(format!(
+            "exit-node enabled on {}; waiting for control approval; {}",
+            egress_interface, setup_result
+        ))
+    }
+
+    fn disable_exit_node(&self, tun_name: &str) -> anyhow::Result<String> {
+        let egress_interface = {
+            let saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.egress_interface.clone()
+        };
+        let setup_result = match egress_interface.as_deref() {
+            Some(egress_interface) if !egress_interface.trim().is_empty() => {
+                exit_node::teardown_server_routing(egress_interface.trim(), tun_name)?
+            }
+            _ => "exit-node routing was not configured".to_string(),
+        };
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.enabled = false;
+        }
+        self.persist_saved_config();
+        if let Ok(runtime) = self.current_runtime() {
+            runtime.set_exit_node_state(ExitNodeLocalState::default());
+        }
+        Ok(format!("exit-node disabled; {}", setup_result))
+    }
+
+    fn use_exit_node(
+        &self,
+        target: &str,
+        tun_name: &str,
+        excludes: &[String],
+    ) -> anyhow::Result<String> {
+        let target = target.trim();
+        if target.is_empty() {
+            anyhow::bail!("exit-node target cannot be empty");
+        }
+        {
+            let saved_config = self.saved_config.lock().unwrap();
+            if saved_config.exit_node.enabled {
+                anyhow::bail!(
+                    "cannot use another exit node while this node is enabled as an exit node; run `sdl exit-node disable` first"
+                );
+            }
+        }
+        let runtime = self.current_runtime()?;
+        let peers = runtime.device_list();
+        let target_ip = target.parse::<Ipv4Addr>().ok();
+        let matches: Vec<_> = peers
+            .into_iter()
+            .filter(|peer| {
+                peer.device_id == target
+                    || peer.name == target
+                    || target_ip
+                        .map(|target_ip| peer.virtual_ip == target_ip)
+                        .unwrap_or(false)
+            })
+            .collect();
+        if matches.is_empty() {
+            anyhow::bail!(
+                "exit node '{}' not found in current SDL device list",
+                target
+            );
+        }
+        if matches.len() > 1 {
+            anyhow::bail!(
+                "exit node target '{}' is ambiguous; use device id or virtual ip",
+                target
+            );
+        }
+        let peer = matches.into_iter().next().unwrap();
+        if !peer.exit_node_usable {
+            anyhow::bail!(
+                "device '{}' is not a usable exit node; advertised={}, approved={}, online={}",
+                peer.device_id,
+                peer.exit_node_advertised,
+                peer.exit_node_approved,
+                peer.status.is_online()
+            );
+        }
+        let effective_excludes =
+            exit_node::merge_excludes(&runtime, Some(&peer.device_id), excludes)?;
+        let setup_result = exit_node::setup_client_routing(tun_name, &effective_excludes)?;
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.selected_device_id = Some(peer.device_id.clone());
+            saved_config.exit_node.tun_name = Some(tun_name.to_string());
+            saved_config.exit_node.route_excludes = excludes.to_vec();
+        }
+        self.persist_saved_config();
+        let state = self.exit_node_state_from_saved_config();
+        runtime.set_exit_node_state(state);
+        Ok(format!(
+            "exit-node selection changed to {} ({}); {}",
+            peer.name, peer.device_id, setup_result
+        ))
+    }
+
+    fn clear_exit_node(&self, tun_name: &str) -> anyhow::Result<String> {
+        let setup_result = exit_node::teardown_client_routing(tun_name)?;
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.selected_device_id = None;
+            saved_config.exit_node.route_excludes.clear();
+        }
+        self.persist_saved_config();
+        if let Ok(runtime) = self.current_runtime() {
+            runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+        }
+        Ok(format!("exit-node selection cleared; {}", setup_result))
     }
 
     fn resume_service_runtime(self: &Arc<Self>) -> anyhow::Result<String> {
@@ -390,6 +670,41 @@ impl CommandHandler for ServiceCommandHandler {
         Ok(format!("gateway selection changed to {}", gateway))
     }
 
+    fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
+        Ok(self.0.exit_node_status())
+    }
+
+    fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String> {
+        self.0
+            .enable_exit_node(
+                &enable.egress_interface,
+                enable.tun_name.as_deref().unwrap_or("sdl-tun"),
+            )
+            .map_err(|e| io::Error::other(format!("exit-node enable failed: {e:?}")))
+    }
+
+    fn exit_node_disable(&self, disable: ExitNodeDisableCommand) -> io::Result<String> {
+        self.0
+            .disable_exit_node(disable.tun_name.as_deref().unwrap_or("sdl-tun"))
+            .map_err(|e| io::Error::other(format!("exit-node disable failed: {e:?}")))
+    }
+
+    fn exit_node_use(&self, use_command: ExitNodeUseCommand) -> io::Result<String> {
+        self.0
+            .use_exit_node(
+                &use_command.target,
+                use_command.tun_name.as_deref().unwrap_or("sdl-tun"),
+                &use_command.excludes,
+            )
+            .map_err(|e| io::Error::other(format!("exit-node use failed: {e:?}")))
+    }
+
+    fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String> {
+        self.0
+            .clear_exit_node(clear.tun_name.as_deref().unwrap_or("sdl-tun"))
+            .map_err(|e| io::Error::other(format!("exit-node clear failed: {e:?}")))
+    }
+
     fn traffic(&self) -> io::Result<TrafficSummary> {
         match self.0.current_runtime() {
             Ok(vnt) => Ok(crate::command::command_traffic(vnt.as_ref())),
@@ -516,6 +831,12 @@ impl ServiceCallback {
             });
         }
     }
+
+    fn request_exit_node_client_state_reapply(&self) {
+        if let Some(manager) = self.manager.upgrade() {
+            manager.request_exit_node_client_state_reapply();
+        }
+    }
 }
 
 impl SdlCallback for ServiceCallback {
@@ -531,6 +852,7 @@ impl SdlCallback for ServiceCallback {
     }
 
     fn create_tun(&self, info: sdl::DeviceInfo) {
+        self.request_exit_node_client_state_reapply();
         println!("create_tun {}", info)
     }
 
@@ -545,8 +867,13 @@ impl SdlCallback for ServiceCallback {
 
     fn register(&self, info: RegisterInfo) -> bool {
         self.clear_error_state();
+        self.request_exit_node_client_state_reapply();
         println!("register {}", style(info).green());
         true
+    }
+
+    fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {
+        self.request_exit_node_client_state_reapply();
     }
 
     fn device_renamed(&self, new_name: String) {

@@ -1,7 +1,9 @@
 use serde::de::DeserializeOwned;
 use std::io;
 
-use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{
+    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+};
 use crate::command::ipc;
 
 pub struct CommandClient;
@@ -33,6 +35,49 @@ impl CommandClient {
     }
     pub fn gateway_set(&mut self, gateway: &str) -> io::Result<String> {
         let cmd = format!("gateway_set:{}", gateway.trim());
+        self.send_string_cmd(cmd.as_bytes())
+    }
+    pub fn exit_node_status(&mut self) -> io::Result<ExitNodeStatus> {
+        self.send_cmd(b"exit_node:status")
+    }
+    pub fn exit_node_enable(
+        &mut self,
+        egress_interface: &str,
+        tun_name: &str,
+    ) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "egress_interface": egress_interface,
+            "tun_name": tun_name,
+        });
+        let cmd = format!("exit_node:enable:{}", serde_json::to_string(&cmd).unwrap());
+        self.send_string_cmd(cmd.as_bytes())
+    }
+    pub fn exit_node_disable(&mut self, tun_name: &str) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "tun_name": tun_name,
+        });
+        let cmd = format!("exit_node:disable:{}", serde_json::to_string(&cmd).unwrap());
+        self.send_string_cmd(cmd.as_bytes())
+    }
+    pub fn exit_node_use(
+        &mut self,
+        target: &str,
+        tun_name: &str,
+        excludes: &[String],
+    ) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "target": target,
+            "tun_name": tun_name,
+            "excludes": excludes,
+        });
+        let cmd = format!("exit_node:use:{}", serde_json::to_string(&cmd).unwrap());
+        self.send_string_cmd(cmd.as_bytes())
+    }
+    pub fn exit_node_clear(&mut self, tun_name: &str) -> io::Result<String> {
+        let cmd = serde_json::json!({
+            "tun_name": tun_name,
+        });
+        let cmd = format!("exit_node:clear:{}", serde_json::to_string(&cmd).unwrap());
         self.send_string_cmd(cmd.as_bytes())
     }
     pub fn traffic(&mut self) -> io::Result<TrafficSummary> {

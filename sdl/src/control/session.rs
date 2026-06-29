@@ -354,9 +354,7 @@ impl ControlSession {
                 try_refresh_gateway_grant(self, &self.data_plane.gateway_sessions);
             }
             if last_status_report_at.elapsed() >= status_report_delay {
-                if let Err(e) =
-                    self.send_status_report_packet(PunchTriggerReason::PunchTriggerStatusUpdate)
-                {
+                if let Err(e) = self.send_client_status_report_packet() {
                     log::warn!("{:?}", e)
                 }
                 last_status_report_at = Instant::now();
@@ -388,7 +386,7 @@ impl ControlSession {
                         "periodic repunch requested for peers without direct route: {:?}",
                         peers_missing_direct_route
                     );
-                    self.trigger_status_report_with_nat_ready(
+                    self.request_punch_status_report_with_nat_ready(
                         PunchTriggerReason::PunchTriggerManualRequest,
                     );
                 }
@@ -571,8 +569,8 @@ impl ControlSession {
         )
     }
 
-    pub fn trigger_status_report(&self, reason: PunchTriggerReason) {
-        if let Err(e) = self.send_status_report_packet(reason) {
+    pub fn report_client_status(&self) {
+        if let Err(e) = self.send_client_status_report_packet() {
             log::warn!("{:?}", e)
         }
     }
@@ -595,10 +593,14 @@ impl ControlSession {
         self.negotiated_capabilities.read().contains(capability)
     }
 
-    pub fn trigger_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
+    pub fn request_punch_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
+        self.spawn_status_report_with_nat_ready(reason);
+    }
+
+    fn spawn_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
         let control_session = self.clone();
         thread::Builder::new()
-            .name("upStatusEvent".into())
+            .name("statusReport".into())
             .spawn(move || {
                 if !control_session.nat_test.has_public_udp_endpoints() {
                     if let Err(e) = control_session.nat_test.request_public_addr() {
@@ -610,7 +612,11 @@ impl ControlSession {
                     log::warn!("{:?}", e)
                 }
             })
-            .expect("upStatusEvent");
+            .expect("statusReport");
+    }
+
+    fn send_client_status_report_packet(&self) -> io::Result<()> {
+        self.send_status_report_packet(PunchTriggerReason::StatusReportOnly)
     }
 
     fn send_status_report_packet(&self, reason: PunchTriggerReason) -> io::Result<()> {
@@ -633,6 +639,9 @@ impl ControlSession {
                 crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
             }
         });
+        let exit_node_state = self.config.exit_node_state.read().clone();
+        message.exit_node_advertised = exit_node_state.enabled;
+        message.exit_node_local_ready = exit_node_state.enabled && exit_node_state.local_ready;
         for (ip, _) in routes {
             let mut item = RouteItem::new();
             item.next_ip = ip.into();

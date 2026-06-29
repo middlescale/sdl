@@ -450,6 +450,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     info.device_pub_key,
                     info.online_kx_pub,
                     info.preferred_channel_mode.enum_value_or_default(),
+                    info.exit_node_advertised,
+                    info.exit_node_approved,
+                    info.exit_node_usable,
                 )
             })
             .collect();
@@ -822,14 +825,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         #[cfg(not(feature = "integrated_tun"))]
                         {
                             let device_config = crate::handle::callback::DeviceConfig::new(
-                                #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+                                #[cfg(any(
+                                    target_os = "windows",
+                                    target_os = "linux",
+                                    target_os = "macos"
+                                ))]
                                 self.runtime.config.device_name.clone(),
                                 self.runtime.config.mtu,
                                 virtual_ip,
                                 virtual_netmask,
                                 virtual_gateway,
                                 virtual_network,
-                                self.runtime.external_route.to_route(),
                             );
                             self.callback.create_device(device_config);
                         }
@@ -860,7 +866,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     }
                     self.runtime
                         .control_session
-                        .trigger_status_report_with_nat_ready(if old.status.offline() {
+                        .request_punch_status_report_with_nat_ready(if old.status.offline() {
                             crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery
                         } else {
                             crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate
@@ -919,11 +925,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     return Ok(());
                 };
                 self.set_device_info_list(device_list_update);
-                self.runtime
-                    .control_session
-                    .trigger_status_report_with_nat_ready(
-                        crate::proto::message::PunchTriggerReason::PunchTriggerStatusUpdate,
-                    );
+                self.runtime.control_session.report_client_status();
             }
             service_packet::Protocol::DeviceAuthAck => {
                 let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
@@ -1429,6 +1431,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         self.runtime
             .peer_crypto
             .clear_previous_ciphers_for(&reset_vips);
+        self.runtime.apply_selected_exit_node_route();
         self.callback.peer_client_list(
             ip_list
                 .into_iter()
@@ -2162,6 +2165,9 @@ mod tests {
             vec![1],
             vec![2],
             crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
         );
         let mut peer_state = crate::handle::PeerState {
             epoch: 83,
@@ -2175,6 +2181,9 @@ mod tests {
             vec![3],
             vec![4],
             crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
         );
         let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer)]);
 
@@ -2199,6 +2208,9 @@ mod tests {
             vec![1],
             vec![2],
             crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
         );
         let next_peer = PeerDeviceInfo::new(
             Ipv4Addr::new(10, 26, 0, 4),
@@ -2208,6 +2220,9 @@ mod tests {
             vec![3],
             vec![4],
             crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
         );
         let mut peer_state = crate::handle::PeerState {
             epoch: 63,

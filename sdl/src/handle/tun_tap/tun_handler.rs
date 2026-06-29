@@ -11,10 +11,10 @@ use std::{io, thread};
 use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
+use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::route_state::RouteKind;
-use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol;
@@ -46,7 +46,7 @@ pub fn start(
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
+    exit_node_route: ExitNodeRoute,
     peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
@@ -61,7 +61,7 @@ pub fn start(
                 device,
                 current_device,
                 gateway_sessions,
-                ip_route,
+                exit_node_route,
                 peer_state,
                 peer_crypto,
                 compressor,
@@ -128,6 +128,14 @@ fn broadcast(
     Ok(())
 }
 
+fn overlay_source_for_tun_packet(src_ip: Ipv4Addr, current_device: &CurrentDeviceInfo) -> Ipv4Addr {
+    if current_device.contains_virtual_ip(src_ip) {
+        src_ip
+    } else {
+        current_device.virtual_ip
+    }
+}
+
 /// 接收tun数据，并且转发到udp上
 /// 实现一个原地发送，必须保证是如下结构
 /// |12字节开头|ip报文|至少1024字节结尾|
@@ -140,7 +148,7 @@ pub(crate) fn handle(
     device_writer: &SyncDevice,
     current_device: CurrentDeviceInfo,
     gateway_sessions: &GatewaySessions,
-    ip_route: &ExternalRoute,
+    exit_node_route: &ExitNodeRoute,
     peer_state: &Mutex<crate::handle::PeerState>,
     peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
@@ -175,6 +183,7 @@ pub(crate) fn handle(
         return icmp(device_writer, ipv4_packet);
     }
     let src_ip = ipv4_packet.source_ip();
+    let overlay_src_ip = overlay_source_for_tun_packet(src_ip, &current_device);
     let mut dest_ip = ipv4_packet.destination_ip();
     if ipv4_packet.protocol() == Protocol::Udp {
         if data_channel.is_dns_service_ip(&dest_ip) || dest_ip == current_device.virtual_gateway {
@@ -228,7 +237,7 @@ pub(crate) fn handle(
     net_packet.set_protocol(protocol::Protocol::IpTurn);
     net_packet.set_transport_protocol(ip_turn_packet::Protocol::Ipv4.into());
     net_packet.set_initial_ttl(6);
-    net_packet.set_source(src_ip);
+    net_packet.set_source(overlay_src_ip);
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
         if protocol == Protocol::Icmp {
@@ -250,16 +259,16 @@ pub(crate) fn handle(
     if !Ipv4Addr::is_multicast(&dest_ip)
         && !dest_ip.is_broadcast()
         && current_device.broadcast_ip != dest_ip
-        && current_device.not_in_network(dest_ip)
+        && current_device.is_outside_virtual_network(dest_ip)
     {
-        if let Some(r_dest_ip) = ip_route.route(&dest_ip) {
+        if let Some(next_hop) = exit_node_route.next_hop_for_external_destination(&dest_ip) {
             //路由的目标不能是自己
-            if r_dest_ip == src_ip {
+            if next_hop == src_ip {
                 return Ok(());
             }
             //需要修改目的地址
-            dest_ip = r_dest_ip;
-            net_packet.set_destination(r_dest_ip);
+            dest_ip = next_hop;
+            net_packet.set_destination(next_hop);
         } else {
             return Ok(());
         }
@@ -277,7 +286,7 @@ pub(crate) fn handle(
         out.set_protocol(protocol::Protocol::IpTurn);
         out.set_transport_protocol(ip_turn_packet::Protocol::Ipv4.into());
         out.set_initial_ttl(6);
-        out.set_source(src_ip);
+        out.set_source(overlay_src_ip);
         out.set_destination(dest_ip);
         out
     } else {
@@ -312,4 +321,35 @@ pub(crate) fn handle(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overlay_source_for_tun_packet;
+    use crate::handle::CurrentDeviceInfo;
+    use std::net::Ipv4Addr;
+
+    fn current_device() -> CurrentDeviceInfo {
+        CurrentDeviceInfo::new(
+            Ipv4Addr::new(10, 26, 0, 3),
+            Ipv4Addr::new(255, 255, 255, 0),
+            Ipv4Addr::new(10, 26, 0, 1),
+        )
+    }
+
+    #[test]
+    fn overlay_source_preserves_sdl_source_ip() {
+        assert_eq!(
+            overlay_source_for_tun_packet(Ipv4Addr::new(10, 26, 0, 3), &current_device()),
+            Ipv4Addr::new(10, 26, 0, 3)
+        );
+    }
+
+    #[test]
+    fn overlay_source_uses_local_vip_for_forwarded_external_packets() {
+        assert_eq!(
+            overlay_source_for_tun_packet(Ipv4Addr::new(172, 31, 240, 10), &current_device()),
+            Ipv4Addr::new(10, 26, 0, 3)
+        );
+    }
 }

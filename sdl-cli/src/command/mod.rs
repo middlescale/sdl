@@ -278,14 +278,14 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
     list
 }
 
-pub fn command_info(vnt: &Sdl) -> Info {
+pub fn command_info(sdl: &Sdl) -> Info {
     let service_state = service_state::read_service_state().unwrap_or_default();
-    let config = vnt.config();
-    let current_device = vnt.current_device();
-    let gateway_summary = vnt.gateway_session_summary();
-    let nat_info = vnt.nat_info();
+    let config = sdl.config();
+    let current_device = sdl.current_device();
+    let gateway_summary = sdl.gateway_session_summary();
+    let nat_info = sdl.nat_info();
     let name = config.name.clone();
-    let runtime_name = vnt.name().to_string();
+    let runtime_name = sdl.name().to_string();
     let restart_required = runtime_name != name;
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
@@ -301,10 +301,10 @@ pub fn command_info(vnt: &Sdl) -> Info {
         String::new()
     };
     let gateway_grant_state = gateway_grant_state_label(&gateway_summary);
-    let connect_status = format!("{:?}", vnt.connection_status());
+    let connect_status = format!("{:?}", sdl.connection_status());
     let data_plane_status = if gateway_summary.authenticated {
         "gateway-available".to_string()
-    } else if vnt
+    } else if sdl
         .route_states()
         .into_iter()
         .any(|(_, routes)| routes.into_iter().any(|route| route.kind == RouteKind::P2p))
@@ -313,7 +313,7 @@ pub fn command_info(vnt: &Sdl) -> Info {
     } else {
         "limited".to_string()
     };
-    let channel_policy = match vnt.use_channel_type() {
+    let channel_policy = match sdl.use_channel_type() {
         UseChannelType::Relay => "relay".to_string(),
         UseChannelType::P2p => "p2p".to_string(),
         UseChannelType::All => "auto".to_string(),
@@ -331,11 +331,9 @@ pub fn command_info(vnt: &Sdl) -> Info {
         .map(|v| v.to_string())
         .unwrap_or("None".to_string());
     #[cfg(feature = "port_mapping")]
-    let port_mapping_list = vnt.config().port_mapping_list.clone();
+    let port_mapping_list = sdl.config().port_mapping_list.clone();
     #[cfg(not(feature = "port_mapping"))]
     let port_mapping_list = vec![];
-    let in_ips = vnt.config().in_ips.clone();
-    let out_ips = vnt.config().out_ips.clone();
     let udp_listen_addr = nat_info
         .local_udp_ports
         .iter()
@@ -365,8 +363,6 @@ pub fn command_info(vnt: &Sdl) -> Info {
         local_addr,
         ipv6_addr,
         port_mapping_list,
-        in_ips,
-        out_ips,
         udp_listen_addr,
     }
 }

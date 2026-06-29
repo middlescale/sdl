@@ -1,7 +1,7 @@
 use crate::compression::Compressor;
+use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
-use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::BUFFER_SIZE;
@@ -20,7 +20,7 @@ pub(crate) fn start_simple(
     device: Arc<SyncDevice>,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
+    exit_node_route: ExitNodeRoute,
     peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
@@ -53,7 +53,7 @@ pub(crate) fn start_simple(
         &event,
         current_device,
         gateway_sessions,
-        ip_route,
+        exit_node_route,
         peer_state,
         peer_crypto,
         compressor,
@@ -73,7 +73,7 @@ fn start_simple0(
     event: &InterruptEvent,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
+    exit_node_route: ExitNodeRoute,
     peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
@@ -120,7 +120,7 @@ fn start_simple0(
             &device,
             current_device.load(),
             &gateway_sessions,
-            &ip_route,
+            &exit_node_route,
             &peer_state,
             &peer_crypto,
             &compressor,

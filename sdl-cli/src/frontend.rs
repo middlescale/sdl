@@ -6,12 +6,19 @@ use std::time::{Duration, Instant};
 
 fn print_usage() {
     println!(
-        "sdl <resume|list|status|gateway|route|traffic|suspend|rename|auth|switch|channel-change|version> [options]"
+        "sdl <resume|list|status|gateway|exit-node|route|traffic|suspend|rename|auth|switch|channel-change|version> [options]"
     );
     println!("  sdl resume [--json]                   # 恢复本地收发服务");
     println!("  sdl list [--json]");
     println!("  sdl status [--json]");
     println!("  sdl gateway [--json] [--set <gateway-name|auto>]");
+    println!("  sdl exit-node status [--json]");
+    println!("  sdl exit-node enable --egress-interface <iface> [--tun-name sdl-tun] [--json]");
+    println!(
+        "  sdl exit-node use <device-id|name|virtual-ip> [--tun-name sdl-tun] [--exclude <ip-or-cidr>] [--json]"
+    );
+    println!("  sdl exit-node disable [--json]");
+    println!("  sdl exit-node clear [--json]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
     println!("  sdl suspend [--json]                  # 挂起本地收发服务");
@@ -35,6 +42,7 @@ pub fn run() -> i32 {
         "list" => handle_list(&args[2..]),
         "status" | "info" => handle_status(&args[2..]),
         "gateway" => handle_gateway(&args[2..]),
+        "exit-node" | "exit_node" => handle_exit_node(&args[2..]),
         "route" => handle_route(&args[2..]),
         "traffic" => handle_traffic(&args[2..]),
         "suspend" => handle_suspend(&args[2..]),
@@ -355,6 +363,256 @@ fn handle_gateway(args: &[String]) -> i32 {
                 1
             }
         }
+    }
+}
+
+fn handle_exit_node(args: &[String]) -> i32 {
+    let json = has_json_flag(args);
+    let filtered: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        return print_exit_node_usage(json);
+    }
+    match filtered[0].as_str() {
+        "status" => {
+            if filtered.len() != 1 {
+                return print_exit_node_usage(json);
+            }
+            match CommandClient::new().and_then(|mut client| client.exit_node_status()) {
+                Ok(status) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&status).unwrap());
+                    } else {
+                        println!(
+                            "Exit node: {}",
+                            if status.enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        println!("Advertised: {}", status.advertised);
+                        println!("Local ready: {}", status.local_ready);
+                        if !status.egress_interface.is_empty() {
+                            println!("Egress interface: {}", status.egress_interface);
+                        }
+                        if !status.selected_device_id.is_empty() {
+                            println!("Selected device: {}", status.selected_device_id);
+                            if !status.selected_name.is_empty() {
+                                println!("Selected name: {}", status.selected_name);
+                            }
+                            if !status.selected_virtual_ip.is_empty() {
+                                println!("Selected IP: {}", status.selected_virtual_ip);
+                            }
+                            println!("Selected usable: {}", status.selected_usable);
+                        }
+                        if !status.note.is_empty() {
+                            println!("Note: {}", status.note);
+                        }
+                    }
+                    0
+                }
+                Err(e) => {
+                    print_exit_node_error(json, e.to_string());
+                    1
+                }
+            }
+        }
+        "enable" => {
+            let mut egress_interface: Option<String> = None;
+            let mut tun_name = "sdl-tun".to_string();
+            let mut iter = filtered[1..].iter();
+            while let Some(arg) = iter.next() {
+                match arg.as_str() {
+                    "--egress-interface" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(
+                                json,
+                                "missing --egress-interface value".to_string(),
+                            );
+                            return 1;
+                        };
+                        egress_interface = Some(value.clone());
+                    }
+                    "--tun-name" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(json, "missing --tun-name value".to_string());
+                            return 1;
+                        };
+                        tun_name = value.clone();
+                    }
+                    _ => return print_exit_node_usage(json),
+                }
+            }
+            let Some(egress_interface) = egress_interface else {
+                print_exit_node_error(json, "missing --egress-interface".to_string());
+                return 1;
+            };
+            match CommandClient::new()
+                .and_then(|mut client| client.exit_node_enable(&egress_interface, &tun_name))
+            {
+                Ok(result) => print_exit_node_ok(json, result),
+                Err(error) => {
+                    print_exit_node_error(json, error.to_string());
+                    1
+                }
+            }
+        }
+        "use" => {
+            let mut target: Option<String> = None;
+            let mut tun_name = "sdl-tun".to_string();
+            let mut excludes = Vec::new();
+            let mut iter = filtered[1..].iter();
+            while let Some(arg) = iter.next() {
+                match arg.as_str() {
+                    "--tun-name" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(json, "missing --tun-name value".to_string());
+                            return 1;
+                        };
+                        tun_name = value.clone();
+                    }
+                    "--exclude" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(json, "missing --exclude value".to_string());
+                            return 1;
+                        };
+                        excludes.push(value.clone());
+                    }
+                    _ if target.is_none() => {
+                        target = Some(arg.clone());
+                    }
+                    _ => return print_exit_node_usage(json),
+                }
+            }
+            let Some(target) = target else {
+                return print_exit_node_usage(json);
+            };
+            match CommandClient::new()
+                .and_then(|mut client| client.exit_node_use(&target, &tun_name, &excludes))
+            {
+                Ok(result) => print_exit_node_ok(json, result),
+                Err(error) => {
+                    print_exit_node_error(json, error.to_string());
+                    1
+                }
+            }
+        }
+        "disable" => {
+            let mut tun_name = "sdl-tun".to_string();
+            let mut iter = filtered[1..].iter();
+            while let Some(arg) = iter.next() {
+                match arg.as_str() {
+                    "--tun-name" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(json, "missing --tun-name value".to_string());
+                            return 1;
+                        };
+                        tun_name = value.clone();
+                    }
+                    _ => return print_exit_node_usage(json),
+                }
+            }
+            match CommandClient::new().and_then(|mut client| client.exit_node_disable(&tun_name)) {
+                Ok(result) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &serde_json::json!({"ok": true, "result": result})
+                            )
+                            .unwrap()
+                        );
+                    } else {
+                        println!("{}", result);
+                    }
+                    0
+                }
+                Err(e) => {
+                    print_exit_node_error(json, e.to_string());
+                    1
+                }
+            }
+        }
+        "clear" => {
+            let mut tun_name = "sdl-tun".to_string();
+            let mut iter = filtered[1..].iter();
+            while let Some(arg) = iter.next() {
+                match arg.as_str() {
+                    "--tun-name" => {
+                        let Some(value) = iter.next() else {
+                            print_exit_node_error(json, "missing --tun-name value".to_string());
+                            return 1;
+                        };
+                        tun_name = value.clone();
+                    }
+                    _ => return print_exit_node_usage(json),
+                }
+            }
+            match CommandClient::new().and_then(|mut client| client.exit_node_clear(&tun_name)) {
+                Ok(result) => {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(
+                                &serde_json::json!({"ok": true, "result": result})
+                            )
+                            .unwrap()
+                        );
+                    } else {
+                        println!("{}", result);
+                    }
+                    0
+                }
+                Err(e) => {
+                    print_exit_node_error(json, e.to_string());
+                    1
+                }
+            }
+        }
+        _ => print_exit_node_usage(json),
+    }
+}
+
+fn print_exit_node_usage(json: bool) -> i32 {
+    let message = "usage: sdl exit-node <status|enable|disable|use|clear> [--json] [--egress-interface <iface>] [--tun-name <name>] [--exclude <ip-or-cidr>] [target]";
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": message}))
+                .unwrap()
+        );
+    } else {
+        eprintln!("{}", message);
+    }
+    2
+}
+
+fn print_exit_node_ok(json: bool, result: String) -> i32 {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok": true, "result": result}))
+                .unwrap()
+        );
+    } else {
+        println!("{}", result);
+    }
+    0
+}
+
+fn print_exit_node_error(json: bool, error: String) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({"ok": false, "error": error}))
+                .unwrap()
+        );
+    } else {
+        eprintln!("exit-node error: {}", error);
     }
 }
 

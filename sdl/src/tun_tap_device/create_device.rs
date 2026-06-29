@@ -10,7 +10,7 @@ const DEFAULT_TUN_NAME: &str = "sdl-tun";
 
 pub fn create_device<Call: SdlCallback>(
     config: DeviceConfig,
-    call: &Call,
+    _call: &Call,
 ) -> Result<Arc<SyncDevice>, ErrorInfo> {
     let device = match create_device0(&config) {
         Ok(device) => device,
@@ -37,18 +37,6 @@ pub fn create_device<Call: SdlCallback>(
         log::warn!("添加组播路由失败 ={:?}", e);
     }
 
-    for (dest, mask) in config.external_route {
-        if let Err(e) = add_route(index, dest, mask) {
-            log::warn!("添加路由失败,请检查-i参数是否和现有路由冲突 ={:?}", e);
-            call.error(ErrorInfo::new_msg(
-                ErrorType::Warn,
-                format!(
-                    "警告！ 添加路由失败,请检查-i参数是否和现有路由冲突 ={:?}",
-                    e
-                ),
-            ))
-        }
-    }
     Ok(device)
 }
 

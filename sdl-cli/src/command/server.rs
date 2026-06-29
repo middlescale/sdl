@@ -1,4 +1,6 @@
-use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{
+    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+};
 use crate::command::ipc;
 use interprocess::local_socket::traits::ListenerExt;
 use sdl::data_plane::use_channel_type::UseChannelType;
@@ -19,6 +21,27 @@ pub struct SwitchCommand {
     pub user_id: String,
 }
 
+#[derive(Deserialize)]
+pub struct ExitNodeEnableCommand {
+    pub egress_interface: String,
+    pub tun_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExitNodeDisableCommand {
+    #[serde(default)]
+    pub tun_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ExitNodeUseCommand {
+    pub target: String,
+    #[serde(default)]
+    pub tun_name: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+}
+
 pub struct CommandServer {}
 
 impl CommandServer {
@@ -33,6 +56,11 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn info(&self) -> io::Result<Info>;
     fn gateway(&self) -> io::Result<Vec<GatewayItem>>;
     fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String>;
+    fn exit_node_status(&self) -> io::Result<ExitNodeStatus>;
+    fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String>;
+    fn exit_node_disable(&self, disable: ExitNodeDisableCommand) -> io::Result<String>;
+    fn exit_node_use(&self, use_command: ExitNodeUseCommand) -> io::Result<String>;
+    fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String>;
     fn traffic(&self) -> io::Result<TrafficSummary>;
     fn resume_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
@@ -85,74 +113,114 @@ where
     H: CommandHandler,
 {
     let cmd = cmd.trim();
-    let out_str =
-        match cmd {
-            "route" => serde_yaml::to_string(&handler.route()?)
-                .unwrap_or_else(|e| format!("error {:?}", e)),
-            "list" => {
-                serde_yaml::to_string(&handler.list()?).unwrap_or_else(|e| format!("error {:?}", e))
-            }
-            "status" | "info" => {
-                serde_yaml::to_string(&handler.info()?).unwrap_or_else(|e| format!("error {:?}", e))
-            }
-            "gateway" => serde_yaml::to_string(&handler.gateway()?)
-                .unwrap_or_else(|e| format!("error {:?}", e)),
-            "traffic" => serde_yaml::to_string(&handler.traffic()?)
-                .unwrap_or_else(|e| format!("error {:?}", e)),
-            "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
-                .unwrap_or_else(|e| format!("error {:?}", e)),
-            "suspend" => serde_yaml::to_string(&handler.suspend_runtime()?)
-                .unwrap_or_else(|e| format!("error {:?}", e)),
-            _ => {
-                if let Some(value) = cmd.strip_prefix("channel_change:") {
-                    match UseChannelType::from_str(value.trim()) {
-                        Ok(use_channel_type) => {
-                            serde_yaml::to_string(&handler.channel_change(use_channel_type)?)
-                                .unwrap_or_else(|e| format!("error {:?}", e))
-                        }
-                        Err(err) => serde_yaml::to_string(&format!("error {}", err))
-                            .unwrap_or_else(|e| format!("error {:?}", e)),
+    let out_str = match cmd {
+        "route" => {
+            serde_yaml::to_string(&handler.route()?).unwrap_or_else(|e| format!("error {:?}", e))
+        }
+        "list" => {
+            serde_yaml::to_string(&handler.list()?).unwrap_or_else(|e| format!("error {:?}", e))
+        }
+        "status" | "info" => {
+            serde_yaml::to_string(&handler.info()?).unwrap_or_else(|e| format!("error {:?}", e))
+        }
+        "gateway" => {
+            serde_yaml::to_string(&handler.gateway()?).unwrap_or_else(|e| format!("error {:?}", e))
+        }
+        "exit_node:status" => serde_yaml::to_string(&handler.exit_node_status()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        "exit_node:disable" => serde_yaml::to_string(
+            &handler.exit_node_disable(ExitNodeDisableCommand { tun_name: None })?,
+        )
+        .unwrap_or_else(|e| format!("error {:?}", e)),
+        "exit_node:clear" => serde_yaml::to_string(
+            &handler.exit_node_clear(ExitNodeDisableCommand { tun_name: None })?,
+        )
+        .unwrap_or_else(|e| format!("error {:?}", e)),
+        "traffic" => {
+            serde_yaml::to_string(&handler.traffic()?).unwrap_or_else(|e| format!("error {:?}", e))
+        }
+        "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        "suspend" => serde_yaml::to_string(&handler.suspend_runtime()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        _ => {
+            if let Some(value) = cmd.strip_prefix("channel_change:") {
+                match UseChannelType::from_str(value.trim()) {
+                    Ok(use_channel_type) => {
+                        serde_yaml::to_string(&handler.channel_change(use_channel_type)?)
+                            .unwrap_or_else(|e| format!("error {:?}", e))
                     }
-                } else if let Some(value) = cmd.strip_prefix("rename:") {
-                    serde_yaml::to_string(&handler.rename(value)?)
-                        .unwrap_or_else(|e| format!("error {:?}", e))
-                } else if let Some(value) = cmd.strip_prefix("gateway_set:") {
-                    let gateway = value.trim();
-                    let gateway = if gateway.is_empty() {
-                        None
-                    } else {
-                        Some(gateway)
-                    };
-                    serde_yaml::to_string(&handler.gateway_set(gateway)?)
-                        .unwrap_or_else(|e| format!("error {:?}", e))
-                } else if let Some(value) = cmd.strip_prefix("auth:") {
-                    match serde_json::from_str::<AuthCommand>(value.trim()) {
-                        Ok(auth) => {
-                            let _ = crate::command::service_state::clear_service_state();
-                            serde_yaml::to_string(&handler.auth(auth)?)
-                                .unwrap_or_else(|e| format!("error {:?}", e))
-                        }
-                        Err(err) => serde_yaml::to_string(&format!("error {}", err))
-                            .unwrap_or_else(|e| format!("error {:?}", e)),
-                    }
-                } else if let Some(value) = cmd.strip_prefix("switch:") {
-                    match serde_json::from_str::<SwitchCommand>(value.trim()) {
-                        Ok(switch) => {
-                            let _ = crate::command::service_state::clear_service_state();
-                            serde_yaml::to_string(&handler.switch_user(switch)?)
-                                .unwrap_or_else(|e| format!("error {:?}", e))
-                        }
-                        Err(err) => serde_yaml::to_string(&format!("error {}", err))
-                            .unwrap_or_else(|e| format!("error {:?}", e)),
-                    }
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("rename:") {
+                serde_yaml::to_string(&handler.rename(value)?)
+                    .unwrap_or_else(|e| format!("error {:?}", e))
+            } else if let Some(value) = cmd.strip_prefix("gateway_set:") {
+                let gateway = value.trim();
+                let gateway = if gateway.is_empty() {
+                    None
                 } else {
-                    format!(
+                    Some(gateway)
+                };
+                serde_yaml::to_string(&handler.gateway_set(gateway)?)
+                    .unwrap_or_else(|e| format!("error {:?}", e))
+            } else if let Some(value) = cmd.strip_prefix("exit_node:enable:") {
+                match serde_json::from_str::<ExitNodeEnableCommand>(value.trim()) {
+                    Ok(enable) => serde_yaml::to_string(&handler.exit_node_enable(enable)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("exit_node:disable:") {
+                match serde_json::from_str::<ExitNodeDisableCommand>(value.trim()) {
+                    Ok(disable) => serde_yaml::to_string(&handler.exit_node_disable(disable)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("exit_node:clear:") {
+                match serde_json::from_str::<ExitNodeDisableCommand>(value.trim()) {
+                    Ok(clear) => serde_yaml::to_string(&handler.exit_node_clear(clear)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("exit_node:use:") {
+                match serde_json::from_str::<ExitNodeUseCommand>(value.trim()) {
+                    Ok(use_command) => serde_yaml::to_string(&handler.exit_node_use(use_command)?)
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("auth:") {
+                match serde_json::from_str::<AuthCommand>(value.trim()) {
+                    Ok(auth) => {
+                        let _ = crate::command::service_state::clear_service_state();
+                        serde_yaml::to_string(&handler.auth(auth)?)
+                            .unwrap_or_else(|e| format!("error {:?}", e))
+                    }
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else if let Some(value) = cmd.strip_prefix("switch:") {
+                match serde_json::from_str::<SwitchCommand>(value.trim()) {
+                    Ok(switch) => {
+                        let _ = crate::command::service_state::clear_service_state();
+                        serde_yaml::to_string(&handler.switch_user(switch)?)
+                            .unwrap_or_else(|e| format!("error {:?}", e))
+                    }
+                    Err(err) => serde_yaml::to_string(&format!("error {}", err))
+                        .unwrap_or_else(|e| format!("error {:?}", e)),
+                }
+            } else {
+                format!(
                     "command '{}' not found.  Try to enter: 'route'/'list'/'resume'/'suspend' \n",
                     cmd
                 )
-                }
             }
-        };
+        }
+    };
     Ok(out_str)
 }
 
@@ -177,6 +245,21 @@ mod tests {
         }
         fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String> {
             Ok(gateway.unwrap_or("auto").to_string())
+        }
+        fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
+            Ok(ExitNodeStatus::default())
+        }
+        fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String> {
+            Ok(format!("exit-node:{}", enable.egress_interface))
+        }
+        fn exit_node_disable(&self, _disable: ExitNodeDisableCommand) -> io::Result<String> {
+            Ok("exit-node disabled".to_string())
+        }
+        fn exit_node_use(&self, use_command: ExitNodeUseCommand) -> io::Result<String> {
+            Ok(format!("exit-node use {}", use_command.target))
+        }
+        fn exit_node_clear(&self, _clear: ExitNodeDisableCommand) -> io::Result<String> {
+            Ok("exit-node selection cleared".to_string())
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {
             Ok(TrafficSummary::default())
@@ -255,6 +338,20 @@ mod tests {
     }
 
     #[test]
+    fn exit_node_use_command_parses_json_payload() {
+        let handler = StubHandler;
+        let payload = serde_json::json!({
+            "target": "node-b",
+        });
+        let cmd = format!("exit_node:use:{}", serde_json::to_string(&payload).unwrap());
+
+        let out = command(&cmd, &handler).unwrap();
+        let parsed: String = serde_yaml::from_str(&out).unwrap();
+
+        assert_eq!(parsed, "exit-node use node-b");
+    }
+
+    #[test]
     fn status_command_reuses_info_handler() {
         struct StatusHandler;
 
@@ -290,8 +387,6 @@ mod tests {
                     local_addr: String::new(),
                     ipv6_addr: String::new(),
                     port_mapping_list: Vec::new(),
-                    in_ips: Vec::new(),
-                    out_ips: Vec::new(),
                     udp_listen_addr: Vec::new(),
                 })
             }
@@ -299,6 +394,21 @@ mod tests {
                 Err(io::Error::other("unused"))
             }
             fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_enable(&self, _enable: ExitNodeEnableCommand) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_disable(&self, _disable: ExitNodeDisableCommand) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_use(&self, _use_command: ExitNodeUseCommand) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_clear(&self, _clear: ExitNodeDisableCommand) -> io::Result<String> {
                 Err(io::Error::other("unused"))
             }
             fn traffic(&self) -> io::Result<TrafficSummary> {
@@ -346,6 +456,21 @@ mod tests {
             Err(io::Error::other("unused"))
         }
         fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_enable(&self, _enable: ExitNodeEnableCommand) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_disable(&self, _disable: ExitNodeDisableCommand) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_use(&self, _use_command: ExitNodeUseCommand) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_clear(&self, _clear: ExitNodeDisableCommand) -> io::Result<String> {
             Err(io::Error::other("unused"))
         }
         fn traffic(&self) -> io::Result<TrafficSummary> {

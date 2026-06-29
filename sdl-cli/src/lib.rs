@@ -13,7 +13,6 @@ mod service_lock;
 #[cfg(target_os = "windows")]
 mod windows_service;
 
-mod args_parse;
 mod generated_serial_number {
     include!(concat!(env!("OUT_DIR"), "/generated_serial_number.rs"));
 }

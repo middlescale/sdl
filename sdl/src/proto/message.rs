@@ -6158,6 +6158,12 @@ pub struct DeviceInfo {
     pub online_kx_pub: ::std::vec::Vec<u8>,
     // @@protoc_insertion_point(field:DeviceInfo.preferred_channel_mode)
     pub preferred_channel_mode: ::protobuf::EnumOrUnknown<ChannelMode>,
+    // @@protoc_insertion_point(field:DeviceInfo.exit_node_advertised)
+    pub exit_node_advertised: bool,
+    // @@protoc_insertion_point(field:DeviceInfo.exit_node_approved)
+    pub exit_node_approved: bool,
+    // @@protoc_insertion_point(field:DeviceInfo.exit_node_usable)
+    pub exit_node_usable: bool,
     // special fields
     // @@protoc_insertion_point(special_field:DeviceInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -6175,7 +6181,7 @@ impl DeviceInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(7);
+        let mut fields = ::std::vec::Vec::with_capacity(10);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "name",
@@ -6211,6 +6217,21 @@ impl DeviceInfo {
             "preferred_channel_mode",
             |m: &DeviceInfo| { &m.preferred_channel_mode },
             |m: &mut DeviceInfo| { &mut m.preferred_channel_mode },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_node_advertised",
+            |m: &DeviceInfo| { &m.exit_node_advertised },
+            |m: &mut DeviceInfo| { &mut m.exit_node_advertised },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_node_approved",
+            |m: &DeviceInfo| { &m.exit_node_approved },
+            |m: &mut DeviceInfo| { &mut m.exit_node_approved },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_node_usable",
+            |m: &DeviceInfo| { &m.exit_node_usable },
+            |m: &mut DeviceInfo| { &mut m.exit_node_usable },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DeviceInfo>(
             "DeviceInfo",
@@ -6251,6 +6272,15 @@ impl ::protobuf::Message for DeviceInfo {
                 80 => {
                     self.preferred_channel_mode = is.read_enum_or_unknown()?;
                 },
+                88 => {
+                    self.exit_node_advertised = is.read_bool()?;
+                },
+                96 => {
+                    self.exit_node_approved = is.read_bool()?;
+                },
+                104 => {
+                    self.exit_node_usable = is.read_bool()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -6284,6 +6314,15 @@ impl ::protobuf::Message for DeviceInfo {
         if self.preferred_channel_mode != ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO) {
             my_size += ::protobuf::rt::int32_size(10, self.preferred_channel_mode.value());
         }
+        if self.exit_node_advertised != false {
+            my_size += 1 + 1;
+        }
+        if self.exit_node_approved != false {
+            my_size += 1 + 1;
+        }
+        if self.exit_node_usable != false {
+            my_size += 1 + 1;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -6311,6 +6350,15 @@ impl ::protobuf::Message for DeviceInfo {
         if self.preferred_channel_mode != ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO) {
             os.write_enum(10, ::protobuf::EnumOrUnknown::value(&self.preferred_channel_mode))?;
         }
+        if self.exit_node_advertised != false {
+            os.write_bool(11, self.exit_node_advertised)?;
+        }
+        if self.exit_node_approved != false {
+            os.write_bool(12, self.exit_node_approved)?;
+        }
+        if self.exit_node_usable != false {
+            os.write_bool(13, self.exit_node_usable)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -6335,6 +6383,9 @@ impl ::protobuf::Message for DeviceInfo {
         self.device_pub_key.clear();
         self.online_kx_pub.clear();
         self.preferred_channel_mode = ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO);
+        self.exit_node_advertised = false;
+        self.exit_node_approved = false;
+        self.exit_node_usable = false;
         self.special_fields.clear();
     }
 
@@ -6347,6 +6398,9 @@ impl ::protobuf::Message for DeviceInfo {
             device_pub_key: ::std::vec::Vec::new(),
             online_kx_pub: ::std::vec::Vec::new(),
             preferred_channel_mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            exit_node_advertised: false,
+            exit_node_approved: false,
+            exit_node_usable: false,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8046,6 +8100,10 @@ pub struct ClientStatusInfo {
     pub local_udp_endpoints: ::std::vec::Vec<PunchEndpoint>,
     // @@protoc_insertion_point(field:ClientStatusInfo.preferred_channel_mode)
     pub preferred_channel_mode: ::protobuf::EnumOrUnknown<ChannelMode>,
+    // @@protoc_insertion_point(field:ClientStatusInfo.exit_node_advertised)
+    pub exit_node_advertised: bool,
+    // @@protoc_insertion_point(field:ClientStatusInfo.exit_node_local_ready)
+    pub exit_node_local_ready: bool,
     // special fields
     // @@protoc_insertion_point(special_field:ClientStatusInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -8063,7 +8121,7 @@ impl ClientStatusInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(9);
+        let mut fields = ::std::vec::Vec::with_capacity(11);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "source",
@@ -8110,6 +8168,16 @@ impl ClientStatusInfo {
             |m: &ClientStatusInfo| { &m.preferred_channel_mode },
             |m: &mut ClientStatusInfo| { &mut m.preferred_channel_mode },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_node_advertised",
+            |m: &ClientStatusInfo| { &m.exit_node_advertised },
+            |m: &mut ClientStatusInfo| { &mut m.exit_node_advertised },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "exit_node_local_ready",
+            |m: &ClientStatusInfo| { &m.exit_node_local_ready },
+            |m: &mut ClientStatusInfo| { &mut m.exit_node_local_ready },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ClientStatusInfo>(
             "ClientStatusInfo",
             fields,
@@ -8155,6 +8223,12 @@ impl ::protobuf::Message for ClientStatusInfo {
                 104 => {
                     self.preferred_channel_mode = is.read_enum_or_unknown()?;
                 },
+                112 => {
+                    self.exit_node_advertised = is.read_bool()?;
+                },
+                120 => {
+                    self.exit_node_local_ready = is.read_bool()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -8197,6 +8271,12 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.preferred_channel_mode != ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO) {
             my_size += ::protobuf::rt::int32_size(13, self.preferred_channel_mode.value());
         }
+        if self.exit_node_advertised != false {
+            my_size += 1 + 1;
+        }
+        if self.exit_node_local_ready != false {
+            my_size += 1 + 1;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -8230,6 +8310,12 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.preferred_channel_mode != ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO) {
             os.write_enum(13, ::protobuf::EnumOrUnknown::value(&self.preferred_channel_mode))?;
         }
+        if self.exit_node_advertised != false {
+            os.write_bool(14, self.exit_node_advertised)?;
+        }
+        if self.exit_node_local_ready != false {
+            os.write_bool(15, self.exit_node_local_ready)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -8256,6 +8342,8 @@ impl ::protobuf::Message for ClientStatusInfo {
         self.punch_trigger_reason = ::protobuf::EnumOrUnknown::new(PunchTriggerReason::PunchTriggerUnknown);
         self.local_udp_endpoints.clear();
         self.preferred_channel_mode = ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO);
+        self.exit_node_advertised = false;
+        self.exit_node_local_ready = false;
         self.special_fields.clear();
     }
 
@@ -8270,6 +8358,8 @@ impl ::protobuf::Message for ClientStatusInfo {
             punch_trigger_reason: ::protobuf::EnumOrUnknown::from_i32(0),
             local_udp_endpoints: ::std::vec::Vec::new(),
             preferred_channel_mode: ::protobuf::EnumOrUnknown::from_i32(0),
+            exit_node_advertised: false,
+            exit_node_local_ready: false,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -8877,6 +8967,8 @@ pub enum PunchTriggerReason {
     PunchTriggerReconnectRecovery = 3,
     // @@protoc_insertion_point(enum_value:PunchTriggerReason.PunchTriggerManualRequest)
     PunchTriggerManualRequest = 4,
+    // @@protoc_insertion_point(enum_value:PunchTriggerReason.StatusReportOnly)
+    StatusReportOnly = 5,
 }
 
 impl ::protobuf::Enum for PunchTriggerReason {
@@ -8893,6 +8985,7 @@ impl ::protobuf::Enum for PunchTriggerReason {
             2 => ::std::option::Option::Some(PunchTriggerReason::PunchTriggerRouteTimeout),
             3 => ::std::option::Option::Some(PunchTriggerReason::PunchTriggerReconnectRecovery),
             4 => ::std::option::Option::Some(PunchTriggerReason::PunchTriggerManualRequest),
+            5 => ::std::option::Option::Some(PunchTriggerReason::StatusReportOnly),
             _ => ::std::option::Option::None
         }
     }
@@ -8903,6 +8996,7 @@ impl ::protobuf::Enum for PunchTriggerReason {
         PunchTriggerReason::PunchTriggerRouteTimeout,
         PunchTriggerReason::PunchTriggerReconnectRecovery,
         PunchTriggerReason::PunchTriggerManualRequest,
+        PunchTriggerReason::StatusReportOnly,
     ];
 }
 
@@ -9294,32 +9388,35 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     \x04R\x07watchId\x12\x18\n\x07section\x18\x02\x20\x01(\tR\x07section\x12\
     \x1d\n\nevent_type\x18\x03\x20\x01(\tR\teventType\x12\"\n\revent_unix_ms\
     \x18\x04\x20\x01(\x03R\x0beventUnixMs\x12!\n\x0cpayload_json\x18\x05\x20\
-    \x01(\tR\x0bpayloadJson\"\x8f\x02\n\nDeviceInfo\x12\x12\n\x04name\x18\
+    \x01(\tR\x0bpayloadJson\"\x99\x03\n\nDeviceInfo\x12\x12\n\x04name\x18\
     \x01\x20\x01(\tR\x04name\x12\x1d\n\nvirtual_ip\x18\x02\x20\x01(\x07R\tvi\
     rtualIp\x12#\n\rdevice_status\x18\x03\x20\x01(\rR\x0cdeviceStatus\x12\
     \x1b\n\tdevice_id\x18\x07\x20\x01(\tR\x08deviceId\x12$\n\x0edevice_pub_k\
     ey\x18\x08\x20\x01(\x0cR\x0cdevicePubKey\x12\"\n\ronline_kx_pub\x18\t\
     \x20\x01(\x0cR\x0bonlineKxPub\x12B\n\x16preferred_channel_mode\x18\n\x20\
-    \x01(\x0e2\x0c.ChannelModeR\x14preferredChannelMode\"\xd0\x01\n\nDeviceL\
-    ist\x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_inf\
-    o_list\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12G\n\
-    \x15gateway_access_grants\x18\x03\x20\x03(\x0b2\x13.GatewayAccessGrantR\
-    \x13gatewayAccessGrants\x12,\n\x12gateway_policy_rev\x18\x04\x20\x01(\
-    \x04R\x10gatewayPolicyRev\"\xe6\x02\n\tPunchInfo\x12*\n\x11public_port_r\
-    ange\x18\x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\
-    \x20\x01(\x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\
-    \x01(\x08R\x05reply\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.Punc\
-    hNatModelR\npunchModel\x12@\n\x14public_udp_endpoints\x18\x10\x20\x03(\
-    \x0b2\x0e.PunchEndpointR\x12publicUdpEndpoints\x12>\n\x13local_udp_endpo\
-    ints\x18\x11\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\
-    \x08\x02\x10\x03J\x04\x08\x03\x10\x04J\x04\x08\x07\x10\x08J\x04\x08\x08\
-    \x10\tJ\x04\x08\t\x10\nJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\
-    \x0c\x10\rJ\x04\x08\r\x10\x0eJ\x04\x08\x0e\x10\x0f\"Y\n\rPunchEndpoint\
-    \x12\x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\
-    \x20\x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\
-    \x10\n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xe2\x04\n\x0cPunchRequest\
-    \x12\x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06sou\
-    rce\x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\
+    \x01(\x0e2\x0c.ChannelModeR\x14preferredChannelMode\x120\n\x14exit_node_\
+    advertised\x18\x0b\x20\x01(\x08R\x12exitNodeAdvertised\x12,\n\x12exit_no\
+    de_approved\x18\x0c\x20\x01(\x08R\x10exitNodeApproved\x12(\n\x10exit_nod\
+    e_usable\x18\r\x20\x01(\x08R\x0eexitNodeUsable\"\xd0\x01\n\nDeviceList\
+    \x12\x14\n\x05epoch\x18\x01\x20\x01(\rR\x05epoch\x125\n\x10device_info_l\
+    ist\x18\x02\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12G\n\x15ga\
+    teway_access_grants\x18\x03\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gat\
+    ewayAccessGrants\x12,\n\x12gateway_policy_rev\x18\x04\x20\x01(\x04R\x10g\
+    atewayPolicyRev\"\xe6\x02\n\tPunchInfo\x12*\n\x11public_port_range\x18\
+    \x04\x20\x01(\rR\x0fpublicPortRange\x12(\n\x08nat_type\x18\x05\x20\x01(\
+    \x0e2\r.PunchNatTypeR\x07natType\x12\x14\n\x05reply\x18\x06\x20\x01(\x08\
+    R\x05reply\x12/\n\x0bpunch_model\x18\x0f\x20\x01(\x0e2\x0e.PunchNatModel\
+    R\npunchModel\x12@\n\x14public_udp_endpoints\x18\x10\x20\x03(\x0b2\x0e.P\
+    unchEndpointR\x12publicUdpEndpoints\x12>\n\x13local_udp_endpoints\x18\
+    \x11\x20\x03(\x0b2\x0e.PunchEndpointR\x11localUdpEndpointsJ\x04\x08\x02\
+    \x10\x03J\x04\x08\x03\x10\x04J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\
+    \x04\x08\t\x10\nJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\x0c\
+    \x10\rJ\x04\x08\r\x10\x0eJ\x04\x08\x0e\x10\x0f\"Y\n\rPunchEndpoint\x12\
+    \x0e\n\x02ip\x18\x01\x20\x01(\x07R\x02ip\x12\x12\n\x04port\x18\x02\x20\
+    \x01(\rR\x04port\x12\x12\n\x04ipv6\x18\x03\x20\x01(\x0cR\x04ipv6\x12\x10\
+    \n\x03tcp\x18\x04\x20\x01(\x08R\x03tcp\"\xe2\x04\n\x0cPunchRequest\x12\
+    \x1d\n\nsession_id\x18\x01\x20\x01(\x04R\tsessionId\x12\x16\n\x06source\
+    \x18\x02\x20\x01(\x07R\x06source\x12\x16\n\x06target\x18\x03\x20\x01(\
     \x07R\x06target\x125\n\x0fsource_nat_type\x18\x04\x20\x01(\x0e2\r.PunchN\
     atTypeR\rsourceNatType\x125\n\x0ftarget_nat_type\x18\x05\x20\x01(\x0e2\r\
     .PunchNatTypeR\rtargetNatType\x129\n\x10source_endpoints\x18\x06\x20\x03\
@@ -9352,8 +9449,8 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     empt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\
     \x12\x16\n\x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_en\
     dpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\x12(\
-    \n\x05phase\x18\x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\xde\
-    \x03\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06\
+    \n\x05phase\x18\x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\xc3\
+    \x04\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06\
     source\x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\
     \x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdow\
     n_stream\x18\x04\x20\x01(\x04R\ndownStream\x12(\n\x08nat_type\x18\x05\
@@ -9362,47 +9459,50 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     punch_trigger_reason\x18\x0b\x20\x01(\x0e2\x13.PunchTriggerReasonR\x12pu\
     nchTriggerReason\x12>\n\x13local_udp_endpoints\x18\x0c\x20\x03(\x0b2\x0e\
     .PunchEndpointR\x11localUdpEndpoints\x12B\n\x16preferred_channel_mode\
-    \x18\r\x20\x01(\x0e2\x0c.ChannelModeR\x14preferredChannelModeJ\x04\x08\
-    \x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\x10\n\"$\
-    \n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nextIp*\xb5\
-    \x02\n\x17RegistrationErrorReason\x12)\n%REGISTRATION_ERROR_REASON_UNSPE\
-    CIFIED\x10\0\x122\n.REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMAIN\x10\
-    \x01\x12(\n$REGISTRATION_ERROR_REASON_NOT_AUTHED\x10\x02\x12-\n)REGISTRA\
-    TION_ERROR_REASON_INVALID_REQUEST\x10\x03\x12:\n6REGISTRATION_ERROR_REAS\
-    ON_MISSING_HANDSHAKE_CAPABILITY\x10\x04\x12&\n\"REGISTRATION_ERROR_REASO\
-    N_INTERNAL\x10d*\x7f\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_CHANNE\
-    L_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\x14GA\
-    TEWAY_CHANNEL_QUIC\x10\x02\x12\x19\n\x15GATEWAY_CHANNEL_HTTPS\x10\x03*\
-    \x83\x02\n\x19RefreshGatewayGrantResult\x12,\n(REFRESH_GATEWAY_GRANT_RES\
-    ULT_UNSPECIFIED\x10\0\x12(\n$REFRESH_GATEWAY_GRANT_RESULT_UPDATED\x10\
-    \x01\x12*\n&REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE\x10\x02\x128\n4REFRES\
-    H_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE\x10\x03\x12(\n$REFRESH_GA\
-    TEWAY_GRANT_RESULT_REVOKED\x10\x04*\x83\x02\n\x15DeviceAuthErrorReason\
-    \x12(\n$DEVICE_AUTH_ERROR_REASON_UNSPECIFIED\x10\0\x12.\n*DEVICE_AUTH_ER\
-    ROR_REASON_CHALLENGE_EXPIRED\x10\x01\x120\n,DEVICE_AUTH_ERROR_REASON_DEV\
-    ICE_KEY_MISMATCH\x10\x02\x12.\n*DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATU\
-    RE\x10\x03\x12.\n*DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED\x10\x04*U\n\
-    \x0bChannelMode\x12\x15\n\x11CHANNEL_MODE_AUTO\x10\0\x12\x17\n\x13CHANNE\
-    L_MODE_DIRECT\x10\x01\x12\x16\n\x12CHANNEL_MODE_RELAY\x10\x02*'\n\x0cPun\
-    chNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunchN\
-    atModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04IP\
-    v6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\
-    \xab\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\
+    \x18\r\x20\x01(\x0e2\x0c.ChannelModeR\x14preferredChannelMode\x120\n\x14\
+    exit_node_advertised\x18\x0e\x20\x01(\x08R\x12exitNodeAdvertised\x121\n\
+    \x15exit_node_local_ready\x18\x0f\x20\x01(\x08R\x12exitNodeLocalReadyJ\
+    \x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\
+    \x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nex\
+    tIp*\xb5\x02\n\x17RegistrationErrorReason\x12)\n%REGISTRATION_ERROR_REAS\
+    ON_UNSPECIFIED\x10\0\x122\n.REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMA\
+    IN\x10\x01\x12(\n$REGISTRATION_ERROR_REASON_NOT_AUTHED\x10\x02\x12-\n)RE\
+    GISTRATION_ERROR_REASON_INVALID_REQUEST\x10\x03\x12:\n6REGISTRATION_ERRO\
+    R_REASON_MISSING_HANDSHAKE_CAPABILITY\x10\x04\x12&\n\"REGISTRATION_ERROR\
+    _REASON_INTERNAL\x10d*\x7f\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_\
+    CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\
+    \x14GATEWAY_CHANNEL_QUIC\x10\x02\x12\x19\n\x15GATEWAY_CHANNEL_HTTPS\x10\
+    \x03*\x83\x02\n\x19RefreshGatewayGrantResult\x12,\n(REFRESH_GATEWAY_GRAN\
+    T_RESULT_UNSPECIFIED\x10\0\x12(\n$REFRESH_GATEWAY_GRANT_RESULT_UPDATED\
+    \x10\x01\x12*\n&REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE\x10\x02\x128\n4RE\
+    FRESH_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE\x10\x03\x12(\n$REFRES\
+    H_GATEWAY_GRANT_RESULT_REVOKED\x10\x04*\x83\x02\n\x15DeviceAuthErrorReas\
+    on\x12(\n$DEVICE_AUTH_ERROR_REASON_UNSPECIFIED\x10\0\x12.\n*DEVICE_AUTH_\
+    ERROR_REASON_CHALLENGE_EXPIRED\x10\x01\x120\n,DEVICE_AUTH_ERROR_REASON_D\
+    EVICE_KEY_MISMATCH\x10\x02\x12.\n*DEVICE_AUTH_ERROR_REASON_INVALID_SIGNA\
+    TURE\x10\x03\x12.\n*DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED\x10\x04*U\
+    \n\x0bChannelMode\x12\x15\n\x11CHANNEL_MODE_AUTO\x10\0\x12\x17\n\x13CHAN\
+    NEL_MODE_DIRECT\x10\x01\x12\x16\n\x12CHANNEL_MODE_RELAY\x10\x02*'\n\x0cP\
+    unchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunc\
+    hNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04\
+    IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\
+    \xc1\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\
     \x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchTrigger\
     RouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\
-    \x1d\n\x19PunchTriggerManualRequest\x10\x04*\xb5\x01\n\x11PunchSessionPh\
-    ase\x12\x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhaseSchedule\
-    d\x10\x01\x12\x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11PunchPhase\
-    Waiting\x10\x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11Punc\
-    hPhaseTimeout\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\
-    \x1cPunchEndpointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\
-    \x10\0\x12\x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpo\
-    intSelectionPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\
-    \x12PunchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\
-    \x15\n\x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\
-    \x03\x12\x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchResultRe\
-    jected\x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15P\
-    unchResultSuperseded\x10\x07b\x06proto3\
+    \x1d\n\x19PunchTriggerManualRequest\x10\x04\x12\x14\n\x10StatusReportOnl\
+    y\x10\x05*\xb5\x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPhaseUnknown\
+    \x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11PunchPhaseS\
+    ending\x10\x02\x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\n\x11Punch\
+    PhaseSuccess\x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\x12\x14\n\
+    \x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelectionPolicy\
+    \x12!\n\x1dPunchEndpointSelectionDefault\x10\0\x12\x1d\n\x19PunchEndpoin\
+    tSelectionAll\x10\x01\x12&\n\"PunchEndpointSelectionPreferPublic\x10\x02\
+    *\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\
+    \x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\
+    \x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCan\
+    celed\x10\x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\n\x15Punc\
+    hResultNoResponse\x10\x06\x12\x19\n\x15PunchResultSuperseded\x10\x07b\
+    \x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

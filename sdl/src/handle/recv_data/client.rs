@@ -309,10 +309,6 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             || real_dest == current_device.broadcast_ip
                             || real_dest.is_unspecified())
                     {
-                        if !self.runtime.out_external_route.allow(&real_dest) {
-                            //拦截不符合的目标
-                            return Ok(());
-                        }
                         match ipv4.protocol() {
                             ipv4::protocol::Protocol::Tcp => {
                                 let payload = ipv4.payload();

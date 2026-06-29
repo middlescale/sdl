@@ -2,9 +2,9 @@ use std::io;
 use std::sync::Arc;
 
 use crate::compression::Compressor;
+use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
-use crate::external_route::ExternalRoute;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::tun_tap_device::vnt_device::DeviceWrite;
@@ -64,7 +64,7 @@ struct TunDeviceHelperInner {
     data_channel: DataChannel,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
-    ip_route: ExternalRoute,
+    exit_node_route: ExitNodeRoute,
     peer_state: Arc<Mutex<crate::handle::PeerState>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
@@ -76,7 +76,7 @@ impl TunDeviceHelper {
         data_channel: DataChannel,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         gateway_sessions: GatewaySessions,
-        ip_route: ExternalRoute,
+        exit_node_route: ExitNodeRoute,
         peer_state: Arc<Mutex<crate::handle::PeerState>>,
         peer_crypto: Arc<PeerCryptoManager>,
         compressor: Compressor,
@@ -87,7 +87,7 @@ impl TunDeviceHelper {
             data_channel,
             current_device,
             gateway_sessions,
-            ip_route,
+            exit_node_route,
             peer_state,
             peer_crypto,
             compressor,
@@ -122,7 +122,7 @@ impl TunDeviceHelper {
             device,
             inner.current_device,
             inner.gateway_sessions,
-            inner.ip_route,
+            inner.exit_node_route,
             inner.peer_state,
             inner.peer_crypto,
             inner.compressor,

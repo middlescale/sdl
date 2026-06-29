@@ -8,12 +8,15 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
+pub(crate) use exit_node_route::ExitNodeRoute;
 pub use runtime::{
-    AuthRequestConfig, PendingDnsQuery, RenameRequestOutcome, RuntimeConfig, SdlRuntime,
+    AuthRequestConfig, ExitNodeLocalState, PendingDnsQuery, RenameRequestOutcome, RuntimeConfig,
+    SdlRuntime,
 };
 use std::net::{Ipv4Addr, SocketAddr};
 
 mod bootstrap;
+mod exit_node_route;
 mod runtime;
 
 pub const PUB_STUN: [&str; 4] = [
@@ -50,8 +53,6 @@ pub struct Config {
     pub server_address: SocketAddr,
     pub server_address_str: String,
     pub stun_server: Vec<String>,
-    pub in_ips: Vec<(u32, u32, Ipv4Addr)>,
-    pub out_ips: Vec<(u32, u32)>,
     pub mtu: Option<u32>,
     pub protocol: ConnectProtocol,
     pub ip: Option<Ipv4Addr>,
@@ -96,8 +97,6 @@ impl Config {
             name,
             server_address_str,
             PUB_STUN.iter().map(|s| s.to_string()).collect(),
-            vec![],
-            vec![],
             None,
             ip,
             CipherModel::default_runtime()?,
@@ -126,8 +125,6 @@ impl Config {
         name: String,
         server_address_str: String,
         mut stun_server: Vec<String>,
-        mut in_ips: Vec<(u32, u32, Ipv4Addr)>,
-        out_ips: Vec<(u32, u32)>,
         mtu: Option<u32>,
         ip: Option<Ipv4Addr>,
         cipher_model: CipherModel,
@@ -212,10 +209,6 @@ impl Config {
         #[cfg(not(feature = "integrated_tun"))]
         let _ = device_name;
 
-        for (dest, mask, _) in &mut in_ips {
-            *dest &= *mask;
-        }
-        in_ips.sort_by(|(dest1, _, _), (dest2, _, _)| dest2.cmp(dest1));
         let (local_interface, local_ipv4) = if let Some(local_dev) = local_dev {
             let (default_interface, ip) = crate::transport::socket::get_interface(local_dev)?;
             log::info!("default_interface = {:?} local_ip= {ip}", default_interface);
@@ -230,8 +223,6 @@ impl Config {
             server_address,
             server_address_str,
             stun_server,
-            in_ips,
-            out_ips,
             mtu,
             protocol,
             ip,

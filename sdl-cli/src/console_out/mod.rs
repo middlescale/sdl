@@ -1,5 +1,4 @@
 use console::{style, Style};
-use std::net::Ipv4Addr;
 
 use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
 
@@ -117,26 +116,6 @@ pub fn console_info(status: Info) {
             } else {
                 println!("  UDP: {} -> {}", addr, dest)
             }
-        }
-    }
-    if !status.in_ips.is_empty() || !status.out_ips.is_empty() {
-        println!("------------------------------------------");
-    }
-    if !status.in_ips.is_empty() {
-        println!("IP forwarding {}", status.in_ips.len());
-        for (dest, mask, ip) in status.in_ips {
-            println!(
-                "  -- {} --> {}/{}",
-                ip,
-                Ipv4Addr::from(dest),
-                mask.count_ones()
-            )
-        }
-    }
-    if !status.out_ips.is_empty() {
-        println!("Allows network {}", status.out_ips.len());
-        for (dest, mask) in status.out_ips {
-            println!("  {}/{}", Ipv4Addr::from(dest), mask.count_ones())
         }
     }
 }

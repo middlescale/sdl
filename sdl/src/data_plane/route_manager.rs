@@ -29,6 +29,7 @@ pub struct RouteManager {
     peer_encrypt: bool,
     sender: Option<RouteSender>,
     direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
+    direct_route_update_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
     heartbeat_interval: Duration,
     stale_direct_timeout: Duration,
     pub(crate) peer_state: Option<Arc<Mutex<crate::handle::PeerState>>>,
@@ -69,6 +70,7 @@ impl RouteManager {
             peer_encrypt,
             sender: Some(RouteSender { udp_channel }),
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
+            direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval,
             stale_direct_timeout,
             peer_state: Some(peer_state),
@@ -86,6 +88,7 @@ impl RouteManager {
             peer_encrypt: true,
             sender: None,
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
+            direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval: Duration::from_secs(10),
             stale_direct_timeout: Duration::from_secs(30),
             peer_state: None,
@@ -94,6 +97,10 @@ impl RouteManager {
 
     pub fn set_direct_route_timeout_handler(&self, handler: Arc<dyn Fn(Ipv4Addr) + Send + Sync>) {
         *self.direct_route_timeout_handler.lock() = Some(handler);
+    }
+
+    pub fn set_direct_route_update_handler(&self, handler: Arc<dyn Fn(Ipv4Addr) + Send + Sync>) {
+        *self.direct_route_update_handler.lock() = Some(handler);
     }
 
     pub fn use_channel_type(&self) -> UseChannelType {
@@ -112,14 +119,26 @@ impl RouteManager {
         if self.should_suppress_p2p(&vip, &route) {
             return;
         }
-        self.route_table.add_route_if_absent(vip, route)
+        self.route_table.add_route_if_absent(vip, route);
+        if route.is_p2p() {
+            self.notify_direct_route_update(vip);
+        }
     }
 
     pub fn add_path(&self, vip: Ipv4Addr, route: Route) {
         if self.should_suppress_p2p(&vip, &route) {
             return;
         }
-        self.route_table.add_route(vip, route)
+        self.route_table.add_route(vip, route);
+        if route.is_p2p() {
+            self.notify_direct_route_update(vip);
+        }
+    }
+
+    fn notify_direct_route_update(&self, vip: Ipv4Addr) {
+        if let Some(handler) = self.direct_route_update_handler.lock().clone() {
+            handler(vip);
+        }
     }
 
     fn should_suppress_p2p(&self, vip: &Ipv4Addr, route: &Route) -> bool {
@@ -760,6 +779,9 @@ mod tests {
             vec![],
             vec![],
             crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY,
+            false,
+            false,
+            false,
         );
         let peer_state = Arc::new(Mutex::new(PeerState {
             epoch: 1,

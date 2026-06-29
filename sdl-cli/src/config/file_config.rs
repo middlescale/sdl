@@ -3,7 +3,6 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::args_parse;
 use crate::config::get_device_id;
 use sdl::cipher::CipherModel;
 use sdl::compression::Compressor;
@@ -39,8 +38,6 @@ pub struct FileConfig {
     pub name: String,
     pub server_address: String,
     pub stun_server: Vec<String>,
-    pub in_ips: Vec<String>,
-    pub out_ips: Vec<String>,
     pub mtu: Option<u32>,
     pub tcp: bool,
     pub ip: Option<String>,
@@ -59,6 +56,17 @@ pub struct FileConfig {
     pub compressor: Option<String>,
     pub disable_stats: bool,
     pub local_dev: Option<String>,
+    pub exit_node: ExitNodeFileConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExitNodeFileConfig {
+    pub enabled: bool,
+    pub egress_interface: Option<String>,
+    pub selected_device_id: Option<String>,
+    pub tun_name: Option<String>,
+    pub route_excludes: Vec<String>,
 }
 
 impl Default for FileConfig {
@@ -75,8 +83,6 @@ impl Default for FileConfig {
             name: sdl::core::default_device_name(),
             server_address: DEFAULT_SERVICE_SERVER.to_string(),
             stun_server,
-            in_ips: vec![],
-            out_ips: vec![],
             mtu: None,
             tcp: false,
             ip: None,
@@ -95,6 +101,7 @@ impl Default for FileConfig {
             compressor: None,
             disable_stats: false,
             local_dev: None,
+            exit_node: ExitNodeFileConfig::default(),
         }
     }
 }
@@ -112,18 +119,6 @@ impl FileConfig {
     }
 
     pub fn into_runtime_config(self) -> anyhow::Result<Config> {
-        let in_ips = match args_parse::ips_parse(&self.in_ips) {
-            Ok(in_ips) => in_ips,
-            Err(e) => {
-                return Err(anyhow!("in_ips {:?} error:{}", &self.in_ips, e));
-            }
-        };
-        let out_ips = match args_parse::out_ips_parse(&self.out_ips) {
-            Ok(out_ips) => out_ips,
-            Err(e) => {
-                return Err(anyhow!("out_ips {:?} error:{}", &self.out_ips, e));
-            }
-        };
         let virtual_ip = match self.ip.clone().map(|v| Ipv4Addr::from_str(&v)) {
             None => None,
             Some(r) => Some(r.map_err(|e| anyhow!("ip {:?} error:{}", &self.ip, e))?),
@@ -152,8 +147,6 @@ impl FileConfig {
             self.name,
             self.server_address,
             self.stun_server,
-            in_ips,
-            out_ips,
             self.mtu,
             virtual_ip,
             cipher_model,

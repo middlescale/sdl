@@ -241,6 +241,9 @@ mod tests {
                 vec![],
                 vec![],
                 crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+                false,
+                false,
+                false,
             ),
         );
         out

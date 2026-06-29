@@ -186,8 +186,6 @@ pub struct DeviceConfig {
     pub virtual_gateway: Ipv4Addr,
     //虚拟网段
     pub virtual_network: Ipv4Addr,
-    // 额外的路由
-    pub external_route: Vec<(Ipv4Addr, Ipv4Addr)>,
 }
 
 impl DeviceConfig {
@@ -200,7 +198,6 @@ impl DeviceConfig {
         virtual_netmask: Ipv4Addr,
         virtual_gateway: Ipv4Addr,
         virtual_network: Ipv4Addr,
-        external_route: Vec<(Ipv4Addr, Ipv4Addr)>,
     ) -> Self {
         Self {
             #[cfg(feature = "integrated_tun")]
@@ -211,7 +208,6 @@ impl DeviceConfig {
             virtual_netmask,
             virtual_gateway,
             virtual_network,
-            external_route,
         }
     }
 }
@@ -219,8 +215,8 @@ impl DeviceConfig {
 impl Display for DeviceConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format!(
-            "ip={} ,netmask={} ,gateway={}, external_route={:?}",
-            self.virtual_ip, self.virtual_netmask, self.virtual_gateway, self.external_route
+            "ip={} ,netmask={} ,gateway={}",
+            self.virtual_ip, self.virtual_netmask, self.virtual_gateway
         ))
     }
 }
@@ -279,6 +275,8 @@ pub trait SdlCallback: Clone + Send + Sync + 'static {
     fn peer_client_list(&self, _info: Vec<PeerClientInfo>) {}
     /// 本机设备名被控制面异步更新
     fn device_renamed(&self, _new_name: String) {}
+    /// 直连 P2P 路由新增或更新
+    fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {}
     /// 异常信息
     fn error(&self, _info: ErrorInfo) {}
     /// 服务停止
