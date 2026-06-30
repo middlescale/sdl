@@ -37,6 +37,8 @@ pub struct GatewayItem {
     pub status: String,
     pub grant_state: String,
     pub rt_ms: String,
+    pub up_rate: u64,
+    pub down_rate: u64,
     pub active: bool,
 }
 
@@ -73,6 +75,8 @@ pub struct DeviceItem {
     pub ipv6: String,
     pub nat_traversal_type: String,
     pub rt: String,
+    pub up_rate: u64,
+    pub down_rate: u64,
     pub status: String,
 }
 
@@ -83,6 +87,8 @@ pub struct PeerTrafficItem {
     pub status: String,
     pub up_total: u64,
     pub down_total: u64,
+    pub up_rate: u64,
+    pub down_rate: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -90,6 +96,8 @@ pub struct TransportTrafficItem {
     pub remote_ip: String,
     pub up_total: u64,
     pub down_total: u64,
+    pub up_rate: u64,
+    pub down_rate: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]

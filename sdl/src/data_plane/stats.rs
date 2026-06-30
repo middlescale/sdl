@@ -1,5 +1,6 @@
 use crate::util::limit::{
-    TrafficMeterMultiAddress, TrafficMeterMultiChannel, TrafficMeterMultiIpAddr,
+    ConcurrentTrafficMeter, TrafficMeterMultiAddress, TrafficMeterMultiChannel,
+    TrafficMeterMultiIpAddr,
 };
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -18,6 +19,8 @@ pub struct DataPlaneStats {
     logical_down_total: Option<Arc<AtomicU64>>,
     gateway_up_total: Option<Arc<AtomicU64>>,
     gateway_down_total: Option<Arc<AtomicU64>>,
+    gateway_up_meter: Option<ConcurrentTrafficMeter>,
+    gateway_down_meter: Option<ConcurrentTrafficMeter>,
 }
 
 impl DataPlaneStats {
@@ -33,6 +36,8 @@ impl DataPlaneStats {
             logical_down_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
             gateway_up_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
             gateway_down_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
+            gateway_up_meter: enable_traffic.then(|| ConcurrentTrafficMeter::new(100)),
+            gateway_down_meter: enable_traffic.then(|| ConcurrentTrafficMeter::new(100)),
         }
     }
 
@@ -88,11 +93,17 @@ impl DataPlaneStats {
         if let Some(gateway_up_total) = &self.gateway_up_total {
             gateway_up_total.fetch_add(len as u64, Ordering::Relaxed);
         }
+        if let Some(gateway_up_meter) = &self.gateway_up_meter {
+            gateway_up_meter.add_traffic(len);
+        }
     }
 
     pub fn record_gateway_down(&self, len: usize) {
         if let Some(gateway_down_total) = &self.gateway_down_total {
             gateway_down_total.fetch_add(len as u64, Ordering::Relaxed);
+        }
+        if let Some(gateway_down_meter) = &self.gateway_down_meter {
+            gateway_down_meter.add_traffic(len);
         }
     }
 
@@ -130,6 +141,18 @@ impl DataPlaneStats {
         self.down_peer_traffic_meter.as_ref().map(|v| v.get_all())
     }
 
+    pub fn up_peer_traffic_rates(&self, window_secs: usize) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.up_peer_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_rates(window_secs))
+    }
+
+    pub fn down_peer_traffic_rates(&self, window_secs: usize) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.down_peer_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_rates(window_secs))
+    }
+
     pub fn up_transport_traffic_all(&self) -> Option<(u64, HashMap<IpAddr, u64>)> {
         self.up_transport_traffic_meter
             .as_ref()
@@ -140,6 +163,18 @@ impl DataPlaneStats {
         self.down_transport_traffic_meter
             .as_ref()
             .map(|v| v.get_all())
+    }
+
+    pub fn up_transport_traffic_rates(&self, window_secs: usize) -> Option<HashMap<IpAddr, u64>> {
+        self.up_transport_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_rates(window_secs))
+    }
+
+    pub fn down_transport_traffic_rates(&self, window_secs: usize) -> Option<HashMap<IpAddr, u64>> {
+        self.down_transport_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_rates(window_secs))
     }
 
     pub fn logical_up_total(&self) -> u64 {
@@ -167,6 +202,20 @@ impl DataPlaneStats {
         self.gateway_down_total
             .as_ref()
             .map(|v| v.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    pub fn gateway_up_rate(&self, window_secs: usize) -> u64 {
+        self.gateway_up_meter
+            .as_ref()
+            .map(|v| v.rate_per_sec(window_secs))
+            .unwrap_or(0)
+    }
+
+    pub fn gateway_down_rate(&self, window_secs: usize) -> u64 {
+        self.gateway_down_meter
+            .as_ref()
+            .map(|v| v.rate_per_sec(window_secs))
             .unwrap_or(0)
     }
 }

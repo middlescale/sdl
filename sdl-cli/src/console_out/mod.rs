@@ -147,6 +147,10 @@ fn convert(num: u64) -> String {
     }
 }
 
+fn convert_rate(bytes_per_sec: u64) -> String {
+    format!("{}/s", convert(bytes_per_sec))
+}
+
 pub fn console_route_table(mut list: Vec<RouteItem>) {
     if list.is_empty() {
         println!("No route found");
@@ -199,6 +203,8 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
         ("Status".to_string(), Style::new()),
         ("Grant".to_string(), Style::new()),
         ("Rt(ms)".to_string(), Style::new()),
+        ("Up".to_string(), Style::new()),
+        ("Down".to_string(), Style::new()),
         ("Active".to_string(), Style::new()),
     ]);
     for item in list {
@@ -223,6 +229,8 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
                 },
                 style.clone(),
             ),
+            (convert_rate(item.up_rate), style.clone()),
+            (convert_rate(item.down_rate), style.clone()),
             (
                 if item.active {
                     "yes".to_string()
@@ -251,6 +259,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
         ("Status".to_string(), Style::new()),
         ("P2P/Relay".to_string(), Style::new()),
         ("Rt".to_string(), Style::new()),
+        ("Up".to_string(), Style::new()),
+        ("Down".to_string(), Style::new()),
     ]);
     for item in list {
         let name = item.name;
@@ -262,6 +272,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().green()),
                     (item.nat_traversal_type, Style::new().green()),
                     (item.rt, Style::new().green()),
+                    (convert_rate(item.up_rate), Style::new().green()),
+                    (convert_rate(item.down_rate), Style::new().green()),
                 ]);
             } else {
                 out_list.push(vec![
@@ -270,6 +282,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().yellow()),
                     (item.nat_traversal_type, Style::new().yellow()),
                     (item.rt, Style::new().yellow()),
+                    (convert_rate(item.up_rate), Style::new().yellow()),
+                    (convert_rate(item.down_rate), Style::new().yellow()),
                 ]);
             }
         } else {
@@ -277,6 +291,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                 (name, Style::new().color256(102)),
                 (item.virtual_ip, Style::new().color256(102)),
                 (item.status, Style::new().color256(102)),
+                ("".to_string(), Style::new().color256(102)),
+                ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
             ]);
@@ -300,6 +316,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
         ("Status".to_string(), Style::new()),
         ("P2P/Relay".to_string(), Style::new()),
         ("Rt".to_string(), Style::new()),
+        ("Up".to_string(), Style::new()),
+        ("Down".to_string(), Style::new()),
         ("NAT Type".to_string(), Style::new()),
         ("Public Ips".to_string(), Style::new()),
         ("Local Ip".to_string(), Style::new()),
@@ -314,6 +332,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().green()),
                     (item.nat_traversal_type, Style::new().green()),
                     (item.rt, Style::new().green()),
+                    (convert_rate(item.up_rate), Style::new().green()),
+                    (convert_rate(item.down_rate), Style::new().green()),
                     (item.nat_type, Style::new().green()),
                     (item.public_ips, Style::new().green()),
                     (item.local_ip, Style::new().green()),
@@ -326,6 +346,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().yellow()),
                     (item.nat_traversal_type, Style::new().yellow()),
                     (item.rt, Style::new().yellow()),
+                    (convert_rate(item.up_rate), Style::new().yellow()),
+                    (convert_rate(item.down_rate), Style::new().yellow()),
                     (item.nat_type, Style::new().yellow()),
                     (item.public_ips, Style::new().yellow()),
                     (item.local_ip, Style::new().yellow()),
@@ -337,6 +359,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                 (item.name, Style::new().color256(102)),
                 (item.virtual_ip, Style::new().color256(102)),
                 (item.status, Style::new().color256(102)),
+                ("".to_string(), Style::new().color256(102)),
+                ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
@@ -369,6 +393,8 @@ pub fn console_traffic(mut summary: TrafficSummary) {
         ("Status".to_string(), Style::new()),
         ("Up".to_string(), Style::new()),
         ("Down".to_string(), Style::new()),
+        ("Up/s".to_string(), Style::new()),
+        ("Down/s".to_string(), Style::new()),
     ]);
     for item in summary.peer_items {
         peer_list.push(vec![
@@ -377,6 +403,8 @@ pub fn console_traffic(mut summary: TrafficSummary) {
             (item.status, Style::new().green()),
             (convert(item.up_total), Style::new().green()),
             (convert(item.down_total), Style::new().green()),
+            (convert_rate(item.up_rate), Style::new().green()),
+            (convert_rate(item.down_rate), Style::new().green()),
         ]);
     }
     peer_list.push(vec![
@@ -385,6 +413,8 @@ pub fn console_traffic(mut summary: TrafficSummary) {
         ("".to_string(), Style::new().yellow()),
         (convert(summary.peer_up_total), Style::new().yellow()),
         (convert(summary.peer_down_total), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
     ]);
     table::println_table(peer_list);
 
@@ -398,18 +428,24 @@ pub fn console_traffic(mut summary: TrafficSummary) {
         ("Remote Ip".to_string(), Style::new()),
         ("Up".to_string(), Style::new()),
         ("Down".to_string(), Style::new()),
+        ("Up/s".to_string(), Style::new()),
+        ("Down/s".to_string(), Style::new()),
     ]);
     for item in summary.transport_items {
         transport_list.push(vec![
             (item.remote_ip, Style::new().green()),
             (convert(item.up_total), Style::new().green()),
             (convert(item.down_total), Style::new().green()),
+            (convert_rate(item.up_rate), Style::new().green()),
+            (convert_rate(item.down_rate), Style::new().green()),
         ]);
     }
     transport_list.push(vec![
         ("total".to_string(), Style::new().yellow()),
         (convert(summary.transport_up_total), Style::new().yellow()),
         (convert(summary.transport_down_total), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
+        ("".to_string(), Style::new().yellow()),
     ]);
     table::println_table(transport_list)
 }

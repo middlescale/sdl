@@ -45,6 +45,7 @@ fn gateway_status_label(summary: &GatewaySessionSummary) -> &'static str {
 
 const CONTROL_DESTINATION: &str = "CONTROL";
 const CONTROL_VIP_STR: &str = "0.0.0.1";
+const TRAFFIC_RATE_WINDOW_SECS: usize = 5;
 
 pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
     let route_table = vnt.route_states();
@@ -208,6 +209,12 @@ fn gateway_relay_interface(
 pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
     let info = sdl.current_device();
     let device_list = sdl.device_list();
+    let up_rates = sdl
+        .up_rate_by_peer(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
+    let down_rates = sdl
+        .down_rate_by_peer(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
     let mut list = Vec::new();
     for peer in device_list {
         let name = peer.name;
@@ -271,6 +278,11 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
             ipv6,
             nat_traversal_type,
             rt,
+            up_rate: up_rates.get(&peer.virtual_ip).copied().unwrap_or_default(),
+            down_rate: down_rates
+                .get(&peer.virtual_ip)
+                .copied()
+                .unwrap_or_default(),
             status,
         };
         list.push(item);
@@ -415,13 +427,43 @@ fn classify_auth_status(message: &str) -> &'static str {
     }
 }
 
-pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
-    vnt.gateway_session_summaries()
+pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
+    let transport_up_rates = sdl
+        .up_rate_by_transport(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
+    let transport_down_rates = sdl
+        .down_rate_by_transport(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
+    sdl.gateway_session_summaries()
         .into_iter()
         .enumerate()
         .map(|(index, summary)| {
             let grant_state = gateway_grant_state_label(&summary);
             let status = gateway_status_label(&summary).to_string();
+            let (up_rate, down_rate) = summary
+                .endpoint
+                .map(|endpoint| {
+                    (
+                        transport_up_rates
+                            .get(&endpoint.ip())
+                            .copied()
+                            .unwrap_or_default(),
+                        transport_down_rates
+                            .get(&endpoint.ip())
+                            .copied()
+                            .unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    if summary.active {
+                        (
+                            sdl.gateway_up_rate(TRAFFIC_RATE_WINDOW_SECS),
+                            sdl.gateway_down_rate(TRAFFIC_RATE_WINDOW_SECS),
+                        )
+                    } else {
+                        (0, 0)
+                    }
+                });
             GatewayItem {
                 gateway_id: if summary.gateway_id.is_empty() {
                     format!("gateway-{}", index + 1)
@@ -436,23 +478,25 @@ pub fn command_gateway(vnt: &Sdl) -> Vec<GatewayItem> {
                 status,
                 grant_state,
                 rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
+                up_rate,
+                down_rate,
                 active: summary.active,
             }
         })
         .collect()
 }
 
-pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
-    let disable_stats = !vnt.config().enable_traffic;
+pub fn command_traffic(sdl: &Sdl) -> TrafficSummary {
+    let disable_stats = !sdl.config().enable_traffic;
     if disable_stats {
         return TrafficSummary {
             disable_stats: true,
             ..Default::default()
         };
     }
-    let gateway_vip = vnt.current_device().virtual_gateway;
-    let gateway_summary = vnt.gateway_session_summary();
-    let devices = vnt.device_list();
+    let gateway_vip = sdl.current_device().virtual_gateway;
+    let gateway_summary = sdl.gateway_session_summary();
+    let devices = sdl.device_list();
     let device_names: HashMap<Ipv4Addr, String> = devices
         .iter()
         .map(|device| (device.virtual_ip, device.name.clone()))
@@ -461,10 +505,16 @@ pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
         .iter()
         .map(|device| (device.virtual_ip, format!("{:?}", device.status)))
         .collect();
-    let peer_up_total = vnt.logical_up_stream();
-    let peer_down_total = vnt.logical_down_stream();
-    let (_, up_map) = vnt.up_stream_by_peer().unwrap_or_default();
-    let (_, down_map) = vnt.down_stream_by_peer().unwrap_or_default();
+    let peer_up_total = sdl.logical_up_stream();
+    let peer_down_total = sdl.logical_down_stream();
+    let (_, up_map) = sdl.up_stream_by_peer().unwrap_or_default();
+    let (_, down_map) = sdl.down_stream_by_peer().unwrap_or_default();
+    let up_rates = sdl
+        .up_rate_by_peer(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
+    let down_rates = sdl
+        .down_rate_by_peer(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
     let mut vips = BTreeSet::new();
     vips.extend(
         device_names
@@ -485,6 +535,8 @@ pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
                 .unwrap_or_else(|| "Unknown".to_string()),
             up_total: up_map.get(&vip).copied().unwrap_or_default(),
             down_total: down_map.get(&vip).copied().unwrap_or_default(),
+            up_rate: up_rates.get(&vip).copied().unwrap_or_default(),
+            down_rate: down_rates.get(&vip).copied().unwrap_or_default(),
         })
         .collect();
     if !gateway_vip.is_unspecified() || gateway_summary.configured {
@@ -498,14 +550,22 @@ pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
             } else {
                 "disconnected".to_string()
             },
-            up_total: vnt.gateway_up_stream(),
-            down_total: vnt.gateway_down_stream(),
+            up_total: sdl.gateway_up_stream(),
+            down_total: sdl.gateway_down_stream(),
+            up_rate: sdl.gateway_up_rate(TRAFFIC_RATE_WINDOW_SECS),
+            down_rate: sdl.gateway_down_rate(TRAFFIC_RATE_WINDOW_SECS),
         });
     }
-    let transport_up_total = vnt.transport_up_stream();
-    let transport_down_total = vnt.transport_down_stream();
-    let (_, transport_up_map) = vnt.up_stream_by_transport().unwrap_or_default();
-    let (_, transport_down_map) = vnt.down_stream_by_transport().unwrap_or_default();
+    let transport_up_total = sdl.transport_up_stream();
+    let transport_down_total = sdl.transport_down_stream();
+    let (_, transport_up_map) = sdl.up_stream_by_transport().unwrap_or_default();
+    let (_, transport_down_map) = sdl.down_stream_by_transport().unwrap_or_default();
+    let transport_up_rates = sdl
+        .up_rate_by_transport(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
+    let transport_down_rates = sdl
+        .down_rate_by_transport(TRAFFIC_RATE_WINDOW_SECS)
+        .unwrap_or_default();
     let mut transport_ips = BTreeSet::<IpAddr>::new();
     transport_ips.extend(transport_up_map.keys().copied());
     transport_ips.extend(transport_down_map.keys().copied());
@@ -518,6 +578,14 @@ pub fn command_traffic(vnt: &Sdl) -> TrafficSummary {
                 .copied()
                 .unwrap_or_default(),
             down_total: transport_down_map
+                .get(&remote_ip)
+                .copied()
+                .unwrap_or_default(),
+            up_rate: transport_up_rates
+                .get(&remote_ip)
+                .copied()
+                .unwrap_or_default(),
+            down_rate: transport_down_rates
                 .get(&remote_ip)
                 .copied()
                 .unwrap_or_default(),

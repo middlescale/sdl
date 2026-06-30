@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct TrafficMeterMultiAddress {
@@ -48,6 +48,14 @@ impl TrafficMeterMultiIpAddr {
             guard.0,
             guard.1.iter().map(|(ip, t)| (*ip, t.total())).collect(),
         )
+    }
+    pub fn get_all_rates(&self, window_secs: usize) -> HashMap<IpAddr, u64> {
+        let mut guard = self.inner.lock();
+        guard
+            .1
+            .iter_mut()
+            .map(|(ip, t)| (*ip, t.rate_per_sec(window_secs)))
+            .collect()
     }
 }
 
@@ -101,6 +109,14 @@ impl TrafficMeterMultiAddress {
             .1
             .get(ip)
             .map(|t| (t.total(), t.get_history()))
+    }
+    pub fn get_all_rates(&self, window_secs: usize) -> HashMap<Ipv4Addr, u64> {
+        let mut guard = self.inner.lock();
+        guard
+            .1
+            .iter_mut()
+            .map(|(ip, t)| (*ip, t.rate_per_sec(window_secs)))
+            .collect()
     }
 }
 
@@ -176,6 +192,9 @@ impl ConcurrentTrafficMeter {
     pub fn get_history(&self) -> Vec<usize> {
         self.inner.lock().get_history()
     }
+    pub fn rate_per_sec(&self, window_secs: usize) -> u64 {
+        self.inner.lock().rate_per_sec(window_secs)
+    }
 }
 
 pub struct TrafficMeter {
@@ -200,24 +219,34 @@ impl TrafficMeter {
 
     // 增加流量计数
     pub fn add_traffic(&mut self, amount: usize) {
+        self.check_time();
         self.total += amount as u64;
         self.count += amount;
-        self.check_time();
     }
 
-    // 检查时间是否超过一秒，如果是，记录流量并重置计数器和时间
     fn check_time(&mut self) {
-        if self.start_time.elapsed() >= Duration::new(1, 0) {
-            // 将当前计数添加到历史记录
-            if self.history.len() >= self.history_capacity {
-                self.history.pop_front(); // 保持历史记录不超过capacity
-            }
-            self.history.push_back(self.count);
+        self.roll_to_now();
+    }
 
-            // 重置计数器和时间
-            self.count = 0;
-            self.start_time = Instant::now();
+    fn push_sample(&mut self, count: usize) {
+        if self.history.len() >= self.history_capacity {
+            self.history.pop_front();
         }
+        self.history.push_back(count);
+    }
+
+    fn roll_to_now(&mut self) {
+        let elapsed_secs = self.start_time.elapsed().as_secs() as usize;
+        if elapsed_secs == 0 {
+            return;
+        }
+        self.push_sample(self.count);
+        let zero_samples = elapsed_secs.saturating_sub(1).min(self.history_capacity);
+        for _ in 0..zero_samples {
+            self.push_sample(0);
+        }
+        self.count = 0;
+        self.start_time = Instant::now();
     }
     pub fn total(&self) -> u64 {
         self.total
@@ -226,11 +255,25 @@ impl TrafficMeter {
     pub fn get_history(&self) -> Vec<usize> {
         self.history.iter().cloned().collect()
     }
+    pub fn rate_per_sec(&mut self, window_secs: usize) -> u64 {
+        self.roll_to_now();
+        let window_secs = window_secs.max(1);
+        let mut samples: Vec<usize> = self
+            .history
+            .iter()
+            .rev()
+            .take(window_secs)
+            .copied()
+            .collect();
+        samples.push(self.count);
+        let bytes: usize = samples.iter().sum();
+        (bytes / window_secs) as u64
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TrafficMeterMultiChannel;
+    use super::{ConcurrentTrafficMeter, TrafficMeterMultiChannel};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -261,6 +304,39 @@ mod tests {
         assert_eq!(total, 10);
         let (channel_total, samples) = history.get(&2).expect("channel history");
         assert_eq!(*channel_total, 10);
-        assert_eq!(samples, &vec![10]);
+        assert_eq!(samples, &vec![7, 0]);
+    }
+
+    #[test]
+    fn concurrent_meter_rate_drops_to_zero_after_idle_window() {
+        let meter = ConcurrentTrafficMeter::new(8);
+        meter.add_traffic(500);
+        {
+            let mut guard = meter.inner.lock();
+            guard.start_time = Instant::now() - Duration::from_secs(10);
+        }
+
+        assert_eq!(meter.rate_per_sec(5), 0);
+    }
+
+    #[test]
+    fn concurrent_meter_rate_uses_recent_window() {
+        let meter = ConcurrentTrafficMeter::new(8);
+        meter.add_traffic(500);
+
+        assert_eq!(meter.rate_per_sec(5), 100);
+    }
+
+    #[test]
+    fn concurrent_meter_counts_first_packet_after_idle_in_current_window() {
+        let meter = ConcurrentTrafficMeter::new(8);
+        meter.add_traffic(100);
+        {
+            let mut guard = meter.inner.lock();
+            guard.start_time = Instant::now() - Duration::from_secs(10);
+        }
+        meter.add_traffic(500);
+
+        assert_eq!(meter.rate_per_sec(5), 100);
     }
 }
