@@ -444,11 +444,21 @@ impl Sdl {
         self.runtime
             .route_manager()
             .set_use_channel_type(use_channel_type);
-        self.runtime
-            .control_session
-            .request_punch_status_report_with_nat_ready(
-                crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
-            );
+        if use_channel_type.is_only_relay() {
+            if let Err(err) = self
+                .runtime
+                .control_session
+                .send_client_status_report_packet()
+            {
+                log::warn!("failed to report relay channel mode: {:?}", err);
+            }
+        } else {
+            self.runtime
+                .control_session
+                .request_punch_status_report_with_nat_ready(
+                    crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
+                );
+        }
     }
     pub fn request_device_auth(
         &self,

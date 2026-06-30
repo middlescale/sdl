@@ -615,7 +615,7 @@ impl ControlSession {
             .expect("statusReport");
     }
 
-    fn send_client_status_report_packet(&self) -> io::Result<()> {
+    pub fn send_client_status_report_packet(&self) -> io::Result<()> {
         self.send_status_report_packet(PunchTriggerReason::StatusReportOnly)
     }
 

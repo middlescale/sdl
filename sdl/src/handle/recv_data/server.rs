@@ -1192,37 +1192,53 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     attempt: punch_start.attempt,
                     deadline_unix_ms,
                 };
-                let coalesced = {
-                    let mut sessions = self.punch_active_sessions.lock();
-                    match sessions.get_mut(&peer_ip) {
-                        Some(state) => {
-                            state.coalesce(session);
-                            true
+                let local_forced_relay = self
+                    .runtime
+                    .route_manager()
+                    .use_channel_type()
+                    .is_only_relay();
+                let peer_forced_relay = self
+                    .runtime
+                    .peer_state
+                    .lock()
+                    .devices
+                    .get(&peer_ip)
+                    .map_or(false, |p| {
+                        p.preferred_channel_mode
+                            == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+                    });
+                let mut coalesced = false;
+                let (accepted, phase, reason) = if local_forced_relay {
+                    (
+                        false,
+                        PunchSessionPhase::PunchPhaseFailed,
+                        "local node in forced relay mode",
+                    )
+                } else if peer_forced_relay {
+                    (
+                        false,
+                        PunchSessionPhase::PunchPhaseFailed,
+                        "peer in forced relay mode",
+                    )
+                } else {
+                    coalesced = {
+                        let mut sessions = self.punch_active_sessions.lock();
+                        match sessions.get_mut(&peer_ip) {
+                            Some(state) => {
+                                state.coalesce(session);
+                                true
+                            }
+                            None => {
+                                sessions.insert(peer_ip, ActivePunchState::new(session));
+                                false
+                            }
                         }
-                        None => {
-                            sessions.insert(peer_ip, ActivePunchState::new(session));
-                            false
-                        }
-                    }
-                };
-                let (accepted, phase, reason) =
+                    };
                     if coalesced {
                         (
                             true,
                             PunchSessionPhase::PunchPhaseWaiting,
                             "coalesced onto active punch session",
-                        )
-                    } else if self.runtime.peer_state.lock().devices.get(&peer_ip).map_or(
-                        false,
-                        |p| {
-                            p.preferred_channel_mode
-                                == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
-                        },
-                    ) {
-                        (
-                            false,
-                            PunchSessionPhase::PunchPhaseFailed,
-                            "peer in forced relay mode",
                         )
                     } else {
                         let accepted = self
@@ -1238,7 +1254,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             },
                             if accepted { "" } else { "punch queue busy" },
                         )
-                    };
+                    }
+                };
                 log::info!(
                     "PunchStart ack peer={} session_id={} attempt={} accepted={} phase={:?} coalesced={} reason={}",
                     peer_ip,
