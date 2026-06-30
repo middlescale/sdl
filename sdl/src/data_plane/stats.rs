@@ -153,6 +153,18 @@ impl DataPlaneStats {
             .map(|v| v.get_all_rates(window_secs))
     }
 
+    pub fn up_peer_active_speeds(&self) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.up_peer_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_active_speeds())
+    }
+
+    pub fn down_peer_active_speeds(&self) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.down_peer_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_active_speeds())
+    }
+
     pub fn up_transport_traffic_all(&self) -> Option<(u64, HashMap<IpAddr, u64>)> {
         self.up_transport_traffic_meter
             .as_ref()
@@ -175,6 +187,18 @@ impl DataPlaneStats {
         self.down_transport_traffic_meter
             .as_ref()
             .map(|v| v.get_all_rates(window_secs))
+    }
+
+    pub fn up_transport_active_speeds(&self) -> Option<HashMap<IpAddr, u64>> {
+        self.up_transport_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_active_speeds())
+    }
+
+    pub fn down_transport_active_speeds(&self) -> Option<HashMap<IpAddr, u64>> {
+        self.down_transport_traffic_meter
+            .as_ref()
+            .map(|v| v.get_all_active_speeds())
     }
 
     pub fn logical_up_total(&self) -> u64 {
@@ -216,6 +240,20 @@ impl DataPlaneStats {
         self.gateway_down_meter
             .as_ref()
             .map(|v| v.rate_per_sec(window_secs))
+            .unwrap_or(0)
+    }
+
+    pub fn gateway_up_active_speed(&self) -> u64 {
+        self.gateway_up_meter
+            .as_ref()
+            .map(|v| v.active_speed_per_sec())
+            .unwrap_or(0)
+    }
+
+    pub fn gateway_down_active_speed(&self) -> u64 {
+        self.gateway_down_meter
+            .as_ref()
+            .map(|v| v.active_speed_per_sec())
             .unwrap_or(0)
     }
 }

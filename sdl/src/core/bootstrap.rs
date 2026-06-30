@@ -562,6 +562,12 @@ impl Sdl {
             .data_plane_stats
             .down_peer_traffic_rates(window_secs)
     }
+    pub fn up_active_speed_by_peer(&self) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.runtime.data_plane_stats.up_peer_active_speeds()
+    }
+    pub fn down_active_speed_by_peer(&self) -> Option<HashMap<Ipv4Addr, u64>> {
+        self.runtime.data_plane_stats.down_peer_active_speeds()
+    }
     pub fn up_stream_by_transport(&self) -> Option<(u64, HashMap<std::net::IpAddr, u64>)> {
         self.runtime.data_plane_stats.up_transport_traffic_all()
     }
@@ -584,6 +590,12 @@ impl Sdl {
             .data_plane_stats
             .down_transport_traffic_rates(window_secs)
     }
+    pub fn up_active_speed_by_transport(&self) -> Option<HashMap<std::net::IpAddr, u64>> {
+        self.runtime.data_plane_stats.up_transport_active_speeds()
+    }
+    pub fn down_active_speed_by_transport(&self) -> Option<HashMap<std::net::IpAddr, u64>> {
+        self.runtime.data_plane_stats.down_transport_active_speeds()
+    }
     pub fn logical_up_stream(&self) -> u64 {
         self.runtime.data_plane_stats.logical_up_total()
     }
@@ -601,6 +613,12 @@ impl Sdl {
     }
     pub fn gateway_down_rate(&self, window_secs: usize) -> u64 {
         self.runtime.data_plane_stats.gateway_down_rate(window_secs)
+    }
+    pub fn gateway_up_active_speed(&self) -> u64 {
+        self.runtime.data_plane_stats.gateway_up_active_speed()
+    }
+    pub fn gateway_down_active_speed(&self) -> u64 {
+        self.runtime.data_plane_stats.gateway_down_active_speed()
     }
     pub fn transport_up_stream(&self) -> u64 {
         self.runtime

@@ -215,6 +215,8 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
     let down_rates = sdl
         .down_rate_by_peer(TRAFFIC_RATE_WINDOW_SECS)
         .unwrap_or_default();
+    let up_connection_speeds = sdl.up_active_speed_by_peer().unwrap_or_default();
+    let down_connection_speeds = sdl.down_active_speed_by_peer().unwrap_or_default();
     let mut list = Vec::new();
     for peer in device_list {
         let name = peer.name;
@@ -280,6 +282,14 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
             rt,
             up_rate: up_rates.get(&peer.virtual_ip).copied().unwrap_or_default(),
             down_rate: down_rates
+                .get(&peer.virtual_ip)
+                .copied()
+                .unwrap_or_default(),
+            up_connection_speed: up_connection_speeds
+                .get(&peer.virtual_ip)
+                .copied()
+                .unwrap_or_default(),
+            down_connection_speed: down_connection_speeds
                 .get(&peer.virtual_ip)
                 .copied()
                 .unwrap_or_default(),
@@ -434,13 +444,15 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
     let transport_down_rates = sdl
         .down_rate_by_transport(TRAFFIC_RATE_WINDOW_SECS)
         .unwrap_or_default();
+    let transport_up_connection_speeds = sdl.up_active_speed_by_transport().unwrap_or_default();
+    let transport_down_connection_speeds = sdl.down_active_speed_by_transport().unwrap_or_default();
     sdl.gateway_session_summaries()
         .into_iter()
         .enumerate()
         .map(|(index, summary)| {
             let grant_state = gateway_grant_state_label(&summary);
             let status = gateway_status_label(&summary).to_string();
-            let (up_rate, down_rate) = summary
+            let (up_rate, down_rate, up_connection_speed, down_connection_speed) = summary
                 .endpoint
                 .map(|endpoint| {
                     (
@@ -452,6 +464,14 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
                             .get(&endpoint.ip())
                             .copied()
                             .unwrap_or_default(),
+                        transport_up_connection_speeds
+                            .get(&endpoint.ip())
+                            .copied()
+                            .unwrap_or_default(),
+                        transport_down_connection_speeds
+                            .get(&endpoint.ip())
+                            .copied()
+                            .unwrap_or_default(),
                     )
                 })
                 .unwrap_or_else(|| {
@@ -459,9 +479,11 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
                         (
                             sdl.gateway_up_rate(TRAFFIC_RATE_WINDOW_SECS),
                             sdl.gateway_down_rate(TRAFFIC_RATE_WINDOW_SECS),
+                            sdl.gateway_up_active_speed(),
+                            sdl.gateway_down_active_speed(),
                         )
                     } else {
-                        (0, 0)
+                        (0, 0, 0, 0)
                     }
                 });
             GatewayItem {
@@ -480,6 +502,8 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
                 rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
                 up_rate,
                 down_rate,
+                up_connection_speed,
+                down_connection_speed,
                 active: summary.active,
             }
         })

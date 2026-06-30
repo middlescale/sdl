@@ -37,8 +37,14 @@ pub struct GatewayItem {
     pub status: String,
     pub grant_state: String,
     pub rt_ms: String,
+    #[serde(default)]
     pub up_rate: u64,
+    #[serde(default)]
     pub down_rate: u64,
+    #[serde(default)]
+    pub up_connection_speed: u64,
+    #[serde(default)]
+    pub down_connection_speed: u64,
     pub active: bool,
 }
 
@@ -75,8 +81,14 @@ pub struct DeviceItem {
     pub ipv6: String,
     pub nat_traversal_type: String,
     pub rt: String,
+    #[serde(default)]
     pub up_rate: u64,
+    #[serde(default)]
     pub down_rate: u64,
+    #[serde(default)]
+    pub up_connection_speed: u64,
+    #[serde(default)]
+    pub down_connection_speed: u64,
     pub status: String,
 }
 

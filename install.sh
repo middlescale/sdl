@@ -213,6 +213,42 @@ migrate_config_file_v1_to_v2() {
   return 0
 }
 
+sanitize_config_file_v2() {
+  local target_path="$1"
+  if [[ ! -f "${target_path}" ]]; then
+    return 0
+  fi
+  if [[ "$(config_version_of "${target_path}")" != "2" ]]; then
+    return 0
+  fi
+  if ! grep -Eq '"in_ips"[[:space:]]*:|"out_ips"[[:space:]]*:|"use_channel"[[:space:]]*:[[:space:]]*"all"|"ports"[[:space:]]*:[[:space:]]*null' "${target_path}"; then
+    return 0
+  fi
+
+  log_step "Sanitizing config schema for ${target_path}"
+  backup_existing_file "${target_path}"
+  local tmp_path
+  tmp_path="$(mktemp "${target_path}.tmp.XXXXXX")"
+  sed -E \
+    -e 's/"use_channel"[[:space:]]*:[[:space:]]*"all"/"use_channel": "auto"/' \
+    -e 's/"ports"[[:space:]]*:[[:space:]]*null/"ports": [29873]/' \
+    -e '/"in_ips"[[:space:]]*:/d' \
+    -e '/"out_ips"[[:space:]]*:/d' \
+    "${target_path}" > "${tmp_path}"
+  chmod 600 "${tmp_path}"
+  mv "${tmp_path}" "${target_path}"
+}
+
+sanitize_profile_configs() {
+  local profile
+  if [[ ! -d "${INSTALL_DIR}/profiles" ]]; then
+    return 0
+  fi
+  while IFS= read -r profile; do
+    sanitize_config_file_v2 "${profile}"
+  done < <(find "${INSTALL_DIR}/profiles" -maxdepth 1 -type f -name '*.json' -print)
+}
+
 migrate_legacy_config_to_profile_if_possible() {
   local target_path="${INSTALL_DIR}/env/config.json"
   local state_path="${INSTALL_DIR}/env/service-state.json"
@@ -320,6 +356,10 @@ install_config_file_if_present() {
     if [[ "${existing_version}" == "1" && "${source_version}" == "2" ]] && migrate_config_file_v1_to_v2 "${target_path}"; then
       return 0
     fi
+    if [[ "${existing_version}" =~ ^[0-9]+$ && "${source_version}" =~ ^[0-9]+$ && "${existing_version}" -gt "${source_version}" && "${CONFIG_INSTALL_MODE}" != "overwrite" ]]; then
+      log_step "Keeping existing config.json with newer config_version=${existing_version}; installer config uses config_version=${source_version}"
+      return 0
+    fi
     local mismatch_message="Existing config.json uses config_version=${existing_version}, installer config uses config_version=${source_version}. Keeping the old file may be incompatible with this build."
     if [[ "${CONFIG_INSTALL_MODE}" == "overwrite" ]]; then
       log_step "${mismatch_message}"
@@ -385,7 +425,9 @@ prepare_install_tree() {
   done
   install_config_file_if_present
   migrate_config_file_v1_to_v2 "${INSTALL_DIR}/env/config.json" || true
+  sanitize_config_file_v2 "${INSTALL_DIR}/env/config.json"
   migrate_legacy_config_to_profile_if_possible
+  sanitize_profile_configs
   ensure_device_id_file
   ensure_device_key_file
 

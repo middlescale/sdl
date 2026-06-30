@@ -189,6 +189,15 @@ function Install-ConfigFile {
             Migrate-ConfigFileV1ToV2 $dst | Out-Null
             return
         }
+        $srcVersionInt = 0
+        $dstVersionInt = 0
+        if (([int]::TryParse($srcVer, [ref]$srcVersionInt)) -and
+            ([int]::TryParse($dstVer, [ref]$dstVersionInt)) -and
+            ($dstVersionInt -gt $srcVersionInt) -and
+            ($ConfigMode -ne "overwrite")) {
+            Log-Step "Keeping existing config.json with newer config_version=$dstVer; installer config uses config_version=$srcVer"
+            return
+        }
         $mismatch = "Existing config.json uses config_version=$dstVer, installer config uses config_version=$srcVer. Keeping the old file may be incompatible with this build."
         if ($ConfigMode -eq "overwrite") {
             Log-Step $mismatch
@@ -224,6 +233,45 @@ function Migrate-ConfigFileV1ToV2([string]$path) {
     $config.PSObject.Properties.Remove("out_ips")
     Write-JsonFile $path $config
     return $true
+}
+
+function Sanitize-ConfigFileV2([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    if ((Get-ConfigVersion $path) -ne "2") { return }
+    try {
+        $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    } catch {
+        return
+    }
+
+    $changed = $false
+    if (($null -ne $config.use_channel) -and ([string]$config.use_channel).Trim().Equals("all", [StringComparison]::OrdinalIgnoreCase)) {
+        $config.use_channel = "auto"
+        $changed = $true
+    }
+    if (($config.PSObject.Properties.Name -contains "ports") -and ($null -eq $config.ports)) {
+        $config.ports = @(29873)
+        $changed = $true
+    }
+    if ($config.PSObject.Properties.Name -contains "in_ips") {
+        $config.PSObject.Properties.Remove("in_ips")
+        $changed = $true
+    }
+    if ($config.PSObject.Properties.Name -contains "out_ips") {
+        $config.PSObject.Properties.Remove("out_ips")
+        $changed = $true
+    }
+    if (-not $changed) { return }
+
+    Log-Step "Sanitizing config schema for $path"
+    Backup-File $path
+    Write-JsonFile $path $config
+}
+
+function Sanitize-ProfileConfigs([string]$profilesPath) {
+    if (-not (Test-Path -LiteralPath $profilesPath)) { return }
+    Get-ChildItem -LiteralPath $profilesPath -Filter "*.json" -File -ErrorAction SilentlyContinue |
+        ForEach-Object { Sanitize-ConfigFileV2 $_.FullName }
 }
 
 function Get-JsonStringValue([string]$path, [string]$name) {
@@ -481,10 +529,12 @@ Log-Step "Copying persisted env files (if present)"
 foreach ($name in "service-state.json") { Copy-EnvFileIfExists $name }
 Install-ConfigFile
 Migrate-ConfigFileV1ToV2 (Join-Path $envDir "config.json") | Out-Null
+Sanitize-ConfigFileV2 (Join-Path $envDir "config.json")
 Migrate-LegacyConfigToProfileIfPossible `
     (Join-Path $envDir "config.json") `
     (Join-Path $envDir "service-state.json") `
     $profilesDir
+Sanitize-ProfileConfigs $profilesDir
 $deviceIdPath = Join-Path $envDir "device-id"
 $deviceKeyPath = Join-Path $envDir "device.key"
 Ensure-DeviceIdFile $deviceIdPath
