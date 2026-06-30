@@ -151,6 +151,24 @@ fn convert_rate(bytes_per_sec: u64) -> String {
     format!("{}/s", convert(bytes_per_sec))
 }
 
+fn convert_connection_speed(bytes_per_sec: u64) -> String {
+    if bytes_per_sec == 0 {
+        return "-".to_string();
+    }
+    let bits_per_sec = bytes_per_sec.saturating_mul(8);
+    if bits_per_sec >= 1_000_000 {
+        format!("{:.2} Mbps", bits_per_sec as f64 / 1_000_000.0)
+    } else if bits_per_sec >= 1_000 {
+        format!("{:.0} Kbps", bits_per_sec as f64 / 1_000.0)
+    } else {
+        format!("{} bps", bits_per_sec)
+    }
+}
+
+fn connection_speed(up_bytes_per_sec: u64, down_bytes_per_sec: u64) -> String {
+    convert_connection_speed(up_bytes_per_sec.max(down_bytes_per_sec))
+}
+
 pub fn console_route_table(mut list: Vec<RouteItem>) {
     if list.is_empty() {
         println!("No route found");
@@ -203,10 +221,7 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
         ("Status".to_string(), Style::new()),
         ("Grant".to_string(), Style::new()),
         ("Rt(ms)".to_string(), Style::new()),
-        ("Cur Up".to_string(), Style::new()),
-        ("Cur Down".to_string(), Style::new()),
-        ("Conn Up".to_string(), Style::new()),
-        ("Conn Down".to_string(), Style::new()),
+        ("Speed".to_string(), Style::new()),
         ("Active".to_string(), Style::new()),
     ]);
     for item in list {
@@ -231,10 +246,10 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
                 },
                 style.clone(),
             ),
-            (convert_rate(item.up_rate), style.clone()),
-            (convert_rate(item.down_rate), style.clone()),
-            (convert_rate(item.up_connection_speed), style.clone()),
-            (convert_rate(item.down_connection_speed), style.clone()),
+            (
+                connection_speed(item.up_connection_speed, item.down_connection_speed),
+                style.clone(),
+            ),
             (
                 if item.active {
                     "yes".to_string()
@@ -263,10 +278,7 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
         ("Status".to_string(), Style::new()),
         ("P2P/Relay".to_string(), Style::new()),
         ("Rt".to_string(), Style::new()),
-        ("Cur Up".to_string(), Style::new()),
-        ("Cur Down".to_string(), Style::new()),
-        ("Conn Up".to_string(), Style::new()),
-        ("Conn Down".to_string(), Style::new()),
+        ("Speed".to_string(), Style::new()),
     ]);
     for item in list {
         let name = item.name;
@@ -278,11 +290,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().green()),
                     (item.nat_traversal_type, Style::new().green()),
                     (item.rt, Style::new().green()),
-                    (convert_rate(item.up_rate), Style::new().green()),
-                    (convert_rate(item.down_rate), Style::new().green()),
-                    (convert_rate(item.up_connection_speed), Style::new().green()),
                     (
-                        convert_rate(item.down_connection_speed),
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
                         Style::new().green(),
                     ),
                 ]);
@@ -293,14 +302,8 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().yellow()),
                     (item.nat_traversal_type, Style::new().yellow()),
                     (item.rt, Style::new().yellow()),
-                    (convert_rate(item.up_rate), Style::new().yellow()),
-                    (convert_rate(item.down_rate), Style::new().yellow()),
                     (
-                        convert_rate(item.up_connection_speed),
-                        Style::new().yellow(),
-                    ),
-                    (
-                        convert_rate(item.down_connection_speed),
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
                         Style::new().yellow(),
                     ),
                 ]);
@@ -310,9 +313,6 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
                 (name, Style::new().color256(102)),
                 (item.virtual_ip, Style::new().color256(102)),
                 (item.status, Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
@@ -337,10 +337,7 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
         ("Status".to_string(), Style::new()),
         ("P2P/Relay".to_string(), Style::new()),
         ("Rt".to_string(), Style::new()),
-        ("Cur Up".to_string(), Style::new()),
-        ("Cur Down".to_string(), Style::new()),
-        ("Conn Up".to_string(), Style::new()),
-        ("Conn Down".to_string(), Style::new()),
+        ("Speed".to_string(), Style::new()),
         ("NAT Type".to_string(), Style::new()),
         ("Public Ips".to_string(), Style::new()),
         ("Local Ip".to_string(), Style::new()),
@@ -355,11 +352,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().green()),
                     (item.nat_traversal_type, Style::new().green()),
                     (item.rt, Style::new().green()),
-                    (convert_rate(item.up_rate), Style::new().green()),
-                    (convert_rate(item.down_rate), Style::new().green()),
-                    (convert_rate(item.up_connection_speed), Style::new().green()),
                     (
-                        convert_rate(item.down_connection_speed),
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
                         Style::new().green(),
                     ),
                     (item.nat_type, Style::new().green()),
@@ -374,14 +368,8 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                     (item.status, Style::new().yellow()),
                     (item.nat_traversal_type, Style::new().yellow()),
                     (item.rt, Style::new().yellow()),
-                    (convert_rate(item.up_rate), Style::new().yellow()),
-                    (convert_rate(item.down_rate), Style::new().yellow()),
                     (
-                        convert_rate(item.up_connection_speed),
-                        Style::new().yellow(),
-                    ),
-                    (
-                        convert_rate(item.down_connection_speed),
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
                         Style::new().yellow(),
                     ),
                     (item.nat_type, Style::new().yellow()),
@@ -395,9 +383,6 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
                 (item.name, Style::new().color256(102)),
                 (item.virtual_ip, Style::new().color256(102)),
                 (item.status, Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
-                ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
                 ("".to_string(), Style::new().color256(102)),
