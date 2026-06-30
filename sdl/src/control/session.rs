@@ -41,6 +41,8 @@ const RELAY_REPUNCH_INTERVAL: Duration = Duration::from_secs(60);
 const REGISTRATION_REJECT_HANDSHAKE_COOLDOWN: Duration = Duration::from_secs(3);
 const DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN: Duration = Duration::from_secs(3);
 const GATEWAY_GRANT_REFRESH_RETRY_COOLDOWN: Duration = Duration::from_secs(5);
+const CONTROL_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(5);
+const CONTROL_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 
 /// Shared data-plane objects that are owned jointly by the control session and
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
@@ -64,6 +66,7 @@ pub struct ControlSession {
     negotiated_capabilities: Arc<RwLock<HashSet<String>>>,
     last_control_packet_at_ms: Arc<AtomicU64>,
     unanswered_heartbeats: Arc<std::sync::atomic::AtomicU32>,
+    reconnect_failure_count: Arc<std::sync::atomic::AtomicU32>,
     last_registration_reject_handshake_at_ms: Arc<AtomicU64>,
     last_device_auth_retry_at_ms: Arc<AtomicU64>,
 }
@@ -86,6 +89,7 @@ impl ControlSession {
             negotiated_capabilities,
             last_control_packet_at_ms: Arc::new(AtomicU64::new(0)),
             unanswered_heartbeats: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            reconnect_failure_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_registration_reject_handshake_at_ms: Arc::new(AtomicU64::new(0)),
             last_device_auth_retry_at_ms: Arc::new(AtomicU64::new(0)),
         }
@@ -215,14 +219,17 @@ impl ControlSession {
         // detection needed at the call site.
         let last_ts = self.last_control_packet_at_ms.clone();
         let unanswered = self.unanswered_heartbeats.clone();
+        let reconnect_failure_count = self.reconnect_failure_count.clone();
         let wrapped = move |data: Vec<u8>, route_key: crate::data_plane::route::RouteKey| {
             last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
             unanswered.store(0, Ordering::Relaxed);
+            reconnect_failure_count.store(0, Ordering::Relaxed);
             on_packet(data, route_key);
         };
         let control_session = self.clone();
         self.channel
             .start(stop_manager.clone(), wrapped, move |reason| {
+                control_session.record_reconnect_failure();
                 control_session.force_reconnect_without_callback(reason);
             })?;
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
@@ -252,10 +259,27 @@ impl ControlSession {
             log::info!("发送握手请求,{:?}", self.config);
             if let Err(e) = self.send_handshake() {
                 log::warn!("{:?}", e);
+                self.record_reconnect_failure();
                 return Err(e);
             }
         }
         Ok(())
+    }
+
+    fn record_reconnect_failure(&self) {
+        self.reconnect_failure_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn reset_reconnect_backoff(&self) {
+        self.reconnect_failure_count.store(0, Ordering::Relaxed);
+    }
+
+    fn reconnect_delay(&self) -> Duration {
+        control_reconnect_delay(
+            self.reconnect_failure_count.load(Ordering::Relaxed),
+            CONTROL_RECONNECT_INITIAL_DELAY,
+            CONTROL_RECONNECT_MAX_DELAY,
+        )
     }
 
     fn mark_control_disconnected<Call: SdlCallback>(&self, call: &Call, reason: String) {
@@ -292,7 +316,7 @@ impl ControlSession {
     fn run<Call: SdlCallback>(&self, call: Call, stop_receiver: mpsc::Receiver<()>) {
         let mut connect_count = 0usize;
         let mut last_connect_at = Instant::now()
-            .checked_sub(Duration::from_secs(5))
+            .checked_sub(CONTROL_RECONNECT_INITIAL_DELAY)
             .unwrap_or_else(Instant::now);
         let mut last_heartbeat_at = Instant::now()
             .checked_sub(Duration::from_secs(3))
@@ -310,7 +334,8 @@ impl ControlSession {
             }
             let current_device = self.current_device();
             if current_device.status.offline() {
-                if last_connect_at.elapsed() < Duration::from_secs(5) {
+                let reconnect_delay = self.reconnect_delay();
+                if last_connect_at.elapsed() < reconnect_delay {
                     continue;
                 }
                 last_connect_at = Instant::now();
@@ -346,7 +371,9 @@ impl ControlSession {
                     log::debug!("sending control heartbeat ping, unanswered={}", unanswered);
                 }
                 match self.send_server_heartbeat(self.data_plane.peer_state.lock().epoch) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        self.reset_reconnect_backoff();
+                    }
                     Err(e) => {
                         log::warn!("heartbeat err={:?}", e);
                     }
@@ -879,9 +906,21 @@ fn retry_cooldown_elapsed(last_attempt_at_ms: u64, now_ms: u64, cooldown: Durati
         || now_ms.saturating_sub(last_attempt_at_ms) >= cooldown.as_millis() as u64
 }
 
+fn control_reconnect_delay(
+    failure_count: u32,
+    initial_delay: Duration,
+    max_delay: Duration,
+) -> Duration {
+    if failure_count == 0 {
+        return initial_delay;
+    }
+    let multiplier = 1u32 << failure_count.saturating_sub(1).min(3);
+    initial_delay.saturating_mul(multiplier).min(max_delay)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gateway_grant_refresh_mode, retry_cooldown_elapsed};
+    use super::{control_reconnect_delay, gateway_grant_refresh_mode, retry_cooldown_elapsed};
     use std::time::Duration;
 
     #[test]
@@ -901,6 +940,36 @@ mod tests {
     #[test]
     fn retry_cooldown_elapsed_allows_attempt_at_boundary() {
         assert!(retry_cooldown_elapsed(1_000, 4_000, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn control_reconnect_delay_uses_mild_capped_backoff() {
+        let initial = Duration::from_secs(5);
+        let max = Duration::from_secs(30);
+        assert_eq!(
+            control_reconnect_delay(0, initial, max),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            control_reconnect_delay(1, initial, max),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            control_reconnect_delay(2, initial, max),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            control_reconnect_delay(3, initial, max),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            control_reconnect_delay(4, initial, max),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            control_reconnect_delay(100, initial, max),
+            Duration::from_secs(30)
+        );
     }
 
     #[test]
