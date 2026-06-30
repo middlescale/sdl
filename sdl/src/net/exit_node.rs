@@ -37,7 +37,7 @@ pub fn setup_server_routing(egress_interface: &str, tun_name: &str) -> anyhow::R
     validate_iface_name(egress_interface, "egress interface")?;
     validate_iface_name(tun_name, "tun name")?;
 
-    run_command("sysctl", &["-w", "net.ipv4.ip_forward=1"])?;
+    let forwarding_note = enable_ipv4_forwarding()?;
     run_shell(&format!(
         "iptables -t nat -C POSTROUTING -o {egress_interface} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o {egress_interface} -j MASQUERADE"
     ))?;
@@ -49,8 +49,8 @@ pub fn setup_server_routing(egress_interface: &str, tun_name: &str) -> anyhow::R
     ))?;
 
     Ok(format!(
-        "exit-node routing configured: tun={} egress={}",
-        tun_name, egress_interface
+        "exit-node routing configured: tun={} egress={}; {}",
+        tun_name, egress_interface, forwarding_note
     ))
 }
 
@@ -72,7 +72,7 @@ pub fn teardown_server_routing(egress_interface: &str, tun_name: &str) -> anyhow
     ))?;
 
     Ok(format!(
-        "exit-node routing removed: tun={} egress={}",
+        "exit-node routing removed: tun={} egress={}; IPv4 forwarding was not disabled because it may be used by Docker, VPN, router, or other services",
         tun_name, egress_interface
     ))
 }
@@ -80,6 +80,7 @@ pub fn teardown_server_routing(egress_interface: &str, tun_name: &str) -> anyhow
 #[cfg(target_os = "linux")]
 pub fn setup_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::Result<String> {
     validate_iface_name(tun_name, "tun name")?;
+    preflight_client_routing(tun_name)?;
     for exclude in excludes {
         let exclude = normalize_route_target(exclude)?;
         run_shell(&format!(
@@ -117,6 +118,7 @@ pub fn teardown_client_routing(tun_name: &str) -> anyhow::Result<String> {
 #[cfg(target_os = "macos")]
 pub fn setup_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::Result<String> {
     validate_iface_name(tun_name, "tun name")?;
+    preflight_client_routing(tun_name)?;
     let gateway = macos_default_gateway()?;
     for exclude in excludes {
         let (addr, mask) = route_target_addr_mask(exclude)?;
@@ -154,6 +156,7 @@ pub fn teardown_client_routing(tun_name: &str) -> anyhow::Result<String> {
 
 #[cfg(target_os = "windows")]
 pub fn setup_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::Result<String> {
+    preflight_client_routing(tun_name)?;
     let if_index = windows_interface_index(tun_name)?;
     let gateway = windows_default_gateway()?;
     for exclude in excludes {
@@ -316,6 +319,41 @@ fn run_shell(command: &str) -> anyhow::Result<()> {
     run_command("sh", &["-c", command])
 }
 
+#[cfg(target_os = "linux")]
+fn enable_ipv4_forwarding() -> anyhow::Result<String> {
+    let current = command_stdout("sysctl", &["-n", "net.ipv4.ip_forward"])?;
+    if current.trim() == "1" {
+        return Ok("IPv4 forwarding was already enabled".to_string());
+    }
+    run_command("sysctl", &["-w", "net.ipv4.ip_forward=1"])?;
+    Ok(
+        "IPv4 forwarding was enabled for exit-node routing and will not be disabled automatically"
+            .to_string(),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_ipv4_forwarding() -> anyhow::Result<String> {
+    anyhow::bail!("IPv4 forwarding setup is supported only on Linux")
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to execute {program}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "{} {} failed: {}{}",
+            program,
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn normalize_route_target(value: &str) -> anyhow::Result<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -339,6 +377,157 @@ fn normalize_route_target(value: &str) -> anyhow::Result<String> {
         .parse::<Ipv4Addr>()
         .with_context(|| format!("invalid IPv4 route target '{value}'"))?;
     Ok(format!("{value}/32"))
+}
+
+fn is_vpn_like_interface(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return false;
+    }
+    [
+        "tun",
+        "tap",
+        "utun",
+        "wg",
+        "tailscale",
+        "zt",
+        "zerotier",
+        "ppp",
+        "ipsec",
+        "vpn",
+        "clash",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+fn validate_default_route_interface(tun_name: &str, iface: &str) -> anyhow::Result<()> {
+    if iface == tun_name {
+        return Ok(());
+    }
+    if is_vpn_like_interface(iface) {
+        anyhow::bail!(
+            "{}",
+            route_preflight_warning(&format!(
+                "default route already uses VPN/TUN-like interface '{}'",
+                iface
+            ))
+        );
+    }
+    Ok(())
+}
+
+fn route_preflight_warning(reason: &str) -> String {
+    format!(
+        "warning: exit-node route preflight failed: {reason}; SDL did not change system routes. Disable the existing VPN/full-tunnel route first, then retry `sdl exit-node use`."
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
+    for target in ["0.0.0.0/1", "128.0.0.0/1"] {
+        let route = command_stdout("ip", &["route", "show", target])?;
+        if let Some(iface) = linux_route_iface(&route) {
+            if iface != tun_name {
+                anyhow::bail!(
+                    "{}",
+                    route_preflight_warning(&format!(
+                        "split default route {} already exists on interface '{}'",
+                        target, iface
+                    ))
+                );
+            }
+        }
+    }
+    let default_route = command_stdout("ip", &["route", "show", "default"])?;
+    if let Some(iface) = linux_route_iface(&default_route) {
+        validate_default_route_interface(tun_name, iface)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_route_iface(route: &str) -> Option<&str> {
+    let mut fields = route.split_whitespace();
+    while let Some(field) = fields.next() {
+        if field == "dev" {
+            return fields.next();
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
+    for (addr, mask) in [("0.0.0.0", "128.0.0.0"), ("128.0.0.0", "128.0.0.0")] {
+        let route = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "route -n get -net {addr} -netmask {mask} 2>/dev/null || true"
+            ))
+            .output()
+            .context("failed to query macOS split default route")?;
+        let route = String::from_utf8_lossy(&route.stdout);
+        if let Some(iface) = macos_route_interface(&route) {
+            if iface != tun_name {
+                anyhow::bail!(
+                    "{}",
+                    route_preflight_warning(&format!(
+                        "split default route {}/{} already exists on interface '{}'",
+                        addr, mask, iface
+                    ))
+                );
+            }
+        }
+    }
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("route -n get default 2>/dev/null || true")
+        .output()
+        .context("failed to query macOS default route")?;
+    let default_route = String::from_utf8_lossy(&output.stdout);
+    if let Some(iface) = macos_route_interface(&default_route) {
+        validate_default_route_interface(tun_name, iface)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_route_interface(route: &str) -> Option<&str> {
+    route.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("interface:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
+    for prefix in ["0.0.0.0/1", "128.0.0.0/1"] {
+        let command = format!(
+            "$route = Get-NetRoute -DestinationPrefix '{}' -ErrorAction SilentlyContinue | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($route) {{ (Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction Stop).Name }}",
+            prefix
+        );
+        let iface = run_powershell(&command)?;
+        if !iface.trim().is_empty() && iface.trim() != tun_name {
+            anyhow::bail!(
+                "{}",
+                route_preflight_warning(&format!(
+                    "split default route {} already exists on interface '{}'",
+                    prefix,
+                    iface.trim()
+                ))
+            );
+        }
+    }
+    let default_iface = run_powershell(
+        "$route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object {$_.NextHop -ne '0.0.0.0'} | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; if ($route) { (Get-NetAdapter -InterfaceIndex $route.InterfaceIndex -ErrorAction Stop).Name }",
+    )?;
+    if !default_iface.trim().is_empty() {
+        validate_default_route_interface(tun_name, default_iface.trim())?;
+    }
+    Ok(())
 }
 
 fn ipv4_host_route(ip: Ipv4Addr) -> String {

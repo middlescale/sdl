@@ -680,7 +680,7 @@ impl CommandHandler for ServiceCommandHandler {
                 &enable.egress_interface,
                 enable.tun_name.as_deref().unwrap_or("sdl-tun"),
             )
-            .map_err(|e| io::Error::other(format!("exit-node enable failed: {e:?}")))
+            .map_err(|e| io::Error::other(format!("exit-node enable failed: {e}")))
     }
 
     fn exit_node_disable(&self, disable: ExitNodeDisableCommand) -> io::Result<String> {
@@ -696,7 +696,7 @@ impl CommandHandler for ServiceCommandHandler {
                 use_command.tun_name.as_deref().unwrap_or("sdl-tun"),
                 &use_command.excludes,
             )
-            .map_err(|e| io::Error::other(format!("exit-node use failed: {e:?}")))
+            .map_err(|e| io::Error::other(format!("exit-node use failed: {e}")))
     }
 
     fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String> {
