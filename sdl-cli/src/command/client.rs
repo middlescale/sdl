@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use std::io;
 
 use crate::command::entity::{
-    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
 };
 use crate::command::ipc;
 
@@ -39,6 +39,9 @@ impl CommandClient {
     }
     pub fn exit_node_status(&mut self) -> io::Result<ExitNodeStatus> {
         self.send_cmd(b"exit_node:status")
+    }
+    pub fn exit_node_list(&mut self) -> io::Result<Vec<ExitNodeItem>> {
+        self.send_cmd(b"exit_node:list")
     }
     pub fn exit_node_enable(
         &mut self,

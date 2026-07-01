@@ -12,6 +12,7 @@ fn print_usage() {
     println!("  sdl list [--json]");
     println!("  sdl status [--json]");
     println!("  sdl gateway [--json] [--set <gateway-name|auto>]");
+    println!("  sdl exit-node list [--json]");
     println!("  sdl exit-node status [--json]");
     println!("  sdl exit-node enable --egress-interface <iface> [--tun-name sdl-tun] [--json]");
     println!(
@@ -377,6 +378,25 @@ fn handle_exit_node(args: &[String]) -> i32 {
         return print_exit_node_usage(json);
     }
     match filtered[0].as_str() {
+        "list" => {
+            if filtered.len() != 1 {
+                return print_exit_node_usage(json);
+            }
+            match CommandClient::new().and_then(|mut client| client.exit_node_list()) {
+                Ok(list) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&list).unwrap());
+                    } else {
+                        console_out::console_exit_node_list(list);
+                    }
+                    0
+                }
+                Err(e) => {
+                    print_exit_node_error(json, e.to_string());
+                    1
+                }
+            }
+        }
         "status" => {
             if filtered.len() != 1 {
                 return print_exit_node_usage(json);
@@ -578,7 +598,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
 }
 
 fn print_exit_node_usage(json: bool) -> i32 {
-    let message = "usage: sdl exit-node <status|enable|disable|use|clear> [--json] [--egress-interface <iface>] [--tun-name <name>] [--exclude <ip-or-cidr>] [target]";
+    let message = "usage: sdl exit-node <list|status|enable|disable|use|clear> [--json] [--egress-interface <iface>] [--tun-name <name>] [--exclude <ip-or-cidr>] [target]";
     if json {
         println!(
             "{}",

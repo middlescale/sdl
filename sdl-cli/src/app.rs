@@ -1,5 +1,5 @@
 use crate::command::entity::{
-    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
 };
 use crate::command::server::{
     AuthCommand, CommandHandler, CommandServer, ExitNodeDisableCommand, ExitNodeEnableCommand,
@@ -672,6 +672,30 @@ impl CommandHandler for ServiceCommandHandler {
 
     fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
         Ok(self.0.exit_node_status())
+    }
+
+    fn exit_node_list(&self) -> io::Result<Vec<ExitNodeItem>> {
+        let runtime = self.0.current_runtime()?;
+        let mut items: Vec<ExitNodeItem> = runtime
+            .device_list()
+            .into_iter()
+            .filter(|peer| peer.exit_node_usable)
+            .map(|peer| ExitNodeItem {
+                name: peer.name,
+                device_id: peer.device_id,
+                virtual_ip: peer.virtual_ip.to_string(),
+                status: format!("{:?}", peer.status),
+                approved: peer.exit_node_approved,
+                usable: peer.exit_node_usable,
+            })
+            .collect();
+        items.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.virtual_ip.cmp(&b.virtual_ip))
+                .then_with(|| a.device_id.cmp(&b.device_id))
+        });
+        Ok(items)
     }
 
     fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String> {

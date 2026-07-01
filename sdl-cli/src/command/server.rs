@@ -1,5 +1,5 @@
 use crate::command::entity::{
-    DeviceItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
 };
 use crate::command::ipc;
 use interprocess::local_socket::traits::ListenerExt;
@@ -56,6 +56,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn info(&self) -> io::Result<Info>;
     fn gateway(&self) -> io::Result<Vec<GatewayItem>>;
     fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String>;
+    fn exit_node_list(&self) -> io::Result<Vec<ExitNodeItem>>;
     fn exit_node_status(&self) -> io::Result<ExitNodeStatus>;
     fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String>;
     fn exit_node_disable(&self, disable: ExitNodeDisableCommand) -> io::Result<String>;
@@ -126,6 +127,8 @@ where
         "gateway" => {
             serde_yaml::to_string(&handler.gateway()?).unwrap_or_else(|e| format!("error {:?}", e))
         }
+        "exit_node:list" => serde_yaml::to_string(&handler.exit_node_list()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
         "exit_node:status" => serde_yaml::to_string(&handler.exit_node_status()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
         "exit_node:disable" => serde_yaml::to_string(
@@ -246,6 +249,16 @@ mod tests {
         fn gateway_set(&self, gateway: Option<&str>) -> io::Result<String> {
             Ok(gateway.unwrap_or("auto").to_string())
         }
+        fn exit_node_list(&self) -> io::Result<Vec<ExitNodeItem>> {
+            Ok(vec![ExitNodeItem {
+                name: "node-b".to_string(),
+                device_id: "dev-b".to_string(),
+                virtual_ip: "10.26.0.4".to_string(),
+                status: "Online".to_string(),
+                approved: true,
+                usable: true,
+            }])
+        }
         fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
             Ok(ExitNodeStatus::default())
         }
@@ -352,6 +365,17 @@ mod tests {
     }
 
     #[test]
+    fn exit_node_list_command_returns_items() {
+        let handler = StubHandler;
+        let out = command("exit_node:list", &handler).unwrap();
+        let parsed: Vec<ExitNodeItem> = serde_yaml::from_str(&out).unwrap();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].device_id, "dev-b");
+        assert!(parsed[0].usable);
+    }
+
+    #[test]
     fn status_command_reuses_info_handler() {
         struct StatusHandler;
 
@@ -394,6 +418,9 @@ mod tests {
                 Err(io::Error::other("unused"))
             }
             fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn exit_node_list(&self) -> io::Result<Vec<ExitNodeItem>> {
                 Err(io::Error::other("unused"))
             }
             fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {
@@ -456,6 +483,9 @@ mod tests {
             Err(io::Error::other("unused"))
         }
         fn gateway_set(&self, _gateway: Option<&str>) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn exit_node_list(&self) -> io::Result<Vec<ExitNodeItem>> {
             Err(io::Error::other("unused"))
         }
         fn exit_node_status(&self) -> io::Result<ExitNodeStatus> {

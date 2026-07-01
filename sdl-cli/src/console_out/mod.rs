@@ -1,6 +1,8 @@
 use console::{style, Style};
 
-use crate::command::entity::{DeviceItem, GatewayItem, Info, RouteItem, TrafficSummary};
+use crate::command::entity::{
+    DeviceItem, ExitNodeItem, GatewayItem, Info, RouteItem, TrafficSummary,
+};
 
 pub mod table;
 
@@ -258,6 +260,35 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
                 },
                 style,
             ),
+        ]);
+    }
+    table::println_table(out_list)
+}
+
+pub fn console_exit_node_list(mut list: Vec<ExitNodeItem>) {
+    if list.is_empty() {
+        println!("No usable exit nodes found");
+        return;
+    }
+    list.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.virtual_ip.cmp(&b.virtual_ip))
+            .then_with(|| a.device_id.cmp(&b.device_id))
+    });
+    let mut out_list = Vec::with_capacity(list.len() + 1);
+    out_list.push(vec![
+        ("Name".to_string(), Style::new()),
+        ("Virtual Ip".to_string(), Style::new()),
+        ("Device ID".to_string(), Style::new()),
+        ("Status".to_string(), Style::new()),
+    ]);
+    for item in list {
+        out_list.push(vec![
+            (item.name, Style::new().green()),
+            (item.virtual_ip, Style::new().green()),
+            (item.device_id, Style::new().green()),
+            (item.status, Style::new().green()),
         ]);
     }
     table::println_table(out_list)

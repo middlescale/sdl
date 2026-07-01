@@ -29,6 +29,8 @@ SERVICE_NAME="sdl-service"
 TARGET_USER="${SUDO_USER:-root}"
 OS_NAME="$(uname -s)"
 CONFIG_INSTALL_MODE="preserve"
+INSTALLER_CONFIG_VERSION=2
+CONFIG_VERSION_FALLBACK=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -156,7 +158,11 @@ config_version_of() {
     return 1
   fi
   version="$(sed -nE 's/.*"config_version"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "${path}" | head -n 1)"
-  printf '%s\n' "${version}"
+  if [[ -z "${version}" ]]; then
+    printf '%s\n' "${CONFIG_VERSION_FALLBACK}"
+  else
+    printf '%s\n' "${version}"
+  fi
 }
 
 json_string_value_of() {
@@ -352,6 +358,10 @@ install_config_file_if_present() {
 
   source_version="$(config_version_of "${source_path}")"
   existing_version="$(config_version_of "${target_path}")"
+  if [[ "${source_version}" =~ ^[0-9]+$ && "${source_version}" -lt "${INSTALLER_CONFIG_VERSION}" && "${CONFIG_INSTALL_MODE}" != "overwrite" ]]; then
+    log_step "Ignoring older installer env/config.json with config_version=${source_version}; current installer schema is config_version=${INSTALLER_CONFIG_VERSION}"
+    return 0
+  fi
   if [[ -n "${source_version}" && -n "${existing_version}" && "${source_version}" != "${existing_version}" ]]; then
     if [[ "${existing_version}" == "1" && "${source_version}" == "2" ]] && migrate_config_file_v1_to_v2 "${target_path}"; then
       return 0

@@ -61,6 +61,16 @@ pub struct ExitNodeStatus {
     pub note: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct ExitNodeItem {
+    pub name: String,
+    pub device_id: String,
+    pub virtual_ip: String,
+    pub status: String,
+    pub approved: bool,
+    pub usable: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RouteItem {
     pub name: String,

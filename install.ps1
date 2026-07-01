@@ -135,6 +135,8 @@ foreach ($p in @($sdlSrc, $sdlServiceSrc, $wintunSrc)) {
 # config mode
 if ($OverwriteConfig -and $PreserveConfig) { Die "-OverwriteConfig and -PreserveConfig are mutually exclusive" }
 $ConfigMode = if ($OverwriteConfig) { "overwrite" } else { "preserve" }
+$InstallerConfigVersion = 2
+$ConfigVersionFallback = "1"
 
 # --- helpers mirroring install.sh -----------------------------------------
 function Get-ConfigVersion([string]$path) {
@@ -143,7 +145,7 @@ function Get-ConfigVersion([string]$path) {
         $j = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
         if ($null -ne $j.config_version) { return [string]$j.config_version }
     } catch { }
-    return "1"  # CONFIG_VERSION_FALLBACK in install.sh
+    return $ConfigVersionFallback
 }
 
 function Backup-File([string]$path) {
@@ -184,12 +186,18 @@ function Install-ConfigFile {
     }
     $srcVer = Get-ConfigVersion $src
     $dstVer = Get-ConfigVersion $dst
+    $srcVersionInt = 0
+    if (([int]::TryParse($srcVer, [ref]$srcVersionInt)) -and
+        ($srcVersionInt -lt $InstallerConfigVersion) -and
+        ($ConfigMode -ne "overwrite")) {
+        Log-Step "Ignoring older installer env\config.json with config_version=$srcVer; current installer schema is config_version=$InstallerConfigVersion"
+        return
+    }
     if ($srcVer -ne $dstVer) {
         if (($dstVer -eq "1") -and ($srcVer -eq "2")) {
             Migrate-ConfigFileV1ToV2 $dst | Out-Null
             return
         }
-        $srcVersionInt = 0
         $dstVersionInt = 0
         if (([int]::TryParse($srcVer, [ref]$srcVersionInt)) -and
             ([int]::TryParse($dstVer, [ref]$dstVersionInt)) -and
