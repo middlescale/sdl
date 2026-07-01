@@ -459,22 +459,20 @@ fn linux_route_iface(route: &str) -> Option<&str> {
 
 #[cfg(target_os = "macos")]
 fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
-    for (addr, mask) in [("0.0.0.0", "128.0.0.0"), ("128.0.0.0", "128.0.0.0")] {
-        let route = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "route -n get -net {addr} -netmask {mask} 2>/dev/null || true"
-            ))
-            .output()
-            .context("failed to query macOS split default route")?;
-        let route = String::from_utf8_lossy(&route.stdout);
-        if let Some(iface) = macos_route_interface(&route) {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("netstat -rn -f inet 2>/dev/null || true")
+        .output()
+        .context("failed to query macOS route table")?;
+    let route_table = String::from_utf8_lossy(&output.stdout);
+    for target in ["0/1", "0.0.0.0/1", "128.0/1", "128.0.0.0/1"] {
+        if let Some(iface) = macos_netstat_route_iface(&route_table, target) {
             if iface != tun_name {
                 anyhow::bail!(
                     "{}",
                     route_preflight_warning(&format!(
-                        "split default route {}/{} already exists on interface '{}'",
-                        addr, mask, iface
+                        "split default route {} already exists on interface '{}'",
+                        target, iface
                     ))
                 );
             }
@@ -499,6 +497,17 @@ fn macos_route_interface(route: &str) -> Option<&str> {
         line.strip_prefix("interface:")
             .map(str::trim)
             .filter(|value| !value.is_empty())
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_netstat_route_iface<'a>(route_table: &'a str, destination: &str) -> Option<&'a str> {
+    route_table.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != destination {
+            return None;
+        }
+        fields.nth(2)
     })
 }
 
@@ -665,4 +674,44 @@ fn windows_default_gateway() -> anyhow::Result<String> {
         anyhow::bail!("Windows default gateway not found");
     }
     Ok(gateway)
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(target_os = "macos")]
+    use super::macos_netstat_route_iface;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_split_route_detection_ignores_plain_default_route() {
+        let route_table = r#"
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+default            192.168.31.1       UGScg                 en0
+default            link#24            UCSIg               utun5
+10.26/24           10.26.0.5          UGSc                utun0
+"#;
+        assert_eq!(macos_netstat_route_iface(route_table, "0/1"), None);
+        assert_eq!(macos_netstat_route_iface(route_table, "128.0/1"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_split_route_detection_finds_exact_split_route() {
+        let route_table = r#"
+Routing tables
+
+Internet:
+Destination        Gateway            Flags               Netif Expire
+0/1                link#23            USc                 utun0
+128.0/1            link#23            USc                 utun0
+"#;
+        assert_eq!(macos_netstat_route_iface(route_table, "0/1"), Some("utun0"));
+        assert_eq!(
+            macos_netstat_route_iface(route_table, "128.0/1"),
+            Some("utun0")
+        );
+    }
 }
