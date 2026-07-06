@@ -27,6 +27,9 @@ impl DeviceAdapter {
     pub fn remove(&self) {
         drop(self.tun.lock().take());
     }
+    pub fn name(&self) -> Option<String> {
+        self.tun.lock().as_ref().and_then(|tun| tun.name().ok())
+    }
 }
 
 impl DeviceWrite for DeviceAdapter {
@@ -128,5 +131,8 @@ impl TunDeviceHelper {
             inner.compressor,
             device_stop,
         )
+    }
+    pub fn device_name(&self) -> Option<String> {
+        self.device_adapter.name()
     }
 }

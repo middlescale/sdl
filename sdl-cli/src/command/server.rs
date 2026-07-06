@@ -64,6 +64,7 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String>;
     fn traffic(&self) -> io::Result<TrafficSummary>;
     fn resume_runtime(&self) -> io::Result<String>;
+    fn down_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
     fn channel_change(&self, use_channel_type: UseChannelType) -> io::Result<String>;
     fn rename(&self, new_name: &str) -> io::Result<String>;
@@ -142,7 +143,9 @@ where
         "traffic" => {
             serde_yaml::to_string(&handler.traffic()?).unwrap_or_else(|e| format!("error {:?}", e))
         }
-        "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
+        "up" | "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        "down" => serde_yaml::to_string(&handler.down_runtime()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
         "suspend" => serde_yaml::to_string(&handler.suspend_runtime()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
@@ -218,7 +221,7 @@ where
                 }
             } else {
                 format!(
-                    "command '{}' not found.  Try to enter: 'route'/'list'/'resume'/'suspend' \n",
+                    "command '{}' not found.  Try to enter: 'route'/'list'/'up'/'down' \n",
                     cmd
                 )
             }
@@ -278,10 +281,13 @@ mod tests {
             Ok(TrafficSummary::default())
         }
         fn resume_runtime(&self) -> io::Result<String> {
-            Ok("ok".to_string())
+            Ok("up".to_string())
+        }
+        fn down_runtime(&self) -> io::Result<String> {
+            Ok("down".to_string())
         }
         fn suspend_runtime(&self) -> io::Result<String> {
-            Ok("ok".to_string())
+            Ok("suspend".to_string())
         }
         fn channel_change(&self, _use_channel_type: UseChannelType) -> io::Result<String> {
             Ok("ok".to_string())
@@ -376,6 +382,21 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_commands_route_to_expected_runtime_actions() {
+        let handler = StubHandler;
+
+        let up: String = serde_yaml::from_str(&command("up", &handler).unwrap()).unwrap();
+        let resume: String = serde_yaml::from_str(&command("resume", &handler).unwrap()).unwrap();
+        let down: String = serde_yaml::from_str(&command("down", &handler).unwrap()).unwrap();
+        let suspend: String = serde_yaml::from_str(&command("suspend", &handler).unwrap()).unwrap();
+
+        assert_eq!(up, "up");
+        assert_eq!(resume, "up");
+        assert_eq!(down, "down");
+        assert_eq!(suspend, "suspend");
+    }
+
+    #[test]
     fn status_command_reuses_info_handler() {
         struct StatusHandler;
 
@@ -390,6 +411,7 @@ mod tests {
                 Ok(Info {
                     name: "status-ok".to_string(),
                     runtime_name: String::new(),
+                    runtime_status: String::new(),
                     restart_required: false,
                     device_id: String::new(),
                     virtual_ip: String::new(),
@@ -442,6 +464,9 @@ mod tests {
                 Err(io::Error::other("unused"))
             }
             fn resume_runtime(&self) -> io::Result<String> {
+                Err(io::Error::other("unused"))
+            }
+            fn down_runtime(&self) -> io::Result<String> {
                 Err(io::Error::other("unused"))
             }
             fn suspend_runtime(&self) -> io::Result<String> {
@@ -507,6 +532,9 @@ mod tests {
             Err(io::Error::other("unused"))
         }
         fn resume_runtime(&self) -> io::Result<String> {
+            Err(io::Error::other("unused"))
+        }
+        fn down_runtime(&self) -> io::Result<String> {
             Err(io::Error::other("unused"))
         }
         fn suspend_runtime(&self) -> io::Result<String> {

@@ -364,6 +364,7 @@ pub fn command_info(sdl: &Sdl) -> Info {
     Info {
         name,
         runtime_name,
+        runtime_status: runtime_status_label(&service_state),
         restart_required,
         device_id: config.device_id.clone(),
         virtual_ip,
@@ -386,6 +387,20 @@ pub fn command_info(sdl: &Sdl) -> Info {
         ipv6_addr,
         port_mapping_list,
         udp_listen_addr,
+    }
+}
+
+pub(crate) fn runtime_status_label(service_state: &service_state::LocalServiceState) -> String {
+    if service_state.runtime_starting {
+        "starting".to_string()
+    } else if service_state.runtime_running {
+        if service_state.runtime_suspended {
+            "suspended".to_string()
+        } else {
+            "running".to_string()
+        }
+    } else {
+        "stopped".to_string()
     }
 }
 

@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::config::get_device_id;
@@ -64,9 +64,21 @@ pub struct FileConfig {
 pub struct ExitNodeFileConfig {
     pub enabled: bool,
     pub egress_interface: Option<String>,
+    pub client_active: bool,
     pub selected_device_id: Option<String>,
     pub tun_name: Option<String>,
     pub route_excludes: Vec<String>,
+    pub applied_route_excludes: Vec<String>,
+    pub original_dns: Vec<OriginalDnsServiceFileConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct OriginalDnsServiceFileConfig {
+    pub service: String,
+    pub restore_servers: Vec<String>,
+    pub restore_metric: Option<u32>,
+    pub restore_automatic_metric: Option<bool>,
 }
 
 impl Default for FileConfig {
@@ -210,6 +222,10 @@ fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
     };
     if let serde_yaml::Value::Mapping(mapping) = &mut conf_value {
         mapping.remove(serde_yaml::Value::String("cmd".to_string()));
+        mapping.remove(serde_yaml::Value::String("in_ips".to_string()));
+        mapping.remove(serde_yaml::Value::String("out_ips".to_string()));
+        mapping.remove(serde_yaml::Value::String("external_route".to_string()));
+        mapping.remove(serde_yaml::Value::String("externalroute".to_string()));
         if let Some(version) = mapping.get(serde_yaml::Value::String("config_version".to_string()))
         {
             let version = version
@@ -248,14 +264,20 @@ pub fn read_config(file_path: &str) -> anyhow::Result<(Config, FileConfig)> {
     Ok((config, file_conf))
 }
 
-pub fn read_config_from_path(path: &Path) -> anyhow::Result<(Config, FileConfig)> {
-    read_config(
-        path.to_str()
-            .ok_or_else(|| anyhow!("invalid config path"))?,
-    )
+pub fn read_file_config(file_path: &str) -> anyhow::Result<FileConfig> {
+    let conf = std::fs::read_to_string(file_path)?;
+    parse_config_str(&conf)
 }
 
 pub fn read_saved_config() -> anyhow::Result<Option<(Config, FileConfig)>> {
+    let Some(file_conf) = read_saved_file_config()? else {
+        return Ok(None);
+    };
+    let config = file_conf.clone().into_runtime_config()?;
+    Ok(Some((config, file_conf)))
+}
+
+pub fn read_saved_file_config() -> anyhow::Result<Option<FileConfig>> {
     let path = saved_config_path()?;
     if !path.exists() {
         return Ok(None);
@@ -273,23 +295,24 @@ pub fn read_saved_config() -> anyhow::Result<Option<(Config, FileConfig)>> {
         if user_id.is_empty() {
             return Err(anyhow!("active_user_id cannot be empty"));
         }
-        let mut file_conf = match read_user_config(user_id)? {
-            Some((_, saved)) => saved,
+        let mut file_conf = match read_user_file_config(user_id)? {
+            Some(saved) => saved,
             None => FileConfig::default(),
         };
         file_conf.user_id = Some(user_id.to_string());
         write_user_config(user_id, &file_conf)?;
-        let config = file_conf.clone().into_runtime_config()?;
-        return Ok(Some((config, file_conf)));
+        return Ok(Some(file_conf));
     }
 
-    let (_, file_conf) = read_config_from_path(&path)?;
+    let file_conf = read_file_config(
+        path.to_str()
+            .ok_or_else(|| anyhow!("invalid config path"))?,
+    )?;
     if let Some(user_id) = file_conf.user_id.as_deref() {
         write_user_config(user_id, &file_conf)?;
         write_active_user_id(user_id)?;
     }
-    let config = file_conf.clone().into_runtime_config()?;
-    Ok(Some((config, file_conf)))
+    Ok(Some(file_conf))
 }
 
 pub fn write_active_user_id(user_id: &str) -> anyhow::Result<()> {
@@ -322,11 +345,23 @@ pub fn write_saved_config(file_conf: &FileConfig) -> anyhow::Result<()> {
 }
 
 pub fn read_user_config(user_id: &str) -> anyhow::Result<Option<(Config, FileConfig)>> {
+    let Some(file_conf) = read_user_file_config(user_id)? else {
+        return Ok(None);
+    };
+    let config = file_conf.clone().into_runtime_config()?;
+    Ok(Some((config, file_conf)))
+}
+
+pub fn read_user_file_config(user_id: &str) -> anyhow::Result<Option<FileConfig>> {
     let path = user_config_path(user_id)?;
     if !path.exists() {
         return Ok(None);
     }
-    read_config_from_path(&path).map(Some)
+    read_file_config(
+        path.to_str()
+            .ok_or_else(|| anyhow!("invalid config path"))?,
+    )
+    .map(Some)
 }
 
 pub fn write_user_config(user_id: &str, file_conf: &FileConfig) -> anyhow::Result<()> {
@@ -510,6 +545,28 @@ server_address: https://control.middlescale.net/control
             read_config(path.to_str().unwrap()).expect("config without ports should parse");
         assert_eq!(file_conf.ports, Some(vec![DEFAULT_CLIENT_LISTEN_PORT]));
         assert_eq!(config.ports, Some(vec![DEFAULT_CLIENT_LISTEN_PORT]));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_ignores_removed_legacy_route_fields() {
+        let path = write_temp_config(
+            r#"
+config_version: 2
+group: default.ms.net
+device_id: dev-legacy-routes
+name: legacy-routes-node
+server_address: https://control.middlescale.net/control
+in_ips: []
+out_ips: []
+external_route: []
+externalroute: []
+"#,
+            "legacy-route-fields",
+        );
+        let (_, file_conf) = read_config(path.to_str().unwrap())
+            .expect("config with removed legacy route fields should parse");
+        assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
         let _ = fs::remove_file(path);
     }
 

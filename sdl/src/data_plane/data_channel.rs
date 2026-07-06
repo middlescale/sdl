@@ -117,7 +117,7 @@ impl DataChannel {
         let runtime = self.runtime()?;
         let request_id = runtime.remember_dns_query(client_ip, dns_server_ip, client_port);
         let query_payload =
-            match crate::util::dns_tunnel::build_dns_query_payload(request_id, payload) {
+            match crate::net::dns::tunnel::build_dns_query_payload(request_id, payload) {
                 Ok(payload) => payload,
                 Err(err) => {
                     runtime.forget_dns_query(request_id);

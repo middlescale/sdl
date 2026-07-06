@@ -5,6 +5,7 @@ use std::io::Write;
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct LocalServiceState {
+    pub runtime_starting: bool,
     pub runtime_running: bool,
     pub runtime_suspended: bool,
     pub auth_pending: bool,

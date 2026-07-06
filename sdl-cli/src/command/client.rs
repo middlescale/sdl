@@ -15,6 +15,9 @@ impl CommandClient {
 }
 
 impl CommandClient {
+    pub fn up(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"up")
+    }
     pub fn resume(&mut self) -> io::Result<String> {
         self.send_string_cmd(b"resume")
     }
@@ -46,7 +49,7 @@ impl CommandClient {
     pub fn exit_node_enable(
         &mut self,
         egress_interface: &str,
-        tun_name: &str,
+        tun_name: Option<&str>,
     ) -> io::Result<String> {
         let cmd = serde_json::json!({
             "egress_interface": egress_interface,
@@ -55,7 +58,7 @@ impl CommandClient {
         let cmd = format!("exit_node:enable:{}", serde_json::to_string(&cmd).unwrap());
         self.send_string_cmd(cmd.as_bytes())
     }
-    pub fn exit_node_disable(&mut self, tun_name: &str) -> io::Result<String> {
+    pub fn exit_node_disable(&mut self, tun_name: Option<&str>) -> io::Result<String> {
         let cmd = serde_json::json!({
             "tun_name": tun_name,
         });
@@ -65,7 +68,7 @@ impl CommandClient {
     pub fn exit_node_use(
         &mut self,
         target: &str,
-        tun_name: &str,
+        tun_name: Option<&str>,
         excludes: &[String],
     ) -> io::Result<String> {
         let cmd = serde_json::json!({
@@ -76,7 +79,7 @@ impl CommandClient {
         let cmd = format!("exit_node:use:{}", serde_json::to_string(&cmd).unwrap());
         self.send_string_cmd(cmd.as_bytes())
     }
-    pub fn exit_node_clear(&mut self, tun_name: &str) -> io::Result<String> {
+    pub fn exit_node_clear(&mut self, tun_name: Option<&str>) -> io::Result<String> {
         let cmd = serde_json::json!({
             "tun_name": tun_name,
         });
@@ -85,6 +88,9 @@ impl CommandClient {
     }
     pub fn traffic(&mut self) -> io::Result<TrafficSummary> {
         self.send_cmd(b"traffic")
+    }
+    pub fn down(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"down")
     }
     pub fn channel_change(&mut self, input: &str) -> io::Result<String> {
         let cmd = format!("channel_change:{}", input.trim());

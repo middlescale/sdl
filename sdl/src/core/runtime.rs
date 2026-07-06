@@ -68,6 +68,17 @@ pub struct PendingDnsQuery {
     pub created_at_ms: u64,
 }
 
+impl PendingDnsQuery {
+    pub fn new(client_ip: Ipv4Addr, dns_server_ip: Ipv4Addr, client_port: u16) -> Self {
+        Self {
+            client_ip,
+            dns_server_ip,
+            client_port,
+            created_at_ms: crate::handle::now_time() as u64,
+        }
+    }
+}
+
 pub struct PendingRenameRequest {
     pub responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
     pub created_at_ms: u64,
@@ -225,12 +236,7 @@ impl SdlRuntime {
         pending.retain(|_, query| now_ms.saturating_sub(query.created_at_ms) < 30_000);
         pending.insert(
             request_id,
-            PendingDnsQuery {
-                client_ip,
-                dns_server_ip,
-                client_port,
-                created_at_ms: now_ms,
-            },
+            PendingDnsQuery::new(client_ip, dns_server_ip, client_port),
         );
         request_id
     }
@@ -241,6 +247,15 @@ impl SdlRuntime {
 
     pub fn take_dns_query(&self, request_id: u64) -> Option<PendingDnsQuery> {
         self.pending_dns_queries.lock().remove(&request_id)
+    }
+
+    pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
+        self.dns_profile.read().as_ref().and_then(|profile| {
+            profile
+                .servers
+                .iter()
+                .find_map(|server| server.parse::<Ipv4Addr>().ok())
+        })
     }
 
     pub fn remember_rename_request(
@@ -336,18 +351,15 @@ impl SdlRuntime {
         );
         let device = create_device(device_config, callback).map_err(|e| anyhow!("{}", e))?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-        {
-            let tun_info = crate::handle::callback::DeviceInfo::new(
-                device.name().unwrap_or("unknown".into()),
-                "".into(),
-            );
-            callback.create_tun(tun_info);
-        }
-        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
         self.tun_device_helper.start(device)?;
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+        {
+            let tun_info = crate::handle::callback::DeviceInfo::new(tun_name, "".into());
+            callback.create_tun(tun_info);
+        }
         Ok(())
     }
 
@@ -359,7 +371,7 @@ impl SdlRuntime {
             let interface_name = self.applied_dns_interface.lock().take();
             let applied_profile = self.applied_dns_profile.lock().take();
             if let Some(interface_name) = interface_name {
-                if let Err(err) = crate::util::linux_dns::revert_split_dns(
+                if let Err(err) = crate::net::dns::linux::revert_split_dns(
                     &interface_name,
                     applied_profile.as_ref(),
                 ) {
@@ -376,7 +388,7 @@ impl SdlRuntime {
             let _ = self.last_dns_interface.lock().take();
             let _ = self.applied_dns_interface.lock().take();
             let applied_profile = self.applied_dns_profile.lock().take();
-            if let Err(err) = crate::util::macos_dns::revert_split_dns(applied_profile.as_ref()) {
+            if let Err(err) = crate::net::dns::macos::revert_split_dns(applied_profile.as_ref()) {
                 log::warn!(
                     "failed to revert split DNS profile {:?}: {:?}",
                     applied_profile,
@@ -389,7 +401,7 @@ impl SdlRuntime {
             let _ = self.last_dns_interface.lock().take();
             let _ = self.applied_dns_interface.lock().take();
             let applied_profile = self.applied_dns_profile.lock().take();
-            if let Err(err) = crate::util::windows_dns::revert_split_dns(applied_profile.as_ref()) {
+            if let Err(err) = crate::net::dns::windows::revert_split_dns(applied_profile.as_ref()) {
                 log::warn!(
                     "failed to revert split DNS profile {:?}: {:?}",
                     applied_profile,
@@ -410,7 +422,7 @@ impl SdlRuntime {
         }
         *self.last_dns_interface.lock() = Some(interface_name.to_string());
         let previous_profile = self.applied_dns_profile.lock().clone();
-        match crate::util::linux_dns::apply_split_dns(
+        match crate::net::dns::linux::apply_split_dns(
             interface_name,
             previous_profile.as_ref(),
             &profile,
@@ -444,7 +456,7 @@ impl SdlRuntime {
         }
         *self.last_dns_interface.lock() = Some(interface_name.to_string());
         let previous_profile = self.applied_dns_profile.lock().clone();
-        match crate::util::macos_dns::apply_split_dns(
+        match crate::net::dns::macos::apply_split_dns(
             interface_name,
             previous_profile.as_ref(),
             &profile,
@@ -478,7 +490,7 @@ impl SdlRuntime {
         }
         *self.last_dns_interface.lock() = Some(interface_name.to_string());
         let previous_profile = self.applied_dns_profile.lock().clone();
-        match crate::util::windows_dns::apply_split_dns(
+        match crate::net::dns::windows::apply_split_dns(
             interface_name,
             previous_profile.as_ref(),
             &profile,

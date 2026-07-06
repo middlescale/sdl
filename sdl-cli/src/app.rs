@@ -8,6 +8,7 @@ use crate::command::server::{
 use crate::command::service_state::{read_service_state, write_service_state, LocalServiceState};
 use crate::config::{
     read_user_config, save_current_user_config, write_saved_config, write_user_config, FileConfig,
+    OriginalDnsServiceFileConfig,
 };
 use crate::service_lock::ServiceInstanceGuard;
 use anyhow::Context;
@@ -16,6 +17,7 @@ use sdl::core::{Config, ExitNodeLocalState, RenameRequestOutcome, Sdl};
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::net::exit_node;
 use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
+use std::collections::BTreeSet;
 use std::io;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex, Weak};
@@ -27,6 +29,7 @@ struct ServiceManager {
     config: Mutex<Config>,
     saved_config: Mutex<FileConfig>,
     runtime: Mutex<Option<Arc<Sdl>>>,
+    runtime_start_lock: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -37,7 +40,224 @@ pub(crate) struct RunningService {
     _service_lock: ServiceInstanceGuard,
 }
 
+struct ExitNodeClientSelection {
+    peer_name: String,
+    peer_device_id: String,
+    tun_name: String,
+    route_excludes: Vec<String>,
+    applied_route_excludes: Vec<String>,
+    dns_service_ip: Ipv4Addr,
+}
+
 impl ServiceManager {
+    fn saved_client_dns_state(saved_config: &FileConfig) -> Option<exit_node::ClientDnsState> {
+        if saved_config.exit_node.original_dns.is_empty() {
+            return None;
+        }
+        Some(
+            saved_config
+                .exit_node
+                .original_dns
+                .iter()
+                .map(|service| exit_node::ClientDnsServiceState {
+                    service: service.service.clone(),
+                    restore_servers: service.restore_servers.clone(),
+                    restore_metric: service.restore_metric,
+                    restore_automatic_metric: service.restore_automatic_metric,
+                })
+                .collect(),
+        )
+    }
+
+    fn file_client_dns_state(
+        state: exit_node::ClientDnsState,
+    ) -> Vec<OriginalDnsServiceFileConfig> {
+        state
+            .into_iter()
+            .map(|service| OriginalDnsServiceFileConfig {
+                service: service.service,
+                restore_servers: service.restore_servers,
+                restore_metric: service.restore_metric,
+                restore_automatic_metric: service.restore_automatic_metric,
+            })
+            .collect()
+    }
+
+    fn merge_route_exclude_lists(left: &[String], right: &[String]) -> Vec<String> {
+        left.iter()
+            .chain(right.iter())
+            .filter_map(|value| {
+                let value = value.trim();
+                if value.is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    fn exit_node_dns_service_ip(runtime: &Sdl) -> anyhow::Result<Ipv4Addr> {
+        runtime.primary_dns_service_ip().ok_or_else(|| {
+            anyhow::anyhow!("SDL DNS service IP is not available; reconnect to control and retry")
+        })
+    }
+
+    fn snapshot_exit_node_client_state(&self) -> exit_node::ClientRouteDnsSnapshot {
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        exit_node::ClientRouteDnsSnapshot {
+            client_active: saved_config.exit_node.client_active,
+            tun_name: Self::saved_exit_node_tun_name(&saved_config),
+            applied_route_excludes: saved_config.exit_node.applied_route_excludes.clone(),
+            dns_state: Self::saved_client_dns_state(&saved_config),
+        }
+    }
+
+    fn build_exit_node_client_selection(
+        &self,
+        runtime: &Sdl,
+        peer_name: String,
+        peer_device_id: String,
+        tun_name: String,
+        route_excludes: &[String],
+    ) -> anyhow::Result<ExitNodeClientSelection> {
+        Ok(ExitNodeClientSelection {
+            peer_name,
+            peer_device_id: peer_device_id.clone(),
+            tun_name,
+            route_excludes: route_excludes.to_vec(),
+            applied_route_excludes: exit_node::merge_excludes(
+                runtime,
+                Some(&peer_device_id),
+                route_excludes,
+            )?,
+            dns_service_ip: Self::exit_node_dns_service_ip(runtime)?,
+        })
+    }
+
+    fn mark_exit_node_client_inactive_for_cleanup(
+        &self,
+        runtime: &Sdl,
+        previous: &exit_node::ClientRouteDnsSnapshot,
+        next: &ExitNodeClientSelection,
+        apply_err: &exit_node::ClientRouteDnsApplyError,
+    ) {
+        let mut saved_config = self.saved_config.lock().unwrap();
+        saved_config.exit_node.client_active = false;
+        saved_config.exit_node.applied_route_excludes = Self::merge_route_exclude_lists(
+            &previous.applied_route_excludes,
+            &next.applied_route_excludes,
+        );
+        saved_config.exit_node.original_dns = previous
+            .dns_state
+            .clone()
+            .map(Self::file_client_dns_state)
+            .unwrap_or_default();
+        drop(saved_config);
+        self.persist_saved_config();
+        runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+        log::warn!("{apply_err}; exit-node was marked inactive for later cleanup");
+    }
+
+    fn apply_exit_node_client_selection(
+        &self,
+        runtime: &Sdl,
+        previous: &exit_node::ClientRouteDnsSnapshot,
+        next: &ExitNodeClientSelection,
+    ) -> anyhow::Result<exit_node::ClientRouteDnsApplyResult> {
+        let route_dns_selection = exit_node::ClientRouteDnsSelection {
+            tun_name: next.tun_name.clone(),
+            applied_route_excludes: next.applied_route_excludes.clone(),
+            dns_service_ip: next.dns_service_ip,
+        };
+        match exit_node::apply_client_route_dns_selection(previous, &route_dns_selection) {
+            Ok(result) => {
+                runtime.set_exit_node_state(ExitNodeLocalState {
+                    enabled: false,
+                    local_ready: false,
+                    egress_interface: None,
+                    selected_device_id: Some(next.peer_device_id.clone()),
+                });
+                Ok(result)
+            }
+            Err(err) => {
+                if err.rollback_failed() {
+                    self.mark_exit_node_client_inactive_for_cleanup(runtime, previous, next, &err);
+                } else {
+                    runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+                }
+                Err(anyhow::Error::new(err))
+            }
+        }
+    }
+
+    fn persist_exit_node_client_selection(
+        &self,
+        selection: &ExitNodeClientSelection,
+        dns_state: Option<exit_node::ClientDnsState>,
+    ) {
+        let mut saved_config = self.saved_config.lock().unwrap();
+        saved_config.exit_node.client_active = true;
+        saved_config.exit_node.selected_device_id = Some(selection.peer_device_id.clone());
+        saved_config.exit_node.tun_name = Some(selection.tun_name.clone());
+        saved_config.exit_node.route_excludes = selection.route_excludes.clone();
+        saved_config.exit_node.applied_route_excludes = selection.applied_route_excludes.clone();
+        saved_config.exit_node.original_dns = dns_state
+            .map(Self::file_client_dns_state)
+            .unwrap_or_default();
+        drop(saved_config);
+        self.persist_saved_config();
+    }
+
+    fn reapply_exit_node_client_routes(&self) -> anyhow::Result<Option<String>> {
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        if !saved_config.exit_node.client_active {
+            return Ok(None);
+        }
+        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.clone() else {
+            return Ok(None);
+        };
+        let runtime = self.current_runtime()?;
+        let tun_name = self.resolve_exit_node_tun_name(None)?;
+        let peer = runtime
+            .device_list()
+            .into_iter()
+            .find(|peer| peer.device_id == selected_device_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "selected exit node {} is not in current device list",
+                    selected_device_id
+                )
+            })?;
+        if !peer.exit_node_usable {
+            anyhow::bail!(
+                "selected exit node '{}' is not currently usable; advertised={}, approved={}, online={}",
+                peer.device_id,
+                peer.exit_node_advertised,
+                peer.exit_node_approved,
+                peer.status.is_online()
+            );
+        }
+        let previous = self.snapshot_exit_node_client_state();
+        let selection = self.build_exit_node_client_selection(
+            &runtime,
+            peer.name,
+            peer.device_id,
+            tun_name,
+            &saved_config.exit_node.route_excludes,
+        )?;
+        let apply_result =
+            self.apply_exit_node_client_selection(&runtime, &previous, &selection)?;
+        self.persist_exit_node_client_selection(&selection, apply_result.dns_state);
+        runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+        Ok(Some(format!(
+            "exit-node client routes reapplied after TUN recreate: {}; {}",
+            apply_result.route_note, apply_result.dns_note
+        )))
+    }
+
     fn persist_device_name(self: &Arc<Self>, applied_name: String) {
         {
             let mut config = self.config.lock().unwrap();
@@ -97,6 +317,7 @@ impl ServiceManager {
             config: Mutex::new(config),
             saved_config: Mutex::new(saved_config),
             runtime: Mutex::new(None),
+            runtime_start_lock: Mutex::new(()),
         }
     }
 
@@ -127,7 +348,7 @@ impl ServiceManager {
         match runtime {
             Some(vnt) if !vnt.is_stopped() => Ok(vnt),
             _ => Err(io::Error::other(
-                "service runtime is unavailable, run `sdl resume` or restart `sdl-service`",
+                "service runtime is unavailable, run `sdl up` or restart `sdl-service`",
             )),
         }
     }
@@ -148,6 +369,7 @@ impl ServiceManager {
         Info {
             name: config.name,
             runtime_name: String::new(),
+            runtime_status: crate::command::runtime_status_label(&state),
             restart_required: false,
             device_id: config.device_id.clone(),
             virtual_ip: String::new(),
@@ -177,25 +399,72 @@ impl ServiceManager {
         if let Some(runtime) = self.runtime.lock().unwrap().clone() {
             if !runtime.is_stopped() {
                 self.mutate_state(|state| {
+                    state.runtime_starting = false;
                     state.runtime_running = true;
                     state.runtime_suspended = runtime.is_suspended();
                 });
                 return Ok(runtime);
             }
         }
-        let config = self.current_config();
-        let callback = ServiceCallback::new(Arc::downgrade(self));
-        let vnt = Arc::new(Sdl::new(config, callback)?);
-        if let Err(err) = self.reapply_exit_node_server_state() {
-            log::warn!("failed to reapply exit-node system state: {err:?}");
+        let _start_guard = self.runtime_start_lock.lock().unwrap();
+        if let Some(runtime) = self.runtime.lock().unwrap().clone() {
+            if !runtime.is_stopped() {
+                self.mutate_state(|state| {
+                    state.runtime_starting = false;
+                    state.runtime_running = true;
+                    state.runtime_suspended = runtime.is_suspended();
+                });
+                return Ok(runtime);
+            }
         }
-        vnt.set_exit_node_state(self.exit_node_state_from_saved_config());
-        *self.runtime.lock().unwrap() = Some(vnt.clone());
         self.mutate_state(|state| {
-            state.runtime_running = true;
+            state.runtime_starting = true;
+            state.runtime_running = false;
             state.runtime_suspended = false;
+            state.last_error = None;
         });
-        Ok(vnt)
+        let result = (|| {
+            let config = self.current_config();
+            let callback = ServiceCallback::new(Arc::downgrade(self));
+            match self.cleanup_exit_node_client_state() {
+                Ok(Some(note)) => log::info!(
+                    "reset exit-node client state before runtime start: {}",
+                    note
+                ),
+                Ok(None) => {}
+                Err(err) => log::warn!(
+                    "failed to reset exit-node client state before runtime start: {:?}",
+                    err
+                ),
+            }
+            let sdl = Arc::new(Sdl::new(config, callback)?);
+            if let Err(err) = self.reapply_exit_node_server_state() {
+                log::warn!("failed to reapply exit-node system state: {err:?}");
+            }
+            sdl.set_exit_node_state(self.exit_node_state_from_saved_config());
+            *self.runtime.lock().unwrap() = Some(sdl.clone());
+            Ok::<Arc<Sdl>, anyhow::Error>(sdl)
+        })();
+        match result {
+            Ok(sdl) => {
+                self.mutate_state(|state| {
+                    state.runtime_starting = false;
+                    state.runtime_running = true;
+                    state.runtime_suspended = false;
+                });
+                Ok(sdl)
+            }
+            Err(err) => {
+                let message = format!("{err:?}");
+                self.mutate_state(|state| {
+                    state.runtime_starting = false;
+                    state.runtime_running = false;
+                    state.runtime_suspended = false;
+                    state.last_error = Some(message);
+                });
+                Err(err)
+            }
+        }
     }
 
     fn exit_node_state_from_saved_config(&self) -> ExitNodeLocalState {
@@ -205,7 +474,11 @@ impl ServiceManager {
             enabled,
             local_ready: exit_node::local_ready(enabled, &saved_config.exit_node.egress_interface),
             egress_interface: saved_config.exit_node.egress_interface.clone(),
-            selected_device_id: saved_config.exit_node.selected_device_id.clone(),
+            selected_device_id: saved_config
+                .exit_node
+                .client_active
+                .then(|| saved_config.exit_node.selected_device_id.clone())
+                .flatten(),
         }
     }
 
@@ -217,6 +490,22 @@ impl ServiceManager {
             .unwrap_or("sdl-tun")
             .trim()
             .to_string()
+    }
+
+    fn resolve_exit_node_tun_name(&self, requested: Option<&str>) -> anyhow::Result<String> {
+        if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+            return Ok(requested.to_string());
+        }
+        if let Ok(runtime) = self.current_runtime() {
+            if let Some(name) = runtime
+                .tun_device_name()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            {
+                return Ok(name);
+            }
+        }
+        Ok("sdl-tun".to_string())
     }
 
     fn reapply_exit_node_server_state(&self) -> anyhow::Result<()> {
@@ -237,30 +526,29 @@ impl ServiceManager {
         Ok(())
     }
 
-    fn reapply_exit_node_client_state(&self) -> anyhow::Result<()> {
-        let runtime = self.current_runtime()?;
+    fn cleanup_exit_node_client_state(&self) -> anyhow::Result<Option<String>> {
         let saved_config = self.saved_config.lock().unwrap().clone();
-        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.as_deref() else {
-            return Ok(());
-        };
+        if !saved_config.exit_node.client_active
+            && saved_config.exit_node.applied_route_excludes.is_empty()
+            && saved_config.exit_node.original_dns.is_empty()
+        {
+            return Ok(None);
+        }
         let tun_name = Self::saved_exit_node_tun_name(&saved_config);
-        let excludes = exit_node::merge_excludes(
-            &runtime,
-            Some(selected_device_id),
-            &saved_config.exit_node.route_excludes,
+        let dns_state = Self::saved_client_dns_state(&saved_config);
+        let dns_result = exit_node::teardown_client_dns(dns_state.as_ref())?;
+        let setup_result = exit_node::teardown_client_routing(
+            &tun_name,
+            &saved_config.exit_node.applied_route_excludes,
         )?;
-        exit_node::setup_client_routing(&tun_name, &excludes)?;
-        runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
-        Ok(())
-    }
-
-    fn request_exit_node_client_state_reapply(self: &Arc<Self>) {
-        let manager = self.clone();
-        std::thread::spawn(move || {
-            if let Err(err) = manager.reapply_exit_node_client_state() {
-                log::warn!("failed to reapply exit-node client routing: {err:?}");
-            }
-        });
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.client_active = false;
+            saved_config.exit_node.applied_route_excludes.clear();
+            saved_config.exit_node.original_dns.clear();
+        }
+        self.persist_saved_config();
+        Ok(Some(format!("{}; {}", setup_result, dns_result)))
     }
 
     fn exit_node_status(&self) -> ExitNodeStatus {
@@ -285,6 +573,12 @@ impl ServiceManager {
             .and_then(|state| state.egress_interface.clone())
             .or_else(|| saved.exit_node.egress_interface.clone())
             .unwrap_or_default();
+        let client_active = saved.exit_node.client_active
+            && runtime_state
+                .as_ref()
+                .and_then(|state| state.selected_device_id.as_ref())
+                .map(|value| !value.is_empty())
+                .unwrap_or(false);
         let selected_device_id = runtime_state
             .as_ref()
             .and_then(|state| state.selected_device_id.clone())
@@ -306,12 +600,16 @@ impl ServiceManager {
                 }
             }
         }
-        let note = if enabled && local_ready {
+        let note = if client_active && selected_usable {
+            "using selected exit node".to_string()
+        } else if !selected_device_id.is_empty() && selected_usable {
+            "last selected exit node is usable but not active; run `sdl exit-node use <target>` to enable it".to_string()
+        } else if !selected_device_id.is_empty() {
+            "last selected exit node is not currently usable".to_string()
+        } else if enabled && local_ready {
             "advertising exit-node capability".to_string()
         } else if enabled {
             "exit-node is enabled, but this platform is not ready to advertise it".to_string()
-        } else if !selected_device_id.is_empty() && !selected_usable {
-            "selected exit node is not currently usable".to_string()
         } else {
             "exit-node is disabled".to_string()
         };
@@ -320,6 +618,7 @@ impl ServiceManager {
             advertised: enabled,
             local_ready,
             egress_interface,
+            client_active,
             selected_device_id,
             selected_name,
             selected_virtual_ip,
@@ -328,7 +627,11 @@ impl ServiceManager {
         }
     }
 
-    fn enable_exit_node(&self, egress_interface: &str, tun_name: &str) -> anyhow::Result<String> {
+    fn enable_exit_node(
+        &self,
+        egress_interface: &str,
+        tun_name: Option<&str>,
+    ) -> anyhow::Result<String> {
         let egress_interface = egress_interface.trim();
         if egress_interface.is_empty() {
             anyhow::bail!("egress_interface cannot be empty");
@@ -338,13 +641,14 @@ impl ServiceManager {
         }
         {
             let saved_config = self.saved_config.lock().unwrap();
-            if saved_config.exit_node.selected_device_id.is_some() {
+            if saved_config.exit_node.client_active {
                 anyhow::bail!(
                     "cannot enable this node as an exit node while it is using another exit node; run `sdl exit-node clear` first"
                 );
             }
         }
-        let setup_result = exit_node::setup_server_routing(egress_interface, tun_name)?;
+        let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
+        let setup_result = exit_node::setup_server_routing(egress_interface, &tun_name)?;
         {
             let mut saved_config = self.saved_config.lock().unwrap();
             saved_config.exit_node.enabled = true;
@@ -362,14 +666,15 @@ impl ServiceManager {
         ))
     }
 
-    fn disable_exit_node(&self, tun_name: &str) -> anyhow::Result<String> {
+    fn disable_exit_node(&self, tun_name: Option<&str>) -> anyhow::Result<String> {
+        let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
         let egress_interface = {
             let saved_config = self.saved_config.lock().unwrap();
             saved_config.exit_node.egress_interface.clone()
         };
         let setup_result = match egress_interface.as_deref() {
             Some(egress_interface) if !egress_interface.trim().is_empty() => {
-                exit_node::teardown_server_routing(egress_interface.trim(), tun_name)?
+                exit_node::teardown_server_routing(egress_interface.trim(), &tun_name)?
             }
             _ => "exit-node routing was not configured".to_string(),
         };
@@ -387,7 +692,7 @@ impl ServiceManager {
     fn use_exit_node(
         &self,
         target: &str,
-        tun_name: &str,
+        tun_name: Option<&str>,
         excludes: &[String],
     ) -> anyhow::Result<String> {
         let target = target.trim();
@@ -402,6 +707,7 @@ impl ServiceManager {
                 );
             }
         }
+        let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
         let runtime = self.current_runtime()?;
         let peers = runtime.device_list();
         let target_ip = target.parse::<Ipv4Addr>().ok();
@@ -437,36 +743,67 @@ impl ServiceManager {
                 peer.status.is_online()
             );
         }
-        let effective_excludes =
-            exit_node::merge_excludes(&runtime, Some(&peer.device_id), excludes)?;
-        let setup_result = exit_node::setup_client_routing(tun_name, &effective_excludes)?;
-        {
-            let mut saved_config = self.saved_config.lock().unwrap();
-            saved_config.exit_node.selected_device_id = Some(peer.device_id.clone());
-            saved_config.exit_node.tun_name = Some(tun_name.to_string());
-            saved_config.exit_node.route_excludes = excludes.to_vec();
-        }
-        self.persist_saved_config();
-        let state = self.exit_node_state_from_saved_config();
-        runtime.set_exit_node_state(state);
+        let previous = self.snapshot_exit_node_client_state();
+        let selection = self.build_exit_node_client_selection(
+            &runtime,
+            peer.name,
+            peer.device_id,
+            tun_name,
+            excludes,
+        )?;
+        let apply_result =
+            self.apply_exit_node_client_selection(&runtime, &previous, &selection)?;
+        self.persist_exit_node_client_selection(&selection, apply_result.dns_state);
+        runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
         Ok(format!(
-            "exit-node selection changed to {} ({}); {}",
-            peer.name, peer.device_id, setup_result
+            "exit-node selection changed to {} ({}); {}; {}",
+            selection.peer_name,
+            selection.peer_device_id,
+            apply_result.route_note,
+            apply_result.dns_note
         ))
     }
 
-    fn clear_exit_node(&self, tun_name: &str) -> anyhow::Result<String> {
-        let setup_result = exit_node::teardown_client_routing(tun_name)?;
+    fn clear_exit_node(&self, tun_name: Option<&str>) -> anyhow::Result<String> {
+        let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        let dns_state = Self::saved_client_dns_state(&saved_config);
+        let current_effective_excludes = if let Some(selected_device_id) =
+            saved_config.exit_node.selected_device_id.as_deref()
+        {
+            match self.current_runtime() {
+                Ok(runtime) => exit_node::merge_excludes(
+                    &runtime,
+                    Some(selected_device_id),
+                    &saved_config.exit_node.route_excludes,
+                )?,
+                Err(_) => saved_config.exit_node.route_excludes.clone(),
+            }
+        } else {
+            saved_config.exit_node.route_excludes.clone()
+        };
+        let effective_excludes = Self::merge_route_exclude_lists(
+            &saved_config.exit_node.applied_route_excludes,
+            &current_effective_excludes,
+        );
+        let dns_result = exit_node::teardown_client_dns(dns_state.as_ref())?;
+        let setup_result = exit_node::teardown_client_routing(&tun_name, &effective_excludes)?;
         {
             let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.exit_node.client_active = false;
             saved_config.exit_node.selected_device_id = None;
             saved_config.exit_node.route_excludes.clear();
+            saved_config.exit_node.applied_route_excludes.clear();
+            saved_config.exit_node.original_dns.clear();
         }
         self.persist_saved_config();
         if let Ok(runtime) = self.current_runtime() {
             runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
         }
-        Ok(format!("exit-node selection cleared; {}", setup_result))
+        Ok(format!(
+            "exit-node selection cleared; {}; {}",
+            setup_result, dns_result
+        ))
     }
 
     fn resume_service_runtime(self: &Arc<Self>) -> anyhow::Result<String> {
@@ -474,6 +811,7 @@ impl ServiceManager {
         if runtime.is_suspended() {
             runtime.resume()?;
             self.mutate_state(|state| {
+                state.runtime_starting = false;
                 state.runtime_running = true;
                 state.runtime_suspended = false;
             });
@@ -481,6 +819,7 @@ impl ServiceManager {
             Ok("service resumed".to_string())
         } else {
             self.mutate_state(|state| {
+                state.runtime_starting = false;
                 state.runtime_running = true;
                 state.runtime_suspended = false;
             });
@@ -493,6 +832,7 @@ impl ServiceManager {
         let runtime = self.current_runtime()?;
         if runtime.is_suspended() {
             self.mutate_state(|state| {
+                state.runtime_starting = false;
                 state.runtime_running = true;
                 state.runtime_suspended = true;
             });
@@ -500,6 +840,7 @@ impl ServiceManager {
         }
         runtime.suspend()?;
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = true;
             state.runtime_suspended = true;
         });
@@ -507,17 +848,29 @@ impl ServiceManager {
     }
 
     fn stop_service_runtime(&self) -> anyhow::Result<String> {
+        match self.cleanup_exit_node_client_state() {
+            Ok(Some(note)) => {
+                log::info!("reset exit-node client state before runtime stop: {}", note)
+            }
+            Ok(None) => {}
+            Err(err) => log::warn!(
+                "failed to reset exit-node client state before runtime stop: {:?}",
+                err
+            ),
+        }
         let runtime = self.runtime.lock().unwrap().take();
         if let Some(vnt) = runtime {
             vnt.stop();
             let _ = vnt.wait_timeout(Duration::from_secs(10));
             self.mutate_state(|state| {
+                state.runtime_starting = false;
                 state.runtime_running = false;
                 state.runtime_suspended = false;
             });
             Ok("service stopped".to_string())
         } else {
             self.mutate_state(|state| {
+                state.runtime_starting = false;
                 state.runtime_running = false;
                 state.runtime_suspended = false;
             });
@@ -560,6 +913,7 @@ impl ServiceManager {
         }
 
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = false;
             state.runtime_suspended = false;
             state.auth_pending = true;
@@ -588,6 +942,7 @@ impl ServiceManager {
         let authenticated_group = config.auth_group.clone();
         config.auth_ticket = None;
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = false;
@@ -700,16 +1055,13 @@ impl CommandHandler for ServiceCommandHandler {
 
     fn exit_node_enable(&self, enable: ExitNodeEnableCommand) -> io::Result<String> {
         self.0
-            .enable_exit_node(
-                &enable.egress_interface,
-                enable.tun_name.as_deref().unwrap_or("sdl-tun"),
-            )
+            .enable_exit_node(&enable.egress_interface, enable.tun_name.as_deref())
             .map_err(|e| io::Error::other(format!("exit-node enable failed: {e}")))
     }
 
     fn exit_node_disable(&self, disable: ExitNodeDisableCommand) -> io::Result<String> {
         self.0
-            .disable_exit_node(disable.tun_name.as_deref().unwrap_or("sdl-tun"))
+            .disable_exit_node(disable.tun_name.as_deref())
             .map_err(|e| io::Error::other(format!("exit-node disable failed: {e:?}")))
     }
 
@@ -717,7 +1069,7 @@ impl CommandHandler for ServiceCommandHandler {
         self.0
             .use_exit_node(
                 &use_command.target,
-                use_command.tun_name.as_deref().unwrap_or("sdl-tun"),
+                use_command.tun_name.as_deref(),
                 &use_command.excludes,
             )
             .map_err(|e| io::Error::other(format!("exit-node use failed: {e}")))
@@ -725,7 +1077,7 @@ impl CommandHandler for ServiceCommandHandler {
 
     fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String> {
         self.0
-            .clear_exit_node(clear.tun_name.as_deref().unwrap_or("sdl-tun"))
+            .clear_exit_node(clear.tun_name.as_deref())
             .map_err(|e| io::Error::other(format!("exit-node clear failed: {e:?}")))
     }
 
@@ -739,7 +1091,13 @@ impl CommandHandler for ServiceCommandHandler {
     fn resume_runtime(&self) -> io::Result<String> {
         self.0
             .resume_service_runtime()
-            .map_err(|e| io::Error::other(format!("resume runtime failed: {e:?}")))
+            .map_err(|e| io::Error::other(format!("up runtime failed: {e:?}")))
+    }
+
+    fn down_runtime(&self) -> io::Result<String> {
+        self.0
+            .stop_service_runtime()
+            .map_err(|e| io::Error::other(format!("down runtime failed: {e:?}")))
     }
 
     fn suspend_runtime(&self) -> io::Result<String> {
@@ -821,6 +1179,7 @@ impl ServiceCallback {
 
     fn clear_error_state(&self) {
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = false;
@@ -858,7 +1217,14 @@ impl ServiceCallback {
 
     fn request_exit_node_client_state_reapply(&self) {
         if let Some(manager) = self.manager.upgrade() {
-            manager.request_exit_node_client_state_reapply();
+            std::thread::spawn(move || match manager.reapply_exit_node_client_routes() {
+                Ok(Some(note)) => log::info!("{}", note),
+                Ok(None) => {}
+                Err(err) => log::warn!(
+                    "failed to reapply exit-node client routes after TUN recreate: {:?}",
+                    err
+                ),
+            });
         }
     }
 }
@@ -891,14 +1257,11 @@ impl SdlCallback for ServiceCallback {
 
     fn register(&self, info: RegisterInfo) -> bool {
         self.clear_error_state();
-        self.request_exit_node_client_state_reapply();
         println!("register {}", style(info).green());
         true
     }
 
-    fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {
-        self.request_exit_node_client_state_reapply();
-    }
+    fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {}
 
     fn device_renamed(&self, new_name: String) {
         println!(
@@ -921,6 +1284,7 @@ impl SdlCallback for ServiceCallback {
             log::error!("error {:?}", info);
         }
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = true;
             state.runtime_suspended = false;
             state.auth_pending = auth_pending;
@@ -954,6 +1318,7 @@ impl SdlCallback for ServiceCallback {
 
     fn stop(&self) {
         self.mutate_state(|state| {
+            state.runtime_starting = false;
             state.runtime_running = false;
             state.runtime_suspended = false;
         });
@@ -984,6 +1349,7 @@ impl RunningService {
         );
         let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
         manager.mutate_state(|state| {
+            state.runtime_starting = true;
             state.runtime_running = false;
             state.runtime_suspended = false;
             state.auth_pending = false;
@@ -998,16 +1364,6 @@ impl RunningService {
                 println!("UDP port mapping {}->{}", addr, dest)
             }
         }
-        if let Err(e) = manager
-            .clone()
-            .resume_service_runtime()
-            .context("initial service start failed")
-        {
-            log::error!("sdl create error {:?}", e);
-            println!("error: {:?}", e);
-            return Err(1);
-        }
-
         #[cfg(feature = "command")]
         {
             let manager_c = manager.clone();
@@ -1019,6 +1375,31 @@ impl RunningService {
                     }
                 })
                 .expect("CommandServer");
+        }
+
+        {
+            let manager_c = manager.clone();
+            std::thread::Builder::new()
+                .name("RuntimeStart".into())
+                .spawn(move || {
+                    // Keep the command server alive if runtime startup fails, so
+                    // `sdl status` can surface the error and `sdl up` can retry.
+                    if let Err(e) = manager_c
+                        .clone()
+                        .resume_service_runtime()
+                        .context("initial service start failed")
+                    {
+                        log::error!("sdl create error {:?}", e);
+                        println!("error: {:?}", e);
+                        manager_c.mutate_state(|state| {
+                            state.runtime_starting = false;
+                            state.runtime_running = false;
+                            state.runtime_suspended = false;
+                            state.last_error = Some(format!("{e:?}"));
+                        });
+                    }
+                })
+                .expect("RuntimeStart");
         }
 
         Ok(Self {

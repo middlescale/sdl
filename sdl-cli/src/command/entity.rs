@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 pub struct Info {
     pub name: String,
     pub runtime_name: String,
+    pub runtime_status: String,
     pub restart_required: bool,
     pub device_id: String,
     pub virtual_ip: String,
@@ -54,6 +55,8 @@ pub struct ExitNodeStatus {
     pub advertised: bool,
     pub local_ready: bool,
     pub egress_interface: String,
+    #[serde(default)]
+    pub client_active: bool,
     pub selected_device_id: String,
     pub selected_name: String,
     pub selected_virtual_ip: String,

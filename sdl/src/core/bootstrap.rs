@@ -382,6 +382,13 @@ impl Sdl {
     pub fn current_device(&self) -> CurrentDeviceInfo {
         self.runtime.current_device.load()
     }
+    pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
+        self.runtime.primary_dns_service_ip()
+    }
+    #[cfg(feature = "integrated_tun")]
+    pub fn tun_device_name(&self) -> Option<String> {
+        self.runtime.tun_device_helper.device_name()
+    }
     pub fn control_server_addr(&self) -> std::net::SocketAddr {
         self.runtime.control_session.server_addr()
     }

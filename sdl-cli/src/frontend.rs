@@ -6,23 +6,27 @@ use std::time::{Duration, Instant};
 
 fn print_usage() {
     println!(
-        "sdl <resume|list|status|gateway|exit-node|route|traffic|suspend|rename|auth|switch|channel-change|version> [options]"
+        "sdl <up|down|list|status|gateway|exit-node|route|traffic|rename|auth|switch|channel-change|version> [options]"
     );
-    println!("  sdl resume [--json]                   # 恢复本地收发服务");
+    println!("  sdl up [--json]                       # start or resume the local SDL runtime");
+    println!("  sdl down [--json]                     # stop the local SDL runtime and clean local routes/DNS");
     println!("  sdl list [--json]");
     println!("  sdl status [--json]");
     println!("  sdl gateway [--json] [--set <gateway-name|auto>]");
     println!("  sdl exit-node list [--json]");
     println!("  sdl exit-node status [--json]");
-    println!("  sdl exit-node enable --egress-interface <iface> [--tun-name sdl-tun] [--json]");
+    println!("  sdl exit-node enable --egress-interface <iface> [--tun-name <iface>] [--json]");
     println!(
-        "  sdl exit-node use <device-id|name|virtual-ip> [--tun-name sdl-tun] [--exclude <ip-or-cidr>] [--json]"
+        "  sdl exit-node use <device-id|name|virtual-ip> [--tun-name <iface>] [--exclude <ip-or-cidr>] [--json]"
     );
     println!("  sdl exit-node disable [--json]");
     println!("  sdl exit-node clear [--json]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
-    println!("  sdl suspend [--json]                  # 挂起本地收发服务");
+    println!("  sdl resume [--json]                   # compatibility alias for up");
+    println!(
+        "  sdl suspend [--json]                  # suspend the local runtime without full teardown"
+    );
     println!("  sdl rename [--json] <name>            # 修改当前节点显示名");
     println!("  sdl auth [--json] --userId/-u <user-id> [--group/-g default.ms.net] <ticket>");
     println!("  sdl switch [--json] --userId/-u <user-id>");
@@ -39,14 +43,16 @@ pub fn run() -> i32 {
     }
     let command = args[1].as_str();
     match command {
-        "resume" => handle_resume(&args[2..]),
+        "up" => handle_lifecycle(&args[2..], "up", CommandClient::up),
+        "resume" => handle_lifecycle(&args[2..], "resume", CommandClient::resume),
         "list" => handle_list(&args[2..]),
         "status" | "info" => handle_status(&args[2..]),
         "gateway" => handle_gateway(&args[2..]),
         "exit-node" | "exit_node" => handle_exit_node(&args[2..]),
         "route" => handle_route(&args[2..]),
         "traffic" => handle_traffic(&args[2..]),
-        "suspend" => handle_suspend(&args[2..]),
+        "down" => handle_lifecycle(&args[2..], "down", CommandClient::down),
+        "suspend" => handle_lifecycle(&args[2..], "suspend", CommandClient::suspend),
         "rename" => handle_rename(&args[2..]),
         "auth" => handle_auth(&args[2..]),
         "switch" => handle_switch(&args[2..]),
@@ -102,7 +108,11 @@ fn handle_version(args: &[String]) -> i32 {
     0
 }
 
-fn handle_resume(args: &[String]) -> i32 {
+fn handle_lifecycle(
+    args: &[String],
+    command_name: &str,
+    command: fn(&mut CommandClient) -> std::io::Result<String>,
+) -> i32 {
     let json = has_json_flag(args);
     let filtered: Vec<String> = args
         .iter()
@@ -110,8 +120,10 @@ fn handle_resume(args: &[String]) -> i32 {
         .cloned()
         .collect();
     if !filtered.is_empty() {
-        let message =
-            "sdl resume does not accept service arguments; start the daemon with `sdl-service ...`";
+        let message = format!(
+            "sdl {} does not accept service arguments; start the daemon with `sdl-service ...`",
+            command_name
+        );
         if json {
             println!(
                 "{}",
@@ -126,7 +138,7 @@ fn handle_resume(args: &[String]) -> i32 {
         }
         return 1;
     }
-    match CommandClient::new().and_then(|mut client| client.resume()) {
+    match CommandClient::new().and_then(|mut client| command(&mut client)) {
         Ok(result) => {
             if json {
                 println!(
@@ -154,8 +166,8 @@ fn handle_resume(args: &[String]) -> i32 {
                 );
             } else {
                 eprintln!(
-                    "resume error: {}. start the daemon first with `sdl-service ...`",
-                    e
+                    "{} error: {}. start the daemon first with `sdl-service ...`",
+                    command_name, e
                 );
             }
             1
@@ -406,28 +418,55 @@ fn handle_exit_node(args: &[String]) -> i32 {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&status).unwrap());
                     } else {
-                        println!(
-                            "Exit node: {}",
-                            if status.enabled {
-                                "enabled"
-                            } else {
-                                "disabled"
-                            }
-                        );
-                        println!("Advertised: {}", status.advertised);
-                        println!("Local ready: {}", status.local_ready);
-                        if !status.egress_interface.is_empty() {
-                            println!("Egress interface: {}", status.egress_interface);
-                        }
                         if !status.selected_device_id.is_empty() {
-                            println!("Selected device: {}", status.selected_device_id);
+                            println!(
+                                "Using exit node: {}",
+                                if status.client_active {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
+                            );
                             if !status.selected_name.is_empty() {
-                                println!("Selected name: {}", status.selected_name);
+                                let label = if status.client_active {
+                                    "Name"
+                                } else {
+                                    "Last selected name"
+                                };
+                                println!("{}: {}", label, status.selected_name);
                             }
                             if !status.selected_virtual_ip.is_empty() {
-                                println!("Selected IP: {}", status.selected_virtual_ip);
+                                let label = if status.client_active {
+                                    "Virtual IP"
+                                } else {
+                                    "Last selected IP"
+                                };
+                                println!("{}: {}", label, status.selected_virtual_ip);
                             }
-                            println!("Selected usable: {}", status.selected_usable);
+                            let label = if status.client_active {
+                                "Device ID"
+                            } else {
+                                "Last selected device ID"
+                            };
+                            println!("{}: {}", label, status.selected_device_id);
+                        } else {
+                            println!("Using exit node: disabled");
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            println!(
+                                "Advertise as exit node: {}",
+                                if status.enabled {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
+                            );
+                            println!("Advertised: {}", status.advertised);
+                            println!("Local ready: {}", status.local_ready);
+                            if !status.egress_interface.is_empty() {
+                                println!("Egress interface: {}", status.egress_interface);
+                            }
                         }
                         if !status.note.is_empty() {
                             println!("Note: {}", status.note);
@@ -443,7 +482,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
         }
         "enable" => {
             let mut egress_interface: Option<String> = None;
-            let mut tun_name = "sdl-tun".to_string();
+            let mut tun_name: Option<String> = None;
             let mut iter = filtered[1..].iter();
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
@@ -462,7 +501,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
                             print_exit_node_error(json, "missing --tun-name value".to_string());
                             return 1;
                         };
-                        tun_name = value.clone();
+                        tun_name = Some(value.clone());
                     }
                     _ => return print_exit_node_usage(json),
                 }
@@ -471,9 +510,9 @@ fn handle_exit_node(args: &[String]) -> i32 {
                 print_exit_node_error(json, "missing --egress-interface".to_string());
                 return 1;
             };
-            match CommandClient::new()
-                .and_then(|mut client| client.exit_node_enable(&egress_interface, &tun_name))
-            {
+            match CommandClient::new().and_then(|mut client| {
+                client.exit_node_enable(&egress_interface, tun_name.as_deref())
+            }) {
                 Ok(result) => print_exit_node_ok(json, result),
                 Err(error) => {
                     print_exit_node_error(json, error.to_string());
@@ -483,7 +522,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
         }
         "use" => {
             let mut target: Option<String> = None;
-            let mut tun_name = "sdl-tun".to_string();
+            let mut tun_name: Option<String> = None;
             let mut excludes = Vec::new();
             let mut iter = filtered[1..].iter();
             while let Some(arg) = iter.next() {
@@ -493,7 +532,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
                             print_exit_node_error(json, "missing --tun-name value".to_string());
                             return 1;
                         };
-                        tun_name = value.clone();
+                        tun_name = Some(value.clone());
                     }
                     "--exclude" => {
                         let Some(value) = iter.next() else {
@@ -511,9 +550,9 @@ fn handle_exit_node(args: &[String]) -> i32 {
             let Some(target) = target else {
                 return print_exit_node_usage(json);
             };
-            match CommandClient::new()
-                .and_then(|mut client| client.exit_node_use(&target, &tun_name, &excludes))
-            {
+            match CommandClient::new().and_then(|mut client| {
+                client.exit_node_use(&target, tun_name.as_deref(), &excludes)
+            }) {
                 Ok(result) => print_exit_node_ok(json, result),
                 Err(error) => {
                     print_exit_node_error(json, error.to_string());
@@ -522,7 +561,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
             }
         }
         "disable" => {
-            let mut tun_name = "sdl-tun".to_string();
+            let mut tun_name: Option<String> = None;
             let mut iter = filtered[1..].iter();
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
@@ -531,12 +570,14 @@ fn handle_exit_node(args: &[String]) -> i32 {
                             print_exit_node_error(json, "missing --tun-name value".to_string());
                             return 1;
                         };
-                        tun_name = value.clone();
+                        tun_name = Some(value.clone());
                     }
                     _ => return print_exit_node_usage(json),
                 }
             }
-            match CommandClient::new().and_then(|mut client| client.exit_node_disable(&tun_name)) {
+            match CommandClient::new()
+                .and_then(|mut client| client.exit_node_disable(tun_name.as_deref()))
+            {
                 Ok(result) => {
                     if json {
                         println!(
@@ -558,7 +599,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
             }
         }
         "clear" => {
-            let mut tun_name = "sdl-tun".to_string();
+            let mut tun_name: Option<String> = None;
             let mut iter = filtered[1..].iter();
             while let Some(arg) = iter.next() {
                 match arg.as_str() {
@@ -567,12 +608,14 @@ fn handle_exit_node(args: &[String]) -> i32 {
                             print_exit_node_error(json, "missing --tun-name value".to_string());
                             return 1;
                         };
-                        tun_name = value.clone();
+                        tun_name = Some(value.clone());
                     }
                     _ => return print_exit_node_usage(json),
                 }
             }
-            match CommandClient::new().and_then(|mut client| client.exit_node_clear(&tun_name)) {
+            match CommandClient::new()
+                .and_then(|mut client| client.exit_node_clear(tun_name.as_deref()))
+            {
                 Ok(result) => {
                     if json {
                         println!(
@@ -598,7 +641,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
 }
 
 fn print_exit_node_usage(json: bool) -> i32 {
-    let message = "usage: sdl exit-node <list|status|enable|disable|use|clear> [--json] [--egress-interface <iface>] [--tun-name <name>] [--exclude <ip-or-cidr>] [target]";
+    let message = "usage: sdl exit-node <list|status|enable|disable|use|clear> [--json] [--egress-interface <iface>] [--tun-name <iface>] [--exclude <ip-or-cidr>] [target]";
     if json {
         println!(
             "{}",
@@ -682,35 +725,6 @@ fn handle_traffic(args: &[String]) -> i32 {
             }
             Err(e) => {
                 eprintln!("traffic error: {}", e);
-                1
-            }
-        }
-    }
-}
-
-fn handle_suspend(args: &[String]) -> i32 {
-    if has_json_flag(args) {
-        match CommandClient::new().and_then(|mut client| client.suspend()) {
-            Ok(result) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({ "result": result })).unwrap()
-                );
-                0
-            }
-            Err(e) => {
-                eprintln!("suspend error: {}", e);
-                1
-            }
-        }
-    } else {
-        match CommandClient::new().and_then(|mut client| client.suspend()) {
-            Ok(result) => {
-                println!("{}", result);
-                0
-            }
-            Err(e) => {
-                eprintln!("suspend error: {}", e);
                 1
             }
         }

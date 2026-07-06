@@ -26,6 +26,16 @@ pub fn console_info(status: Info) {
             println!("Runtime name: {}", style(status.runtime_name).green());
         }
     }
+    let runtime_status = if status.runtime_status.eq_ignore_ascii_case("running") {
+        style(status.runtime_status.clone()).green()
+    } else if status.runtime_status.eq_ignore_ascii_case("starting")
+        || status.runtime_status.eq_ignore_ascii_case("suspended")
+    {
+        style(status.runtime_status.clone()).yellow()
+    } else {
+        style(status.runtime_status.clone()).red()
+    };
+    println!("Runtime: {}", runtime_status);
     println!("Virtual ip: {}", style(status.virtual_ip).green());
     println!("Virtual gateway: {}", style(status.virtual_gateway).green());
     if status

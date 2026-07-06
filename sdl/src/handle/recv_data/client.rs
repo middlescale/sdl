@@ -1,21 +1,26 @@
 use anyhow::anyhow;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 
 use protobuf::Message;
 
 use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
+use sdl_packet::udp::udp::UdpPacket;
 
+use crate::core::PendingDnsQuery;
 use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::NatInfo;
+use crate::net::dns::forward::forward_dns_query_to_system_resolver;
+use crate::net::dns::tunnel::build_dns_response_packet;
 use crate::proto::message::{PunchInfo, PunchNatType};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::ControlPacket;
@@ -35,6 +40,22 @@ static UNENCRYPTED_PEER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::Concurren
 static INVALID_CIPHER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 static INVALID_CIPHER_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
     OnceLock::new();
+static EXIT_NODE_DNS_QUEUE_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
+static EXIT_NODE_DNS_QUEUE_DROP_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
+
+const EXIT_NODE_DNS_QUEUE_CAPACITY: usize = 64;
+const EXIT_NODE_DNS_WORKER_COUNT: usize = 4;
+
+struct ExitNodeDnsRequest {
+    source: Ipv4Addr,
+    current_virtual_ip: Ipv4Addr,
+    route_key: RouteKey,
+    dns_server_ip: Ipv4Addr,
+    client_ip: Ipv4Addr,
+    client_port: u16,
+    payload: Vec<u8>,
+}
 
 fn log_sampled_drop(
     counter: &AtomicU64,
@@ -60,11 +81,40 @@ fn requires_peer_decrypt(source: Ipv4Addr, current_device: &CurrentDeviceInfo) -
 pub struct ClientPacketHandler<Device> {
     device: Device,
     runtime: Arc<SdlRuntime>,
+    exit_node_dns_tx: SyncSender<ExitNodeDnsRequest>,
 }
 
 impl<Device: DeviceWrite> ClientPacketHandler<Device> {
     pub fn new(runtime: Arc<SdlRuntime>, device: Device) -> Self {
-        Self { device, runtime }
+        let (exit_node_dns_tx, exit_node_dns_rx) = sync_channel(EXIT_NODE_DNS_QUEUE_CAPACITY);
+        let exit_node_dns_rx = Arc::new(Mutex::new(exit_node_dns_rx));
+        for worker_index in 0..EXIT_NODE_DNS_WORKER_COUNT {
+            let worker_runtime = runtime.clone();
+            let worker_rx = exit_node_dns_rx.clone();
+            if let Err(err) = thread::Builder::new()
+                .name(format!("exit-node-dns-worker-{worker_index}"))
+                .spawn(move || loop {
+                    let request = {
+                        let receiver = worker_rx.lock().unwrap();
+                        receiver.recv()
+                    };
+                    let Ok(request) = request else {
+                        break;
+                    };
+                    if let Err(err) = handle_exit_node_dns_request(worker_runtime.as_ref(), request)
+                    {
+                        log::warn!("exit-node DNS request failed: {:?}", err);
+                    }
+                })
+            {
+                log::warn!("failed to start exit-node DNS worker: {:?}", err);
+            }
+        }
+        Self {
+            device,
+            runtime,
+            exit_node_dns_tx,
+        }
     }
 
     fn decrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
@@ -104,47 +154,138 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         }
     }
 
-    fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
+    fn handle_exit_node_dns_query<B: AsRef<[u8]>>(
         &self,
-        peer_ip: &Ipv4Addr,
-        net_packet: &mut NetPacket<B>,
-    ) -> anyhow::Result<()> {
-        self.runtime
-            .peer_crypto
-            .send_cipher(peer_ip)?
-            .encrypt_ipv4(net_packet)
-    }
-
-    fn send_reply_by_route<B: AsRef<[u8]>>(
-        &self,
-        packet: &NetPacket<B>,
+        net_packet: &NetPacket<B>,
+        source: Ipv4Addr,
+        destination: Ipv4Addr,
+        current_device: &CurrentDeviceInfo,
         route_key: RouteKey,
-    ) -> anyhow::Result<()> {
-        let packet_len = packet.buffer().as_ref().len();
-        let destination = packet.destination();
-        self.runtime.data_plane_stats.record_logical_up(packet_len);
-        if self
-            .runtime
-            .gateway_sessions
-            .is_gateway_addr(route_key.addr)
+    ) -> anyhow::Result<bool> {
+        if destination != current_device.virtual_ip {
+            return Ok(false);
+        }
+        let ipv4 = IpV4Packet::new(net_packet.payload())?;
+        if ipv4.protocol() != ipv4::protocol::Protocol::Udp {
+            return Ok(false);
+        }
+        let dns_server_ip = ipv4.destination_ip();
+        if !self.runtime.is_dns_service_ip(dns_server_ip) {
+            return Ok(false);
+        }
+        let udp = UdpPacket::new(ipv4.source_ip(), dns_server_ip, ipv4.payload())?;
+        if udp.destination_port() != 53 || udp.payload().is_empty() {
+            return Ok(false);
+        }
         {
-            self.runtime.gateway_sessions.send_relay(packet)?;
-            self.runtime.data_plane_stats.record_gateway_up(packet_len);
-        } else if route_key.protocol().is_udp() {
-            self.runtime
-                .udp_channel
-                .send_by_key(packet.buffer(), route_key)?;
-        } else {
-            return Err(anyhow!("unsupported reply route {:?}", route_key));
+            let exit_node_state = self.runtime.exit_node_state.read();
+            if !(exit_node_state.enabled && exit_node_state.local_ready) {
+                return Ok(false);
+            }
         }
-        let gateway_vip = self.runtime.current_device.load().virtual_gateway;
-        if destination != gateway_vip {
-            self.runtime
-                .data_plane_stats
-                .record_peer_up(destination, packet_len);
+
+        let request = ExitNodeDnsRequest {
+            source,
+            current_virtual_ip: current_device.virtual_ip,
+            route_key,
+            dns_server_ip,
+            client_ip: ipv4.source_ip(),
+            client_port: udp.source_port(),
+            payload: udp.payload().to_vec(),
+        };
+        match self.exit_node_dns_tx.try_send(request) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                log_sampled_drop(
+                    &EXIT_NODE_DNS_QUEUE_DROP_COUNT,
+                    &EXIT_NODE_DNS_QUEUE_DROP_LOG_LIMITER,
+                    |count| {
+                        format!(
+                            "dropping exit-node DNS queries because worker queue is full (count={})",
+                            count
+                        )
+                    },
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                log::warn!("dropping exit-node DNS query because worker is stopped");
+            }
         }
-        Ok(())
+        Ok(true)
     }
+}
+
+fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
+    runtime: &SdlRuntime,
+    peer_ip: &Ipv4Addr,
+    net_packet: &mut NetPacket<B>,
+) -> anyhow::Result<()> {
+    runtime
+        .peer_crypto
+        .send_cipher(peer_ip)?
+        .encrypt_ipv4(net_packet)
+}
+
+fn send_reply_by_route<B: AsRef<[u8]>>(
+    runtime: &SdlRuntime,
+    packet: &NetPacket<B>,
+    route_key: RouteKey,
+) -> anyhow::Result<()> {
+    let packet_len = packet.buffer().as_ref().len();
+    let destination = packet.destination();
+    runtime.data_plane_stats.record_logical_up(packet_len);
+    if runtime.gateway_sessions.is_gateway_addr(route_key.addr) {
+        runtime.gateway_sessions.send_relay(packet)?;
+        runtime.data_plane_stats.record_gateway_up(packet_len);
+    } else if route_key.protocol().is_udp() {
+        runtime
+            .udp_channel
+            .send_by_key(packet.buffer(), route_key)?;
+    } else {
+        return Err(anyhow!("unsupported reply route {:?}", route_key));
+    }
+    let gateway_vip = runtime.current_device.load().virtual_gateway;
+    if destination != gateway_vip {
+        runtime
+            .data_plane_stats
+            .record_peer_up(destination, packet_len);
+    }
+    Ok(())
+}
+
+fn handle_exit_node_dns_request(
+    runtime: &SdlRuntime,
+    request: ExitNodeDnsRequest,
+) -> anyhow::Result<()> {
+    let response_payload: Vec<u8> = match forward_dns_query_to_system_resolver(&request.payload) {
+        Ok(response) => response,
+        Err(err) => {
+            log::warn!(
+                "exit-node DNS forward failed resolver={} client={} err={:?}",
+                request.dns_server_ip,
+                request.client_ip,
+                err
+            );
+            return Ok(());
+        }
+    };
+    let pending = PendingDnsQuery::new(
+        request.client_ip,
+        request.dns_server_ip,
+        request.client_port,
+    );
+    let response_packet = build_dns_response_packet(&pending, &response_payload)?;
+    let mut reply =
+        NetPacket::new_encrypt(vec![0u8; 12 + response_packet.len() + ENCRYPTION_RESERVED])?;
+    reply.set_default_version();
+    reply.set_protocol(Protocol::IpTurn);
+    reply.set_transport_protocol(ip_turn_packet::Protocol::Ipv4.into());
+    reply.set_initial_ttl(MAX_TTL);
+    reply.set_source(request.current_virtual_ip);
+    reply.set_destination(request.source);
+    reply.set_payload(&response_packet)?;
+    encrypt_by_route(runtime, &request.source, &mut reply)?;
+    send_reply_by_route(runtime, &reply, request.route_key)
 }
 
 impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
@@ -294,8 +435,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             ipv4.update_checksum();
                             net_packet.set_source(destination);
                             net_packet.set_destination(source);
-                            self.encrypt_by_route(&source, &mut net_packet)?;
-                            self.send_reply_by_route(&net_packet, route_key)?;
+                            encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
+                            send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
                             return Ok(());
                         } else if icmp_packet.kind() == Kind::EchoReply {
                             log_peer_echo_reply = Some((ipv4.source_ip(), ipv4.destination_ip()));
@@ -336,6 +477,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             _ => {}
                         }
                     }
+                }
+                if self.handle_exit_node_dns_query(
+                    &net_packet,
+                    source,
+                    destination,
+                    current_device,
+                    route_key,
+                )? {
+                    return Ok(());
                 }
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
                     self.runtime.debug_watch.emit(
@@ -395,8 +545,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
-                self.encrypt_by_route(&source, &mut net_packet)?;
-                self.send_reply_by_route(&net_packet, route_key)?;
+                encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
+                send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
@@ -438,8 +588,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
-                self.encrypt_by_route(&source, &mut net_packet)?;
-                self.send_reply_by_route(&net_packet, route_key)?;
+                encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
+                send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
                 // context.route_table.add_route_if_absent(source, route);
@@ -485,8 +635,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
-                    self.encrypt_by_route(&source, &mut packet)?;
-                    self.send_reply_by_route(&packet, route_key)?;
+                    encrypt_by_route(self.runtime.as_ref(), &source, &mut packet)?;
+                    send_reply_by_route(self.runtime.as_ref(), &packet, route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
             },
@@ -673,7 +823,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     punch_packet.set_source(current_device.virtual_ip());
                     punch_packet.set_destination(source);
                     punch_packet.set_payload(&bytes)?;
-                    self.encrypt_by_route(&source, &mut punch_packet)?;
+                    encrypt_by_route(self.runtime.as_ref(), &source, &mut punch_packet)?;
                     if self
                         .runtime
                         .punch_coordinator

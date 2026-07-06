@@ -75,14 +75,57 @@ fn default_service_file_config() -> config::FileConfig {
 
 fn load_service_file_config(conf: Option<&str>) -> anyhow::Result<config::FileConfig> {
     if let Some(path) = conf {
-        return config::read_config(path)
-            .map(|(_, file_conf)| file_conf)
-            .map_err(|e| anyhow!("conf err {}", e));
+        return config::read_file_config(path).map_err(|e| anyhow!("conf err {}", e));
     }
-    if let Some((_, saved)) = config::read_saved_config()? {
+    if let Some(saved) = config::read_saved_file_config()? {
         return Ok(saved);
     }
     Ok(default_service_file_config())
+}
+
+fn saved_client_dns_state(
+    file_conf: &config::FileConfig,
+) -> Option<sdl::net::exit_node::ClientDnsState> {
+    if file_conf.exit_node.original_dns.is_empty() {
+        return None;
+    }
+    Some(
+        file_conf
+            .exit_node
+            .original_dns
+            .iter()
+            .map(|service| sdl::net::exit_node::ClientDnsServiceState {
+                service: service.service.clone(),
+                restore_servers: service.restore_servers.clone(),
+                restore_metric: service.restore_metric,
+                restore_automatic_metric: service.restore_automatic_metric,
+            })
+            .collect(),
+    )
+}
+
+fn restore_stale_exit_node_dns_before_config_build(file_conf: &mut config::FileConfig) {
+    let dns_state = saved_client_dns_state(file_conf);
+    if dns_state.is_none() {
+        return;
+    }
+    match sdl::net::exit_node::teardown_client_dns(dns_state.as_ref()) {
+        Ok(note) => log::info!(
+            "restored stale exit-node DNS before building runtime config: {}",
+            note
+        ),
+        Err(err) => {
+            log::warn!(
+                "failed to restore stale exit-node DNS before building runtime config: {:?}",
+                err
+            );
+            return;
+        }
+    }
+    file_conf.exit_node.original_dns.clear();
+    if let Err(err) = config::write_saved_config(file_conf) {
+        log::warn!("failed to persist stale exit-node DNS cleanup: {:?}", err);
+    }
 }
 
 fn parse_virtual_ip(ip: &str) -> anyhow::Result<Ipv4Addr> {
@@ -378,8 +421,10 @@ pub fn parse_args_config_from(
         return Ok(None);
     }
     if args.len() == 1 {
-        if let Some(saved) = config::read_saved_config()? {
-            return Ok(Some(saved));
+        if let Some(mut file_conf) = config::read_saved_file_config()? {
+            restore_stale_exit_node_dns_before_config_build(&mut file_conf);
+            let config = file_conf.clone().into_runtime_config()?;
+            return Ok(Some((config, file_conf)));
         }
         let file_conf = default_service_file_config();
         let config = file_conf.clone().into_runtime_config()?;
@@ -387,7 +432,8 @@ pub fn parse_args_config_from(
     }
 
     let base_file_conf = load_service_file_config(matches.opt_str("f").as_deref())?;
-    let file_conf = override_service_file_config(base_file_conf, &matches, &program, &opts)?;
+    let mut file_conf = override_service_file_config(base_file_conf, &matches, &program, &opts)?;
+    restore_stale_exit_node_dns_before_config_build(&mut file_conf);
     let config = file_conf.clone().into_runtime_config()?;
     let build_version = crate::build_version_string();
     println!("version {}", build_version);

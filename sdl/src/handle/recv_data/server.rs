@@ -1139,7 +1139,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                     return Ok(());
                 }
-                let packet = crate::util::dns_tunnel::build_dns_response_packet(
+                let packet = crate::net::dns::tunnel::build_dns_response_packet(
                     &pending,
                     &response.response,
                 )?;
