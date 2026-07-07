@@ -148,6 +148,23 @@ pub struct SdlRuntime {
 }
 
 impl SdlRuntime {
+    pub fn block_data_plane_for_auth_pending(&self) {
+        {
+            let mut peer_state = self.peer_state.lock();
+            peer_state.epoch = peer_state.epoch.wrapping_add(1);
+            peer_state.devices.clear();
+        }
+        self.peer_nat_info_map.write().clear();
+        self.route_manager.clear_all_paths();
+        self.peer_crypto.clear_all();
+        self.gateway_sessions.clear_gateway_grant();
+        self.gateway_grant_policy_rev.store(0, Ordering::Relaxed);
+        self.pending_dns_queries.lock().clear();
+        self.pending_rename_requests.lock().clear();
+        self.exit_node_route.set_default_next_hop(None);
+        *self.exit_node_state.write() = ExitNodeLocalState::default();
+    }
+
     pub(crate) fn apply_selected_exit_node_route(&self) {
         let selected_device_id = self
             .exit_node_state

@@ -551,6 +551,40 @@ impl ServiceManager {
         Ok(Some(format!("{}; {}", setup_result, dns_result)))
     }
 
+    fn block_data_plane_for_auth_pending(&self, message: &str) {
+        match self.cleanup_exit_node_client_state() {
+            Ok(Some(note)) => log::info!(
+                "reset exit-node client state while auth is pending: {}",
+                note
+            ),
+            Ok(None) => {}
+            Err(err) => log::warn!(
+                "failed to reset exit-node client state while auth is pending: {:?}",
+                err
+            ),
+        }
+        match self.current_runtime() {
+            Ok(runtime) => {
+                runtime.block_data_plane_for_auth_pending();
+                log::warn!("blocked SDL data plane while auth is pending: {}", message);
+            }
+            Err(err) => log::warn!(
+                "failed to block SDL data plane while auth is pending: {:?}",
+                err
+            ),
+        }
+    }
+
+    fn reapply_exit_node_state_after_auth(&self) {
+        if let Err(err) = self.reapply_exit_node_server_state() {
+            log::warn!("failed to reapply exit-node system state after auth: {err:?}");
+        }
+        match self.current_runtime() {
+            Ok(runtime) => runtime.set_exit_node_state(self.exit_node_state_from_saved_config()),
+            Err(err) => log::warn!("failed to reapply exit-node runtime state after auth: {err:?}"),
+        }
+    }
+
     fn exit_node_status(&self) -> ExitNodeStatus {
         let saved = self.saved_config.lock().unwrap().clone();
         let runtime_state = self
@@ -1188,13 +1222,8 @@ impl ServiceCallback {
         });
     }
 
-    fn is_auth_pending_message(message: &str) -> bool {
-        let message = message.to_ascii_lowercase();
-        message.contains("auth check failed")
-            || message.contains("not_auth")
-            || message.contains("auth_expired")
-            || message.contains("reauth_required")
-            || message.contains("device_key_mismatch")
+    fn is_auth_pending_error(info: &ErrorInfo) -> bool {
+        info.code == ErrorType::AuthPending
     }
 
     fn request_runtime_stop(&self) {
@@ -1203,6 +1232,22 @@ impl ServiceCallback {
                 if let Err(e) = manager.stop_service_runtime() {
                     log::warn!("stop runtime after callback error failed: {:?}", e);
                 }
+            });
+        }
+    }
+
+    fn request_data_plane_auth_block(&self, message: String) {
+        if let Some(manager) = self.manager.upgrade() {
+            std::thread::spawn(move || {
+                manager.block_data_plane_for_auth_pending(&message);
+            });
+        }
+    }
+
+    fn request_exit_node_state_after_auth_reapply(&self) {
+        if let Some(manager) = self.manager.upgrade() {
+            std::thread::spawn(move || {
+                manager.reapply_exit_node_state_after_auth();
             });
         }
     }
@@ -1257,6 +1302,7 @@ impl SdlCallback for ServiceCallback {
 
     fn register(&self, info: RegisterInfo) -> bool {
         self.clear_error_state();
+        self.request_exit_node_state_after_auth_reapply();
         println!("register {}", style(info).green());
         true
     }
@@ -1277,7 +1323,7 @@ impl SdlCallback for ServiceCallback {
 
     fn error(&self, info: ErrorInfo) {
         let message = format!("{}", info);
-        let auth_pending = Self::is_auth_pending_message(&message);
+        let auth_pending = Self::is_auth_pending_error(&info);
         if auth_pending {
             log::warn!("auth pending {:?}", info);
         } else {
@@ -1292,6 +1338,7 @@ impl SdlCallback for ServiceCallback {
             state.last_error = (!auth_pending).then_some(message.clone());
         });
         if auth_pending {
+            self.request_data_plane_auth_block(message.clone());
             println!(
                 "{}",
                 style(format!(

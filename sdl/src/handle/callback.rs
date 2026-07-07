@@ -151,6 +151,7 @@ pub enum ErrorType {
     InvalidIp,
     LocalIpExists,
     FailedToCreateDevice,
+    AuthPending,
     Warn,
     Unknown,
 }
@@ -164,6 +165,7 @@ impl Into<u8> for ErrorType {
             ErrorType::IpAlreadyExists => 4,
             ErrorType::InvalidIp => 5,
             ErrorType::LocalIpExists => 6,
+            ErrorType::AuthPending => 7,
             ErrorType::FailedToCreateDevice => 101,
             ErrorType::Warn => 102,
             ErrorType::Unknown => 255,

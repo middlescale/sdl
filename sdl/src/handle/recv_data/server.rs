@@ -706,8 +706,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     } else {
                         response.error_message.clone()
                     };
+                    let error_reason = response.error_reason.enum_value_or_default();
+                    let error_type = if registration_error_is_auth_pending(error_reason, &reason) {
+                        ErrorType::AuthPending
+                    } else {
+                        ErrorType::Unknown
+                    };
                     self.callback.error(ErrorInfo::new_msg(
-                        ErrorType::Unknown,
+                        error_type,
                         format!(
                             "registration rejected: code={}, reason={}",
                             response.error_code, reason
@@ -715,7 +721,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     ));
                     if should_retry_registration_with_fresh_handshake(
                         response.error_code,
-                        response.error_reason.enum_value_or_default(),
+                        error_reason,
                         &reason,
                     ) {
                         match self
@@ -931,15 +937,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DeviceAuthAck {:?}", e)))?;
                 if !ack.ok {
+                    let error_reason = ack.error_reason.enum_value_or_default();
+                    let error_type = if device_auth_error_is_auth_pending(error_reason, &ack.reason)
+                    {
+                        ErrorType::AuthPending
+                    } else {
+                        ErrorType::Unknown
+                    };
                     println!("auth device failed: {}", ack.reason);
                     self.callback.error(ErrorInfo::new_msg(
-                        ErrorType::Unknown,
+                        error_type,
                         format!("auth device failed: {}", ack.reason),
                     ));
-                    if should_retry_device_auth_after_challenge_expired(
-                        ack.error_reason.enum_value_or_default(),
-                        &ack.reason,
-                    ) {
+                    if should_retry_device_auth_after_challenge_expired(error_reason, &ack.reason) {
                         match self
                             .runtime
                             .control_session
@@ -1923,6 +1933,18 @@ fn should_retry_registration_with_fresh_handshake(
         .contains("missing required handshake capability")
 }
 
+fn registration_error_is_auth_pending(error_reason: RegistrationErrorReason, reason: &str) -> bool {
+    if error_reason == RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED {
+        return true;
+    }
+    let reason = reason.trim().to_ascii_lowercase();
+    reason.contains("auth check failed")
+        || reason.contains("not_auth")
+        || reason.contains("auth_expired")
+        || reason.contains("reauth_required")
+        || reason.contains("device_key_mismatch")
+}
+
 fn should_retry_device_auth_after_challenge_expired(
     error_reason: DeviceAuthErrorReason,
     reason: &str,
@@ -1931,6 +1953,23 @@ fn should_retry_device_auth_after_challenge_expired(
         return true;
     }
     reason.trim().eq_ignore_ascii_case("challenge_expired")
+}
+
+fn device_auth_error_is_auth_pending(error_reason: DeviceAuthErrorReason, reason: &str) -> bool {
+    match error_reason {
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED
+        | DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH => true,
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED => {
+            let reason = reason.trim().to_ascii_lowercase();
+            reason.contains("auth check failed")
+                || reason.contains("not_auth")
+                || reason.contains("auth_expired")
+                || reason.contains("reauth_required")
+                || reason.contains("device_key_mismatch")
+        }
+        DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED
+        | DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE => false,
+    }
 }
 
 fn should_clear_gateway_grants_from_refresh_response(
@@ -1955,11 +1994,12 @@ fn should_clear_gateway_grants_from_refresh_response(
 mod tests {
     use super::{
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
-        effective_gateway_policy_rev, format_punch_endpoint, is_gateway_peer_ipturn_source,
-        is_stale_epoch, log_sampled_unauthorized_server_source_drop,
+        device_auth_error_is_auth_pending, effective_gateway_policy_rev, format_punch_endpoint,
+        is_gateway_peer_ipturn_source, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
         observed_udp_port_from_registration, punch_endpoint_from_route,
-        rewrite_peer_echo_request_as_reply, selected_endpoint_for_result,
-        should_apply_gateway_policy_rev, should_clear_gateway_grants_from_refresh_response,
+        registration_error_is_auth_pending, rewrite_peer_echo_request_as_reply,
+        selected_endpoint_for_result, should_apply_gateway_policy_rev,
+        should_clear_gateway_grants_from_refresh_response,
         should_refresh_gateway_grant_after_registration,
         should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
@@ -2440,6 +2480,22 @@ mod tests {
     }
 
     #[test]
+    fn registration_auth_errors_are_auth_pending() {
+        assert!(registration_error_is_auth_pending(
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_NOT_AUTHED,
+            "device auth check failed"
+        ));
+        assert!(registration_error_is_auth_pending(
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_UNSPECIFIED,
+            "auth_expired"
+        ));
+        assert!(!registration_error_is_auth_pending(
+            RegistrationErrorReason::REGISTRATION_ERROR_REASON_INTERNAL,
+            "address exhausted"
+        ));
+    }
+
+    #[test]
     fn device_auth_retries_only_for_challenge_expired() {
         assert!(should_retry_device_auth_after_challenge_expired(
             DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED,
@@ -2454,6 +2510,30 @@ mod tests {
             "device_key_mismatch"
         ));
         assert!(!should_retry_device_auth_after_challenge_expired(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE,
+            "invalid_signature"
+        ));
+    }
+
+    #[test]
+    fn device_auth_pending_errors_are_auth_pending() {
+        assert!(device_auth_error_is_auth_pending(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED,
+            "not_auth"
+        ));
+        assert!(device_auth_error_is_auth_pending(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_DEVICE_KEY_MISMATCH,
+            "device_key_mismatch"
+        ));
+        assert!(device_auth_error_is_auth_pending(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_UNSPECIFIED,
+            "reauth_required"
+        ));
+        assert!(!device_auth_error_is_auth_pending(
+            DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED,
+            "challenge_expired"
+        ));
+        assert!(!device_auth_error_is_auth_pending(
             DeviceAuthErrorReason::DEVICE_AUTH_ERROR_REASON_INVALID_SIGNATURE,
             "invalid_signature"
         ));

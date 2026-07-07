@@ -245,6 +245,10 @@ impl RouteManager {
         self.route_table.remove_route(vip, route_key)
     }
 
+    pub fn clear_all_paths(&self) {
+        self.route_table.clear_all();
+    }
+
     pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
         let direct_before = self.direct_path_count(vip);
         self.remove_path(vip, route_key);

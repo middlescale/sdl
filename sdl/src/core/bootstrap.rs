@@ -481,6 +481,9 @@ impl Sdl {
         }
         self.runtime.control_session.send_device_auth_request()
     }
+    pub fn block_data_plane_for_auth_pending(&self) {
+        self.runtime.block_data_plane_for_auth_pending();
+    }
     pub fn request_device_rename(
         &self,
         new_name: String,

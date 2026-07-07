@@ -229,6 +229,11 @@ impl RouteTable {
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
     }
 
+    pub fn clear_all(&self) {
+        self.route_table.write().clear();
+        self.direct_route_keys.write().clear();
+    }
+
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         let mut route_table = self.route_table.write();
         route_table.retain(|vip, _| valid_peers.contains(vip));
@@ -332,5 +337,22 @@ mod tests {
 
         table.remove_route(&vip, direct);
         assert!(!table.has_direct_route_key(&direct));
+    }
+
+    #[test]
+    fn clear_all_drops_routes_and_direct_route_index() {
+        let table = RouteTable::new(UseChannelType::All, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 7);
+        let direct = route_key(1007);
+
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+        assert!(table.get_first_route(&vip).is_some());
+        assert!(table.has_direct_route_key(&direct));
+
+        table.clear_all();
+
+        assert!(table.get_first_route(&vip).is_none());
+        assert!(!table.has_direct_route_key(&direct));
+        assert!(table.route_table().is_empty());
     }
 }
