@@ -13,7 +13,7 @@ use crate::config::{
 use crate::service_lock::ServiceInstanceGuard;
 use anyhow::Context;
 use console::style;
-use sdl::core::{Config, ExitNodeLocalState, RenameRequestOutcome, Sdl};
+use sdl::core::{Config, ExitNodeLocalState, PeerIdentity, RenameRequestOutcome, Sdl};
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::net::exit_node;
 use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
@@ -43,6 +43,7 @@ pub(crate) struct RunningService {
 struct ExitNodeClientSelection {
     peer_name: String,
     peer_device_id: String,
+    peer_identity: PeerIdentity,
     tun_name: String,
     route_excludes: Vec<String>,
     applied_route_excludes: Vec<String>,
@@ -120,12 +121,14 @@ impl ServiceManager {
         runtime: &Sdl,
         peer_name: String,
         peer_device_id: String,
+        peer_identity: PeerIdentity,
         tun_name: String,
         route_excludes: &[String],
     ) -> anyhow::Result<ExitNodeClientSelection> {
         Ok(ExitNodeClientSelection {
             peer_name,
             peer_device_id: peer_device_id.clone(),
+            peer_identity,
             tun_name,
             route_excludes: route_excludes.to_vec(),
             applied_route_excludes: exit_node::merge_excludes(
@@ -179,6 +182,7 @@ impl ServiceManager {
                     local_ready: false,
                     egress_interface: None,
                     selected_device_id: Some(next.peer_device_id.clone()),
+                    selected_identity: Some(next.peer_identity.clone()),
                 });
                 Ok(result)
             }
@@ -241,10 +245,12 @@ impl ServiceManager {
             );
         }
         let previous = self.snapshot_exit_node_client_state();
+        let peer_identity = peer.identity();
         let selection = self.build_exit_node_client_selection(
             &runtime,
             peer.name,
             peer.device_id,
+            peer_identity,
             tun_name,
             &saved_config.exit_node.route_excludes,
         )?;
@@ -479,6 +485,7 @@ impl ServiceManager {
                 .client_active
                 .then(|| saved_config.exit_node.selected_device_id.clone())
                 .flatten(),
+            selected_identity: None,
         }
     }
 
@@ -778,10 +785,12 @@ impl ServiceManager {
             );
         }
         let previous = self.snapshot_exit_node_client_state();
+        let peer_identity = peer.identity();
         let selection = self.build_exit_node_client_selection(
             &runtime,
             peer.name,
             peer.device_id,
+            peer_identity,
             tun_name,
             excludes,
         )?;

@@ -1,4 +1,4 @@
-use crate::handle::PeerDeviceStatus;
+use crate::core::PeerStatus;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -227,11 +227,11 @@ impl Display for DeviceConfig {
 pub struct PeerClientInfo {
     pub virtual_ip: Ipv4Addr,
     pub name: String,
-    pub status: PeerDeviceStatus,
+    pub status: PeerStatus,
 }
 
 impl PeerClientInfo {
-    pub fn new(virtual_ip: Ipv4Addr, name: String, status: PeerDeviceStatus) -> Self {
+    pub fn new(virtual_ip: Ipv4Addr, name: String, status: PeerStatus) -> Self {
         Self {
             virtual_ip,
             name,

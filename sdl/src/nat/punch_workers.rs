@@ -1,16 +1,16 @@
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::{NatInfo, NatType, Punch};
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{control_packet, NetPacket, Protocol};
-use crate::util::PeerCryptoManager;
 
 struct PunchSenders {
     sender_self: SyncSender<(Ipv4Addr, NatInfo)>,
@@ -110,6 +110,7 @@ impl PunchCoordinator {
 
 pub fn spawn_punch_workers(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     peer_encrypt: bool,
     coordinator: PunchCoordinator,
@@ -124,6 +125,7 @@ pub fn spawn_punch_workers(
     let f = |receiver: Receiver<(Ipv4Addr, NatInfo)>| {
         let punch = punch.clone();
         let current_device = current_device.clone();
+        let peer_table = peer_table.clone();
         let peer_crypto = peer_crypto.clone();
         let peer_encrypt = peer_encrypt;
         let punch_record = punch_record.clone();
@@ -134,6 +136,7 @@ pub fn spawn_punch_workers(
                     receiver,
                     punch,
                     current_device,
+                    peer_table,
                     peer_crypto,
                     peer_encrypt,
                     punch_record,
@@ -151,6 +154,7 @@ fn punch_start(
     receiver: Receiver<(Ipv4Addr, NatInfo)>,
     mut punch: Punch,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     peer_encrypt: bool,
     punch_record: Arc<Mutex<HashMap<Ipv4Addr, usize>>>,
@@ -181,7 +185,11 @@ fn punch_start(
         );
 
         if peer_encrypt {
-            let Ok(cipher) = peer_crypto.current_cipher(&peer_ip) else {
+            let Some(peer_identity) = peer_table.read().identity_for_vip(&peer_ip) else {
+                log::warn!("skip punch request without peer identity for {}", peer_ip);
+                continue;
+            };
+            let Ok(cipher) = peer_crypto.current_cipher(&peer_identity) else {
                 log::warn!(
                     "skip punch request without peer session cipher for {}",
                     peer_ip

@@ -5,12 +5,13 @@ use crate::compression::Compressor;
 use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::tun_tap_device::vnt_device::DeviceWrite;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tun_rs::SyncDevice;
 
 #[repr(transparent)]
@@ -68,7 +69,7 @@ struct TunDeviceHelperInner {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     exit_node_route: ExitNodeRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 }
@@ -80,7 +81,7 @@ impl TunDeviceHelper {
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
         gateway_sessions: GatewaySessions,
         exit_node_route: ExitNodeRoute,
-        peer_state: Arc<Mutex<crate::handle::PeerState>>,
+        peer_table: Arc<RwLock<crate::core::PeerTable>>,
         peer_crypto: Arc<PeerCryptoManager>,
         compressor: Compressor,
         device_adapter: DeviceAdapter,
@@ -91,7 +92,7 @@ impl TunDeviceHelper {
             current_device,
             gateway_sessions,
             exit_node_route,
-            peer_state,
+            peer_table,
             peer_crypto,
             compressor,
         };
@@ -126,7 +127,7 @@ impl TunDeviceHelper {
             inner.current_device,
             inner.gateway_sessions,
             inner.exit_node_route,
-            inner.peer_state,
+            inner.peer_table,
             inner.peer_crypto,
             inner.compressor,
             device_stop,

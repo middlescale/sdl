@@ -2,12 +2,13 @@ use crate::compression::Compressor;
 use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::BUFFER_SIZE;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +22,7 @@ pub(crate) fn start_simple(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     exit_node_route: ExitNodeRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -54,7 +55,7 @@ pub(crate) fn start_simple(
         current_device,
         gateway_sessions,
         exit_node_route,
-        peer_state,
+        peer_table,
         peer_crypto,
         compressor,
     ) {
@@ -74,7 +75,7 @@ fn start_simple0(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     exit_node_route: ExitNodeRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {
@@ -121,7 +122,7 @@ fn start_simple0(
             current_device.load(),
             &gateway_sessions,
             &exit_node_route,
-            &peer_state,
+            &peer_table,
             &peer_crypto,
             &compressor,
         ) {

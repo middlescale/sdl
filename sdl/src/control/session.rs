@@ -11,8 +11,9 @@ use protobuf::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::RuntimeConfig;
+use crate::core::{AuthRequestConfig, ExitNodeLocalState, SdlContextConfig};
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::callback::{ConnectInfo, ErrorType};
@@ -27,11 +28,9 @@ use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, HEAD_LEN, MAX_TTL};
 use crate::transport::control_addr::parse_control_address;
 use crate::transport::http3_channel::Http3Channel;
-use crate::util::{
-    address_choose, dns_query_all, sign_device_payload, PeerCryptoManager, StopManager,
-};
+use crate::util::{address_choose, dns_query_all, sign_device_payload, StopManager};
 use crate::{ErrorInfo, SdlCallback};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 const CAPABILITY_UDP_ENDPOINT_REPORT_V1: &str = "udp_endpoint_report_v1";
 const CAPABILITY_PUNCH_COORD_V1: &str = "punch_coord_v1";
@@ -48,18 +47,38 @@ const CONTROL_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
 #[derive(Clone)]
 pub struct SharedDataPlane {
-    pub current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    pub peer_crypto: Arc<PeerCryptoManager>,
-    pub peer_state: Arc<Mutex<crate::handle::PeerState>>,
-    pub gateway_sessions: GatewaySessions,
-    pub gateway_grant_policy_rev: Arc<AtomicU64>,
-    pub route_manager: RouteManager,
+    pub(crate) current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    pub(crate) peer_crypto: Arc<PeerCryptoManager>,
+    pub(crate) peer_table: Arc<RwLock<crate::core::PeerTable>>,
+    pub(crate) gateway_sessions: GatewaySessions,
+    pub(crate) gateway_grant_policy_rev: Arc<AtomicU64>,
+    pub(crate) route_manager: RouteManager,
+}
+
+impl SharedDataPlane {
+    fn current_device(&self) -> CurrentDeviceInfo {
+        self.current_device.load()
+    }
+
+    fn change_connection_status(&self, status: ConnectStatus) -> CurrentDeviceInfo {
+        crate::handle::change_status(&self.current_device, status)
+    }
+
+    fn reset_peer_epoch(&self) {
+        self.peer_table.write().reset_epoch();
+    }
+
+    fn peer_epoch(&self) -> u16 {
+        self.peer_table.read().epoch()
+    }
 }
 
 #[derive(Clone)]
 pub struct ControlSession {
     channel: Http3Channel,
-    config: RuntimeConfig,
+    config: SdlContextConfig,
+    auth_request: Arc<RwLock<AuthRequestConfig>>,
+    exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
     data_plane: SharedDataPlane,
     data_plane_stats: DataPlaneStats,
     nat_test: NatTest,
@@ -74,7 +93,9 @@ pub struct ControlSession {
 impl ControlSession {
     pub fn new(
         channel: Http3Channel,
-        config: RuntimeConfig,
+        config: SdlContextConfig,
+        auth_request: Arc<RwLock<AuthRequestConfig>>,
+        exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
         data_plane: SharedDataPlane,
         data_plane_stats: DataPlaneStats,
         nat_test: NatTest,
@@ -83,6 +104,8 @@ impl ControlSession {
         Self {
             channel,
             config,
+            auth_request,
+            exit_node_state,
             data_plane,
             data_plane_stats,
             nat_test,
@@ -96,7 +119,7 @@ impl ControlSession {
     }
 
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.data_plane.current_device.load()
+        self.data_plane.current_device()
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -251,7 +274,7 @@ impl ControlSession {
         call: &Call,
         connect_count: &mut usize,
     ) -> io::Result<()> {
-        let current_device = self.data_plane.current_device.load();
+        let current_device = self.data_plane.current_device();
         if current_device.status.offline() {
             *connect_count += 1;
             self.resolve_and_update_server_addr();
@@ -299,11 +322,9 @@ impl ControlSession {
         self.last_control_packet_at_ms.store(0, Ordering::Relaxed);
         self.unanswered_heartbeats.store(0, Ordering::Relaxed);
         self.channel.reset_connection();
-        crate::handle::change_status(&self.data_plane.current_device, ConnectStatus::Connecting);
-        {
-            let mut peer_state = self.data_plane.peer_state.lock();
-            peer_state.epoch = 0;
-        }
+        self.data_plane
+            .change_connection_status(ConnectStatus::Connecting);
+        self.data_plane.reset_peer_epoch();
         self.data_plane
             .gateway_grant_policy_rev
             .store(0, Ordering::Relaxed);
@@ -370,7 +391,7 @@ impl ControlSession {
                 } else {
                     log::debug!("sending control heartbeat ping, unanswered={}", unanswered);
                 }
-                match self.send_server_heartbeat(self.data_plane.peer_state.lock().epoch) {
+                match self.send_server_heartbeat(self.data_plane.peer_epoch()) {
                     Ok(_) => {
                         self.reset_reconnect_backoff();
                     }
@@ -424,9 +445,8 @@ impl ControlSession {
 
     fn peers_missing_direct_route(&self) -> Vec<std::net::Ipv4Addr> {
         self.data_plane
-            .peer_state
-            .lock()
-            .devices
+            .peer_table
+            .read()
             .values()
             .filter(|info| info.status.is_online())
             .filter_map(|info| {
@@ -512,7 +532,7 @@ impl ControlSession {
     }
 
     pub fn send_device_auth_request(&self) -> anyhow::Result<()> {
-        let auth_request = self.config.auth_request.read();
+        let auth_request = self.auth_request.read();
         let (Some(user_id), Some(group), Some(ticket)) = (
             auth_request.user_id.as_ref(),
             auth_request.group.as_ref(),
@@ -666,7 +686,7 @@ impl ControlSession {
                 crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
             }
         });
-        let exit_node_state = self.config.exit_node_state.read().clone();
+        let exit_node_state = self.exit_node_state.read().clone();
         message.exit_node_advertised = exit_node_state.enabled;
         message.exit_node_local_ready = exit_node_state.enabled && exit_node_state.local_ready;
         for (ip, _) in routes {

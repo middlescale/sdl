@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread;
 
-use crate::core::SdlRuntime;
+use crate::core::SdlContext;
 use crate::data_plane::route::RouteKey;
 use crate::handle::callback::SdlCallback;
 use crate::handle::recv_data::client::ClientPacketHandler;
@@ -40,7 +40,7 @@ fn log_sampled_stale_drop(head: &[u8], route_addr: std::net::SocketAddr) {
 
 #[derive(Clone)]
 pub struct RecvDataHandler<Call, Device> {
-    runtime: Arc<SdlRuntime>,
+    context: Arc<SdlContext>,
     turn: TurnPacketHandler,
     client: ClientPacketHandler<Device>,
     server: ServerPacketHandler<Call, Device>,
@@ -53,14 +53,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
         //判断stun响应包
         if route_key.protocol().is_udp() {
-            if let Ok(rs) = self.runtime.nat_test.recv_data(route_key.addr, buf) {
+            if let Ok(rs) = self.context.nat_test.recv_data(route_key.addr, buf) {
                 if rs {
                     if self
-                        .runtime
+                        .context
                         .control_session
                         .supports_udp_endpoint_report_v1()
                     {
-                        self.runtime.control_session.report_client_status();
+                        self.context.control_session.report_client_status();
                     }
                     return;
                 }
@@ -76,12 +76,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
     }
 
-    pub fn new(runtime: Arc<SdlRuntime>, device: Device, callback: Call) -> Self {
-        let server = ServerPacketHandler::new(runtime.clone(), device.clone(), callback);
-        let client = ClientPacketHandler::new(runtime.clone(), device.clone());
-        let turn = TurnPacketHandler::new(runtime.clone());
+    pub fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
+        let server = ServerPacketHandler::new(context.clone(), device.clone(), callback);
+        let client = ClientPacketHandler::new(context.clone(), device.clone());
+        let turn = TurnPacketHandler::new(context.clone());
         Self {
-            runtime,
+            context,
             turn,
             client,
             server,
@@ -101,7 +101,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             log_sampled_stale_drop(net_packet.head(), route_key.addr);
             return Ok(());
         }
-        let current_device = self.runtime.current_device.load();
+        let current_device = self.context.current_device();
         let dest = net_packet.destination();
         if dest == current_device.virtual_ip
             || dest.is_broadcast()

@@ -1,5 +1,5 @@
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use sdl_packet::icmp::icmp::IcmpPacket;
 use sdl_packet::icmp::Kind;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
@@ -14,6 +14,7 @@ use crate::compression::Compressor;
 use crate::core::ExitNodeRoute;
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route_state::RouteKind;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
@@ -23,7 +24,7 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
 use crate::tun_tap_device::vnt_device::write_full_sync_device;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
-use crate::util::{PeerCryptoManager, StopManager};
+use crate::util::StopManager;
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;
@@ -47,7 +48,7 @@ pub fn start(
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     gateway_sessions: GatewaySessions,
     exit_node_route: ExitNodeRoute,
-    peer_state: Arc<Mutex<crate::handle::PeerState>>,
+    peer_table: Arc<RwLock<crate::core::PeerTable>>,
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
@@ -62,7 +63,7 @@ pub fn start(
                 current_device,
                 gateway_sessions,
                 exit_node_route,
-                peer_state,
+                peer_table,
                 peer_crypto,
                 compressor,
                 device_stop,
@@ -78,15 +79,14 @@ fn broadcast(
     channel: &DataChannel,
     net_packet: &NetPacket<&mut [u8]>,
     current_device: &CurrentDeviceInfo,
-    peer_state: &Mutex<crate::handle::PeerState>,
+    peer_table: &RwLock<crate::core::PeerTable>,
     peer_crypto: &PeerCryptoManager,
 ) -> anyhow::Result<()> {
-    let list: Vec<Ipv4Addr> = peer_state
-        .lock()
-        .devices
+    let list: Vec<(Ipv4Addr, crate::core::PeerIdentity)> = peer_table
+        .read()
         .values()
         .filter(|info| info.status.is_online())
-        .map(|info| info.virtual_ip)
+        .map(|info| (info.virtual_ip, info.identity()))
         .collect();
     if list.is_empty() {
         return Ok(());
@@ -95,12 +95,12 @@ fn broadcast(
         //未分配 VIP 时不转发
         return Ok(());
     }
-    for peer_ip in list {
+    for (peer_ip, peer_identity) in list {
         let mut peer_buf = vec![0u8; net_packet.data_len() + ENCRYPTION_RESERVED];
         peer_buf[..net_packet.data_len()].copy_from_slice(net_packet.buffer());
         let mut peer_packet = NetPacket::new_encrypt(peer_buf)?;
         peer_packet.set_destination(peer_ip);
-        let cipher = match peer_crypto.send_cipher(&peer_ip) {
+        let cipher = match peer_crypto.current_cipher(&peer_identity) {
             Ok(cipher) => cipher,
             Err(err) => {
                 log::debug!(
@@ -149,7 +149,7 @@ pub(crate) fn handle(
     current_device: CurrentDeviceInfo,
     gateway_sessions: &GatewaySessions,
     exit_node_route: &ExitNodeRoute,
-    peer_state: &Mutex<crate::handle::PeerState>,
+    peer_table: &RwLock<crate::core::PeerTable>,
     peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {
@@ -193,14 +193,14 @@ pub(crate) fn handle(
             {
                 let dns_client_port = udp_packet.source_port();
                 let dns_payload = udp_packet.payload().to_vec();
-                if let Ok(runtime) = data_channel.runtime() {
-                    let profile = runtime.dns_profile.read().clone();
+                if let Ok(context) = data_channel.context() {
+                    let profile = context.dns.profile.read().clone();
                     let decision = {
-                        let guard = peer_state.lock();
+                        let guard = peer_table.read();
                         crate::net::dns::local::resolve_local_query(
                             udp_packet.payload(),
                             profile.as_ref(),
-                            &guard.devices,
+                            guard.devices(),
                         )
                     };
                     if let LocalDnsResolution::Answered(dns_response_payload) = decision {
@@ -301,13 +301,17 @@ pub(crate) fn handle(
             data_channel,
             &net_packet,
             &current_device,
-            peer_state,
+            peer_table,
             peer_crypto,
         )?;
         return Ok(());
     }
 
-    let cipher = peer_crypto.send_cipher(&dest_ip)?;
+    let peer_identity = peer_table
+        .read()
+        .identity_for_vip(&dest_ip)
+        .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", dest_ip))?;
+    let cipher = peer_crypto.current_cipher(&peer_identity)?;
     cipher.encrypt_ipv4(&mut net_packet)?;
     match data_channel.send_to_peer(&net_packet, &dest_ip) {
         Ok(RouteKind::P2p) => {

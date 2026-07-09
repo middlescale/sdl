@@ -1,21 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use parking_lot::RwLock;
 
 use crate::cipher::Cipher;
+use crate::core::PeerIdentity;
 use crate::protocol::NetPacket;
-
-use super::OnlineSessionKeyMaterial;
+use crate::util::OnlineSessionKeyMaterial;
 
 const PEER_SESSION_CIPHER_GRACE_WINDOW: Duration = Duration::from_secs(30);
 
 pub struct PeerCryptoManager {
     online_session_key: RwLock<Option<OnlineSessionKeyMaterial>>,
-    current_ciphers: RwLock<HashMap<Ipv4Addr, Cipher>>,
-    previous_ciphers: RwLock<HashMap<Ipv4Addr, Cipher>>,
+    current_ciphers: RwLock<HashMap<PeerIdentity, Cipher>>,
+    previous_ciphers: RwLock<HashMap<PeerIdentity, Cipher>>,
     grace_until: RwLock<Option<Instant>>,
 }
 
@@ -55,38 +54,44 @@ impl PeerCryptoManager {
         self.clear_peer_session_ciphers();
     }
 
-    pub fn current_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
+    pub fn current_cipher(&self, peer_identity: &PeerIdentity) -> anyhow::Result<Cipher> {
         self.current_ciphers
             .read()
-            .get(peer_ip)
+            .get(peer_identity)
             .cloned()
-            .ok_or_else(|| anyhow!("missing peer session cipher for {}", peer_ip))
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing peer session cipher for {}",
+                    peer_identity.fingerprint_hex()
+                )
+            })
     }
 
-    pub fn previous_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
+    pub fn previous_cipher(&self, peer_identity: &PeerIdentity) -> anyhow::Result<Cipher> {
         self.previous_ciphers
             .read()
-            .get(peer_ip)
+            .get(peer_identity)
             .cloned()
-            .ok_or_else(|| anyhow!("missing previous peer session cipher for {}", peer_ip))
-    }
-
-    pub fn send_cipher(&self, peer_ip: &Ipv4Addr) -> anyhow::Result<Cipher> {
-        self.current_cipher(peer_ip)
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing previous peer session cipher for {}",
+                    peer_identity.fingerprint_hex()
+                )
+            })
     }
 
     pub fn decrypt_ipv4<B: AsRef<[u8]> + AsMut<[u8]>>(
         &self,
-        peer_ip: &Ipv4Addr,
+        peer_identity: &PeerIdentity,
         net_packet: &mut NetPacket<B>,
     ) -> anyhow::Result<()> {
-        let current_cipher = self.current_cipher(peer_ip)?;
+        let current_cipher = self.current_cipher(peer_identity)?;
         let original = net_packet.buffer().to_vec();
         if current_cipher.decrypt_ipv4(net_packet).is_ok() {
             return Ok(());
         }
         if self.is_grace_active() {
-            if let Ok(previous_cipher) = self.previous_cipher(peer_ip) {
+            if let Ok(previous_cipher) = self.previous_cipher(peer_identity) {
                 net_packet.buffer_mut().copy_from_slice(&original);
                 previous_cipher.decrypt_ipv4(net_packet)?;
                 return Ok(());
@@ -97,7 +102,7 @@ impl PeerCryptoManager {
         Ok(())
     }
 
-    pub fn rotate_peer_session_ciphers(&self, next: HashMap<Ipv4Addr, Cipher>) {
+    pub fn rotate_peer_session_ciphers(&self, next: HashMap<PeerIdentity, Cipher>) {
         let mut current = self.current_ciphers.write();
         let mut previous = self.previous_ciphers.write();
         *previous = std::mem::take(&mut *current);
@@ -105,22 +110,22 @@ impl PeerCryptoManager {
         *self.grace_until.write() = Some(Instant::now() + PEER_SESSION_CIPHER_GRACE_WINDOW);
     }
 
-    pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
+    pub fn retain_peers(&self, valid_peers: &HashSet<PeerIdentity>) {
         self.current_ciphers
             .write()
-            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+            .retain(|peer_identity, _| valid_peers.contains(peer_identity));
         self.previous_ciphers
             .write()
-            .retain(|peer_ip, _| valid_peers.contains(peer_ip));
+            .retain(|peer_identity, _| valid_peers.contains(peer_identity));
     }
 
-    pub fn clear_previous_ciphers_for(&self, peers: &HashSet<Ipv4Addr>) {
+    pub fn clear_previous_ciphers_for(&self, peers: &HashSet<PeerIdentity>) {
         if peers.is_empty() {
             return;
         }
         self.previous_ciphers
             .write()
-            .retain(|peer_ip, _| !peers.contains(peer_ip));
+            .retain(|peer_identity, _| !peers.contains(peer_identity));
     }
 
     pub fn is_grace_active(&self) -> bool {
@@ -143,7 +148,9 @@ impl PeerCryptoManager {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::net::Ipv4Addr;
 
+    use crate::core::PeerIdentity;
     use crate::protocol::body::ENCRYPTION_RESERVED;
     use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 
@@ -151,6 +158,10 @@ mod tests {
 
     fn test_cipher(seed: u8) -> Cipher {
         Cipher::new_key([seed; 32]).expect("create test cipher")
+    }
+
+    fn peer_identity(seed: u8) -> PeerIdentity {
+        PeerIdentity::from_device_public_key(&[seed; 32])
     }
 
     fn encrypted_packet(cipher: &Cipher, payload: &[u8]) -> NetPacket<Vec<u8>> {
@@ -183,29 +194,29 @@ mod tests {
 
     #[test]
     fn rotate_keeps_sending_with_current_cipher() {
-        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let peer = peer_identity(9);
         let manager = PeerCryptoManager::new(1);
 
-        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
-        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(2))]));
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer.clone(), test_cipher(1))]));
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer.clone(), test_cipher(2))]));
 
         assert_eq!(
-            manager.send_cipher(&peer).unwrap().key().unwrap(),
+            manager.current_cipher(&peer).unwrap().key().unwrap(),
             manager.current_cipher(&peer).unwrap().key().unwrap()
         );
     }
 
     #[test]
     fn decrypt_uses_previous_cipher_within_grace_window() {
-        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let peer = peer_identity(9);
         let manager = PeerCryptoManager::new(1);
         let payload = b"hello-peer";
 
-        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer.clone(), test_cipher(1))]));
         let old_cipher = manager.current_cipher(&peer).unwrap();
         let mut packet = encrypted_packet(&old_cipher, payload);
 
-        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(2))]));
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer.clone(), test_cipher(2))]));
 
         manager.decrypt_ipv4(&peer, &mut packet).unwrap();
         assert_eq!(packet.payload(), payload);
@@ -214,11 +225,11 @@ mod tests {
 
     #[test]
     fn clear_all_resets_peer_crypto_state() {
-        let peer = Ipv4Addr::new(10, 0, 0, 9);
+        let peer = peer_identity(9);
         let manager = PeerCryptoManager::new(1);
 
         manager.ensure_online_session_key();
-        manager.rotate_peer_session_ciphers(HashMap::from([(peer, test_cipher(1))]));
+        manager.rotate_peer_session_ciphers(HashMap::from([(peer.clone(), test_cipher(1))]));
         manager.clear_all();
 
         assert!(manager.online_session_key().is_none());
@@ -229,15 +240,15 @@ mod tests {
 
     #[test]
     fn retain_peers_drops_stale_ciphers() {
-        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
-        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let peer1 = peer_identity(9);
+        let peer2 = peer_identity(10);
         let manager = PeerCryptoManager::new(2);
 
         manager.rotate_peer_session_ciphers(HashMap::from([
-            (peer1, test_cipher(1)),
-            (peer2, test_cipher(2)),
+            (peer1.clone(), test_cipher(1)),
+            (peer2.clone(), test_cipher(2)),
         ]));
-        manager.retain_peers(&HashSet::from([peer2]));
+        manager.retain_peers(&HashSet::from([peer2.clone()]));
 
         assert!(manager.current_cipher(&peer1).is_err());
         assert!(manager.current_cipher(&peer2).is_ok());
@@ -245,22 +256,35 @@ mod tests {
 
     #[test]
     fn clear_previous_ciphers_for_drops_grace_cipher_only() {
-        let peer1 = Ipv4Addr::new(10, 0, 0, 9);
-        let peer2 = Ipv4Addr::new(10, 0, 0, 10);
+        let peer1 = peer_identity(9);
+        let peer2 = peer_identity(10);
         let manager = PeerCryptoManager::new(2);
 
         manager.rotate_peer_session_ciphers(HashMap::from([
-            (peer1, test_cipher(1)),
-            (peer2, test_cipher(2)),
+            (peer1.clone(), test_cipher(1)),
+            (peer2.clone(), test_cipher(2)),
         ]));
         manager.rotate_peer_session_ciphers(HashMap::from([
-            (peer1, test_cipher(3)),
-            (peer2, test_cipher(4)),
+            (peer1.clone(), test_cipher(3)),
+            (peer2.clone(), test_cipher(4)),
         ]));
-        manager.clear_previous_ciphers_for(&HashSet::from([peer1]));
+        manager.clear_previous_ciphers_for(&HashSet::from([peer1.clone()]));
 
         assert!(manager.previous_cipher(&peer1).is_err());
         assert!(manager.current_cipher(&peer1).is_ok());
         assert!(manager.previous_cipher(&peer2).is_ok());
+    }
+
+    #[test]
+    fn same_vip_with_different_identity_does_not_reuse_cipher() {
+        let old_identity = peer_identity(9);
+        let new_identity = peer_identity(10);
+        let manager = PeerCryptoManager::new(2);
+
+        manager
+            .rotate_peer_session_ciphers(HashMap::from([(old_identity.clone(), test_cipher(1))]));
+
+        assert!(manager.current_cipher(&old_identity).is_ok());
+        assert!(manager.current_cipher(&new_identity).is_err());
     }
 }

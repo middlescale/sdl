@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
-use crate::handle::PeerDeviceInfo;
+use crate::core::PeerInfo;
 use crate::DnsProfile;
 
 const DNS_CLASS_IN: u16 = 1;
@@ -23,7 +23,7 @@ struct ParsedDnsQuery {
 pub(crate) fn resolve_local_query(
     payload: &[u8],
     profile: Option<&DnsProfile>,
-    devices: &HashMap<Ipv4Addr, PeerDeviceInfo>,
+    devices: &HashMap<Ipv4Addr, PeerInfo>,
 ) -> LocalDnsResolution {
     let Some(profile) = profile else {
         return LocalDnsResolution::Unsupported;
@@ -112,7 +112,7 @@ fn parse_dns_query(payload: &[u8]) -> Option<ParsedDnsQuery> {
 fn resolve_forward(
     name: &str,
     profile: &DnsProfile,
-    devices: &HashMap<Ipv4Addr, PeerDeviceInfo>,
+    devices: &HashMap<Ipv4Addr, PeerInfo>,
 ) -> Option<Ipv4Addr> {
     let name = normalize_name(name)?;
     let matched_domain = best_match_domain(&name, profile)?;
@@ -129,7 +129,7 @@ fn resolve_forward(
 fn resolve_reverse(
     name: &str,
     profile: &DnsProfile,
-    devices: &HashMap<Ipv4Addr, PeerDeviceInfo>,
+    devices: &HashMap<Ipv4Addr, PeerInfo>,
 ) -> Option<String> {
     let ip = parse_ptr_name(name)?;
     let device = devices.get(&ip)?;
@@ -229,11 +229,11 @@ mod tests {
         }
     }
 
-    fn devices() -> HashMap<Ipv4Addr, PeerDeviceInfo> {
+    fn devices() -> HashMap<Ipv4Addr, PeerInfo> {
         let mut out = HashMap::new();
         out.insert(
             Ipv4Addr::new(10, 26, 0, 3),
-            PeerDeviceInfo::new(
+            PeerInfo::new(
                 Ipv4Addr::new(10, 26, 0, 3),
                 "node-a".into(),
                 0,

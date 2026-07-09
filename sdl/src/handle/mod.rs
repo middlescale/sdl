@@ -10,14 +10,6 @@ pub mod tun_tap;
 
 const SELF_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 2);
 
-/// Shared peer-device table, protected by a Mutex.
-/// `epoch` increments every time the server pushes a new device list so stale updates can be
-/// detected and dropped.
-#[derive(Debug, Default)]
-pub struct PeerState {
-    pub epoch: u16,
-    pub devices: std::collections::HashMap<Ipv4Addr, PeerDeviceInfo>,
-}
 pub(crate) const CONTROL_VIP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 1);
 
 pub fn now_time() -> u64 {
@@ -26,81 +18,6 @@ pub fn now_time() -> u64 {
         timestamp.as_secs() * 1000 + u64::from(timestamp.subsec_millis())
     } else {
         0
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PeerDeviceInfo {
-    pub virtual_ip: Ipv4Addr,
-    pub name: String,
-    pub status: PeerDeviceStatus,
-    pub device_id: String,
-    pub device_pub_key: Vec<u8>,
-    pub online_kx_pub: Vec<u8>,
-    pub preferred_channel_mode: crate::proto::message::ChannelMode,
-    pub exit_node_advertised: bool,
-    pub exit_node_approved: bool,
-    pub exit_node_usable: bool,
-}
-
-impl PeerDeviceInfo {
-    pub fn new(
-        virtual_ip: Ipv4Addr,
-        name: String,
-        status: u8,
-        device_id: String,
-        device_pub_key: Vec<u8>,
-        online_kx_pub: Vec<u8>,
-        preferred_channel_mode: crate::proto::message::ChannelMode,
-        exit_node_advertised: bool,
-        exit_node_approved: bool,
-        exit_node_usable: bool,
-    ) -> Self {
-        Self {
-            virtual_ip,
-            name,
-            status: PeerDeviceStatus::from(status),
-            device_id,
-            device_pub_key,
-            online_kx_pub,
-            preferred_channel_mode,
-            exit_node_advertised,
-            exit_node_approved,
-            exit_node_usable,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PeerDeviceStatus {
-    Online,
-    Offline,
-}
-
-impl PeerDeviceStatus {
-    pub fn is_online(&self) -> bool {
-        self == &PeerDeviceStatus::Online
-    }
-    pub fn is_offline(&self) -> bool {
-        self == &PeerDeviceStatus::Offline
-    }
-}
-
-impl Into<u8> for PeerDeviceStatus {
-    fn into(self) -> u8 {
-        match self {
-            PeerDeviceStatus::Online => 0,
-            PeerDeviceStatus::Offline => 1,
-        }
-    }
-}
-
-impl From<u8> for PeerDeviceStatus {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => PeerDeviceStatus::Online,
-            _ => PeerDeviceStatus::Offline,
-        }
     }
 }
 

@@ -11,9 +11,7 @@ pub use device_identity::*;
 mod debug_watch;
 pub use debug_watch::*;
 pub(crate) mod icmp_debug;
-mod peer_crypto_manager;
 mod peer_probe_tracker;
-pub use peer_crypto_manager::*;
 pub use peer_probe_tracker::*;
 
 #[cfg(feature = "upnp")]

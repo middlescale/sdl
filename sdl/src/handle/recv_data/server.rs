@@ -15,11 +15,12 @@ use sdl_packet::icmp::{icmp, Kind};
 use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
-use crate::core::SdlRuntime;
+use crate::core::PeerInfo;
+use crate::core::SdlContext;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use crate::handle::recv_data::PacketHandler;
-use crate::handle::{ConnectStatus, CurrentDeviceInfo, PeerDeviceInfo};
+use crate::handle::{ConnectStatus, CurrentDeviceInfo};
 use crate::nat::punch::{NatInfo, NatType, PunchModel};
 use crate::proto::message::{
     DebugCollectRequest, DebugCollectResponse, DebugWatchStartRequest, DebugWatchStartResponse,
@@ -63,11 +64,11 @@ fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr
 /// 处理来源于服务端的包
 #[derive(Clone)]
 pub struct ServerPacketHandler<Call, Device> {
-    runtime: Arc<SdlRuntime>,
+    context: Arc<SdlContext>,
     device: Device,
     callback: Call,
     punch_active_sessions: Arc<Mutex<HashMap<Ipv4Addr, ActivePunchState>>>,
-    // Keep device-list commit/apply in order with other peer_state epoch mutators.
+    // Keep device-list commit/apply in order with other peer_table epoch mutators.
     device_list_update_lock: Arc<Mutex<()>>,
     device_auth_ok: Arc<AtomicCell<bool>>,
 }
@@ -88,8 +89,13 @@ struct ActivePunchState {
 }
 
 struct DeviceListUpdate {
-    previous_peers: HashMap<Ipv4Addr, PeerDeviceInfo>,
-    ip_list: Vec<PeerDeviceInfo>,
+    previous_peers: HashMap<Ipv4Addr, PeerInfo>,
+    ip_list: Vec<PeerInfo>,
+}
+
+struct PeerIdentityPlan {
+    active_identities: HashSet<crate::core::PeerIdentity>,
+    reset_identities: HashSet<crate::core::PeerIdentity>,
 }
 
 impl ActivePunchState {
@@ -131,9 +137,9 @@ impl ActivePunchState {
 }
 
 impl<Call, Device> ServerPacketHandler<Call, Device> {
-    pub fn new(runtime: Arc<SdlRuntime>, device: Device, callback: Call) -> Self {
+    pub fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
         Self {
-            runtime,
+            context,
             device,
             callback,
             punch_active_sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -151,19 +157,20 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !self.runtime.control_session.is_control_addr(route_key.addr)
+        if !self.context.control_session.is_control_addr(route_key.addr)
             && !self
-                .runtime
-                .gateway_sessions
+                .context
+                .gateway
+                .sessions
                 .is_gateway_addr(route_key.addr)
         {
             log_sampled_unauthorized_server_source_drop(
                 route_key,
-                self.runtime.control_session.server_addr(),
+                self.context.control_session.server_addr(),
             );
             return Ok(());
         }
-        self.runtime
+        self.context
             .route_manager()
             .touch_path(&net_packet.source(), &route_key);
         self.reconcile_punch_sessions(current_device)?;
@@ -189,7 +196,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                     CAPABILITY_UDP_ENDPOINT_REPORT_V1
                 ));
             }
-            self.runtime
+            self.context
                 .control_session
                 .set_negotiated_capabilities(&response.capabilities);
             let handshake_info =
@@ -217,8 +224,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                         let source = net_packet.source();
                         let destination = net_packet.destination();
                         let from_gateway = self
-                            .runtime
-                            .gateway_sessions
+                            .context
+                            .gateway
+                            .sessions
                             .is_gateway_addr(route_key.addr);
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
@@ -255,7 +263,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                             }
                         }
                         if let Some((icmp_source, icmp_destination)) = gateway_echo_reply {
-                            self.runtime.debug_watch.emit(
+                            self.context.debug_watch.emit(
                                 "icmp",
                                 "gateway_echo_reply_received",
                                 serde_json::json!({
@@ -274,7 +282,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                 net_packet.payload(),
                                 "gateway ip packet inject",
                             )?;
-                            self.runtime.debug_watch.emit(
+                            self.context.debug_watch.emit(
                                 "icmp",
                                 "gateway_echo_reply_injected",
                                 serde_json::json!({
@@ -291,7 +299,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                         }
                         if from_gateway_peer {
                             if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
-                                self.runtime.debug_watch.emit(
+                                self.context.debug_watch.emit(
                                     "icmp",
                                     "peer_echo_reply_received",
                                     serde_json::json!({
@@ -312,7 +320,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                 "gateway peer ip packet inject",
                             )?;
                             if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
-                                self.runtime.debug_watch.emit(
+                                self.context.debug_watch.emit(
                                     "icmp",
                                     "peer_echo_reply_injected",
                                     serde_json::json!({
@@ -349,25 +357,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     ) -> anyhow::Result<()> {
         let packet_len = packet.buffer().len();
         let destination = packet.destination();
-        self.runtime.data_plane_stats.record_logical_up(packet_len);
-        self.runtime.gateway_sessions.send_relay(packet)?;
-        self.runtime.data_plane_stats.record_gateway_up(packet_len);
+        self.context.data_plane_stats.record_logical_up(packet_len);
+        self.context.gateway.sessions.send_relay(packet)?;
+        self.context.data_plane_stats.record_gateway_up(packet_len);
         if destination != current_device.virtual_gateway {
-            self.runtime
+            self.context
                 .data_plane_stats
                 .record_peer_up(destination, packet_len);
         }
         Ok(())
-    }
-
-    fn peer_identity_key(peer: &PeerDeviceInfo) -> Vec<u8> {
-        if !peer.device_id.is_empty() {
-            return format!("id:{}", peer.device_id).into_bytes();
-        }
-        let mut key = Vec::with_capacity(peer.device_pub_key.len() + 3);
-        key.extend_from_slice(b"pk:");
-        key.extend_from_slice(&peer.device_pub_key);
-        key
     }
 
     fn apply_gateway_grants(
@@ -381,8 +379,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let incoming_policy_rev =
             effective_gateway_policy_rev(gateway_policy_rev, &effective_grants, legacy_grant);
         let current_policy_rev = self
-            .runtime
-            .gateway_grant_policy_rev
+            .context
+            .gateway
+            .grant_policy_rev
             .load(Ordering::Relaxed);
         if !should_apply_gateway_policy_rev(current_policy_rev, incoming_policy_rev) {
             log::info!(
@@ -394,13 +393,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         }
         if effective_grants.is_empty() {
             if self
-                .runtime
-                .gateway_sessions
+                .context
+                .gateway
+                .sessions
                 .current_grant_snapshot()
                 .is_some()
             {
-                self.runtime
-                    .gateway_grant_policy_rev
+                self.context
+                    .gateway
+                    .grant_policy_rev
                     .store(incoming_policy_rev, Ordering::Relaxed);
                 log::warn!(
                     "gateway grant update omitted grants; retaining cached gateway grant policy_rev={}",
@@ -408,20 +409,22 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 );
                 return;
             }
-            self.runtime.gateway_sessions.clear_gateway_grant();
-            self.runtime
-                .gateway_grant_policy_rev
+            self.context.gateway.sessions.clear_gateway_grant();
+            self.context
+                .gateway
+                .grant_policy_rev
                 .store(incoming_policy_rev, Ordering::Relaxed);
             log::info!("gateway grant cleared");
             return;
         }
-        self.runtime.gateway_sessions.set_gateway_grants(
+        self.context.gateway.sessions.set_gateway_grants(
             &effective_grants,
             virtual_ip,
-            self.runtime.config.device_id.clone(),
+            self.context.config.device_id.clone(),
         );
-        self.runtime
-            .gateway_grant_policy_rev
+        self.context
+            .gateway
+            .grant_policy_rev
             .store(incoming_policy_rev, Ordering::Relaxed);
         log::info!(
             "gateway grants applied policy_rev={} count={} gateways={:?}",
@@ -439,10 +442,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         device_info_list: Vec<proto::message::DeviceInfo>,
         epoch: u16,
     ) -> Option<DeviceListUpdate> {
-        let ip_list: Vec<PeerDeviceInfo> = device_info_list
+        let ip_list: Vec<PeerInfo> = device_info_list
             .into_iter()
             .map(|info| {
-                PeerDeviceInfo::new(
+                PeerInfo::new(
                     Ipv4Addr::from(info.virtual_ip),
                     info.name,
                     info.device_status as u8,
@@ -456,23 +459,22 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 )
             })
             .collect();
-        let next_devices: HashMap<Ipv4Addr, PeerDeviceInfo> = ip_list
+        let next_devices: HashMap<Ipv4Addr, PeerInfo> = ip_list
             .iter()
             .cloned()
             .map(|peer| (peer.virtual_ip, peer))
             .collect();
         let previous_peers = {
-            let mut peer_state = self.runtime.peer_state.lock();
-            let current_epoch = peer_state.epoch;
-            let Some(previous_peers) =
-                try_commit_device_list_state(&mut peer_state, epoch, next_devices)
-            else {
-                log::info!(
-                    "ignore stale device list: current_epoch={}, incoming_epoch={}",
-                    current_epoch,
-                    epoch
-                );
-                return None;
+            let previous_peers = match self.context.replace_peer_devices(epoch, next_devices) {
+                Ok(previous_peers) => previous_peers,
+                Err(current_epoch) => {
+                    log::info!(
+                        "ignore stale device list: current_epoch={}, incoming_epoch={}",
+                        current_epoch,
+                        epoch
+                    );
+                    return None;
+                }
             };
             previous_peers
         };
@@ -489,7 +491,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, state| {
-                if self.runtime.route_manager().direct_path_count(peer_ip) > 0 {
+                if self.context.route_manager().direct_path_count(peer_ip) > 0 {
                     succeeded.push(state.sessions());
                     return false;
                 }
@@ -526,7 +528,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         transport: service_packet::Protocol,
         payload: &[u8],
     ) -> anyhow::Result<()> {
-        self.runtime
+        self.context
             .control_session
             .send_service_payload(transport, payload)?;
         Ok(())
@@ -545,7 +547,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let _ = current_device;
         let selected_endpoint = selected_endpoint_for_result(
             code,
-            self.runtime
+            self.context
                 .route_manager()
                 .direct_route(&Ipv4Addr::from(target)),
         );
@@ -560,7 +562,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             format_punch_endpoint(selected_endpoint.as_ref())
         );
         send_punch_result_via_control(
-            &self.runtime.control_session,
+            &self.context.control_session,
             session_id,
             source,
             target,
@@ -593,7 +595,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     }
 
     fn spawn_punch_session_watchdog(&self, peer_ip: Ipv4Addr, session: ActivePunchSession) {
-        let runtime = self.runtime.clone();
+        let context = self.context.clone();
         let sessions = self.punch_active_sessions.clone();
         thread::Builder::new()
             .name(format!("punchWatchdog-{peer_ip}"))
@@ -609,7 +611,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     {
                         return;
                     }
-                    if runtime.route_manager().direct_path_count(&peer_ip) > 0 {
+                    if context.route_manager().direct_path_count(&peer_ip) > 0 {
                         let state = guard.remove(&peer_ip).expect("active punch state");
                         Some((
                             state.sessions(),
@@ -637,7 +639,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         code,
                         reason
                     );
-                    runtime.debug_watch.emit(
+                    context.debug_watch.emit(
                         "punch",
                         "watchdog_outcome",
                         serde_json::json!({
@@ -648,11 +650,13 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             "reason": reason,
                         }),
                     );
-                    let selected_endpoint =
-                        selected_endpoint_for_result(code, runtime.route_manager().direct_route(&peer_ip));
+                    let selected_endpoint = selected_endpoint_for_result(
+                        code,
+                        context.route_manager().direct_route(&peer_ip),
+                    );
                     for punch_session in sessions {
                         if let Err(err) = send_punch_result_via_control(
-                            &runtime.control_session,
+                            &context.control_session,
                             punch_session.session_id,
                             punch_session.source,
                             punch_session.target,
@@ -725,7 +729,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         &reason,
                     ) {
                         match self
-                            .runtime
+                            .context
                             .control_session
                             .try_send_registration_reject_recovery_handshake()
                         {
@@ -787,7 +791,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 });
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);
-                    self.runtime
+                    self.context
                         .route_manager()
                         .add_path_if_absent(virtual_gateway, route);
                     let public_ip = response.public_ip.into();
@@ -796,11 +800,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         observed_udp_port_from_registration(route_key.protocol(), public_port);
                     // For QUIC/TCP control, the observed remote port belongs to the control-plane
                     // connection, not the data-plane UDP socket used for punching.
-                    self.runtime
+                    self.context
                         .nat_test
                         .update_addr(public_ip, observed_udp_port);
                     let old = current_device;
-                    let dns_changed = self.runtime.replace_dns_profile(dns_profile);
+                    let dns_changed = self.context.replace_dns_profile(dns_profile);
                     let vip_changed = old.virtual_ip != virtual_ip
                         || old.virtual_gateway != virtual_gateway
                         || old.virtual_netmask != virtual_netmask;
@@ -813,7 +817,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         new_current_device.virtual_gateway = virtual_gateway;
                         new_current_device.status = ConnectStatus::Connected;
                         if let Err(c) = self
-                            .runtime
+                            .context
                             .current_device
                             .compare_exchange(cur, new_current_device)
                         {
@@ -822,7 +826,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             break;
                         }
                     }
-                    self.runtime.gateway_sessions.trigger_connect_now();
+                    self.context.gateway.sessions.trigger_connect_now();
 
                     if vip_changed || dns_changed {
                         if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
@@ -836,8 +840,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                     target_os = "linux",
                                     target_os = "macos"
                                 ))]
-                                self.runtime.config.device_name.clone(),
-                                self.runtime.config.mtu,
+                                self.context.config.device_name.clone(),
+                                self.context.config.mtu,
                                 virtual_ip,
                                 virtual_netmask,
                                 virtual_gateway,
@@ -848,7 +852,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         #[cfg(feature = "integrated_tun")]
                         {
                             if let Err(e) =
-                                self.runtime.sync_tun_with_current_device(&self.callback)
+                                self.context.sync_tun_with_current_device(&self.callback)
                             {
                                 log::error!("{:?}", e);
                                 self.callback.error(ErrorInfo::new_msg(
@@ -859,7 +863,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         }
                     } else if old.status.offline() {
                         #[cfg(feature = "integrated_tun")]
-                        self.runtime.force_apply_dns_profile(&self.callback);
+                        self.context.force_apply_dns_profile(&self.callback);
                     }
                     self.set_device_info_list(device_list_update);
                     if vip_changed {
@@ -868,9 +872,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         // only when the virtual addressing actually changed so wake/reconnect
                         // paths use the committed VIP without adding an extra round for
                         // unchanged registrations.
-                        self.runtime.gateway_sessions.trigger_connect_now();
+                        self.context.gateway.sessions.trigger_connect_now();
                     }
-                    self.runtime
+                    self.context
                         .control_session
                         .request_punch_status_report_with_nat_ready(if old.status.offline() {
                             crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery
@@ -885,10 +889,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         ),
                     ) {
                         match self
-                            .runtime
+                            .context
                             .control_session
                             .send_refresh_gateway_grant_request(
-                                &self.runtime.gateway_sessions,
+                                &self.context.gateway.sessions,
                                 false,
                             ) {
                             Ok(_) => {
@@ -931,7 +935,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     return Ok(());
                 };
                 self.set_device_info_list(device_list_update);
-                self.runtime.control_session.report_client_status();
+                self.context.control_session.report_client_status();
             }
             service_packet::Protocol::DeviceAuthAck => {
                 let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
@@ -951,7 +955,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     ));
                     if should_retry_device_auth_after_challenge_expired(error_reason, &ack.reason) {
                         match self
-                            .runtime
+                            .context
                             .control_session
                             .try_retry_device_auth_after_challenge_expired()
                         {
@@ -990,7 +994,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DeviceAuthChallenge => {
                 let challenge = DeviceAuthChallenge::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DeviceAuthChallenge {:?}", e)))?;
-                self.runtime
+                self.context
                     .control_session
                     .send_device_auth_proof(&challenge)?;
             }
@@ -1011,7 +1015,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     Err(response.reason.clone())
                 };
                 if !self
-                    .runtime
+                    .context
                     .complete_rename_request(response.request_id, result)
                 {
                     if response.ok
@@ -1044,7 +1048,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let mut response = DebugCollectResponse::new();
                 response.request_id = request.request_id;
                 response.collected_at_unix_ms = crate::handle::now_time() as i64;
-                match self.runtime.debug_snapshot_json(&request.sections) {
+                match self.context.debug_snapshot_json(&request.sections) {
                     Ok(snapshot_json) => {
                         response.ok = true;
                         response.snapshot_json = snapshot_json;
@@ -1071,7 +1075,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DebugWatchStartRequest => {
                 let request = DebugWatchStartRequest::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DebugWatchStartRequest {:?}", e)))?;
-                let (started_at_unix_ms, expire_at_unix_ms) = self.runtime.debug_watch.start(
+                let (started_at_unix_ms, expire_at_unix_ms) = self.context.debug_watch.start(
                     request.request_id,
                     &request.sections,
                     request.duration_sec.max(1),
@@ -1090,7 +1094,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     service_packet::Protocol::DebugWatchStartResponse,
                     &bytes,
                 )?;
-                self.runtime.debug_watch.emit(
+                self.context.debug_watch.emit(
                     "runtime",
                     "watch_started",
                     serde_json::json!({
@@ -1104,7 +1108,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DebugWatchStopRequest => {
                 let request = DebugWatchStopRequest::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DebugWatchStopRequest {:?}", e)))?;
-                let stopped_watch_id = self.runtime.debug_watch.stop(Some(request.watch_id));
+                let stopped_watch_id = self.context.debug_watch.stop(Some(request.watch_id));
                 let mut response = DebugWatchStopResponse::new();
                 response.request_id = request.request_id;
                 response.watch_id = stopped_watch_id.unwrap_or(request.watch_id);
@@ -1127,7 +1131,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DnsQueryResponse => {
                 let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DnsQueryResponse {:?}", e)))?;
-                let Some(pending) = self.runtime.take_dns_query(response.request_id) else {
+                let Some(pending) = self.context.take_dns_query(response.request_id) else {
                     log::debug!(
                         "drop dns response for unknown request_id={}",
                         response.request_id
@@ -1169,7 +1173,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     peer_nat_info.public_ports,
                     peer_nat_info.local_ipv4()
                 );
-                self.runtime.debug_watch.emit(
+                self.context.debug_watch.emit(
                     "punch",
                     "start_received",
                         serde_json::json!({
@@ -1203,20 +1207,20 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     deadline_unix_ms,
                 };
                 let local_forced_relay = self
-                    .runtime
+                    .context
                     .route_manager()
                     .use_channel_type()
                     .is_only_relay();
-                let peer_forced_relay = self
-                    .runtime
-                    .peer_state
-                    .lock()
-                    .devices
-                    .get(&peer_ip)
-                    .map_or(false, |p| {
-                        p.preferred_channel_mode
-                            == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
-                    });
+                let peer_forced_relay =
+                    self.context
+                        .peers
+                        .table
+                        .read()
+                        .get(&peer_ip)
+                        .map_or(false, |p| {
+                            p.preferred_channel_mode
+                                == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
+                        });
                 let mut coalesced = false;
                 let (accepted, phase, reason) = if local_forced_relay {
                     (
@@ -1252,7 +1256,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         )
                     } else {
                         let accepted = self
-                            .runtime
+                            .context
                             .punch_coordinator
                             .submit_local(peer_ip, peer_nat_info);
                         (
@@ -1313,9 +1317,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         io::Error::other(format!("RefreshGatewayGrantResponse {:?}", e))
                     })?;
                 if should_clear_gateway_grants_from_refresh_response(&response) {
-                    self.runtime.gateway_sessions.clear_gateway_grant();
-                    self.runtime
-                        .gateway_grant_policy_rev
+                    self.context.gateway.sessions.clear_gateway_grant();
+                    self.context
+                        .gateway
+                        .grant_policy_rev
                         .store(response.gateway_policy_rev, Ordering::Relaxed);
                     log::warn!(
                         "gateway grant revoked by refresh response: {}",
@@ -1328,15 +1333,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         == RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE
                     {
                         let current_policy_rev = self
-                            .runtime
-                            .gateway_grant_policy_rev
+                            .context
+                            .gateway
+                            .grant_policy_rev
                             .load(Ordering::Relaxed);
                         if should_apply_gateway_policy_rev(
                             current_policy_rev,
                             response.gateway_policy_rev,
                         ) {
-                            self.runtime
-                                .gateway_grant_policy_rev
+                            self.context
+                                .gateway
+                                .grant_policy_rev
                                 .store(response.gateway_policy_rev, Ordering::Relaxed);
                         }
                     }
@@ -1358,8 +1365,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::GatewayConnectAck => {
                 let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
-                self.runtime
-                    .gateway_sessions
+                self.context
+                    .gateway
+                    .sessions
                     .handle_connect_ack(route_key.addr, &ack);
             }
             _ => {
@@ -1377,13 +1385,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             ip_list,
         } = device_list_update;
         let active_vips: HashSet<Ipv4Addr> = ip_list.iter().map(|peer| peer.virtual_ip).collect();
-        let previous_by_identity: HashMap<Vec<u8>, Ipv4Addr> = previous_peers
+        let identity_plan = plan_peer_identity_update(&previous_peers, &ip_list);
+        let previous_by_identity: HashMap<_, Ipv4Addr> = previous_peers
             .values()
-            .map(|peer| (Self::peer_identity_key(peer), peer.virtual_ip))
+            .map(|peer| (peer.identity(), peer.virtual_ip))
             .collect();
-        let current_by_vip: HashMap<Ipv4Addr, Vec<u8>> = ip_list
+        let current_by_vip: HashMap<Ipv4Addr, _> = ip_list
             .iter()
-            .map(|peer| (peer.virtual_ip, Self::peer_identity_key(peer)))
+            .map(|peer| (peer.virtual_ip, peer.identity()))
             .collect();
         let mut reset_vips: HashSet<Ipv4Addr> = previous_peers
             .keys()
@@ -1392,14 +1401,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .collect();
         for (vip, previous_peer) in &previous_peers {
             if let Some(next_identity) = current_by_vip.get(vip) {
-                let previous_identity = Self::peer_identity_key(previous_peer);
+                let previous_identity = previous_peer.identity();
                 if &previous_identity != next_identity {
                     reset_vips.insert(*vip);
                 }
             }
         }
         for peer in &ip_list {
-            let identity = Self::peer_identity_key(peer);
+            let identity = peer.identity();
             if let Some(previous_vip) = previous_by_identity.get(&identity) {
                 if *previous_vip != peer.virtual_ip {
                     log::info!(
@@ -1417,15 +1426,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             }
         }
         for vip in &reset_vips {
-            self.runtime.route_manager.clear_peer(vip);
+            self.context.route_manager.clear_peer(vip);
         }
-        self.runtime.route_manager.retain_peers(&active_vips);
-        self.runtime
-            .peer_nat_info_map
+        self.context.route_manager.retain_peers(&active_vips);
+        self.context
+            .peers
+            .nat_info_map
             .write()
             .retain(|vip, _| active_vips.contains(vip) && !reset_vips.contains(vip));
         let mut peer_session_ciphers = std::collections::HashMap::with_capacity(ip_list.len());
-        let local_online_session_key = self.runtime.peer_crypto.online_session_key();
+        let local_online_session_key = self.context.peers.crypto.online_session_key();
         for peer_info in &ip_list {
             let Some(local_online_session_key) = local_online_session_key.as_ref() else {
                 log::warn!("missing local online session key, skip deriving peer session ciphers");
@@ -1434,12 +1444,12 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             match crate::util::derive_peer_session_key(
                 local_online_session_key,
                 &peer_info.online_kx_pub,
-                &self.runtime.config.token,
+                &self.context.config.token,
             )
             .and_then(crate::cipher::Cipher::new_key)
             {
                 Ok(cipher) => {
-                    peer_session_ciphers.insert(peer_info.virtual_ip, cipher);
+                    peer_session_ciphers.insert(peer_info.identity(), cipher);
                 }
                 Err(err) => {
                     log::warn!(
@@ -1451,14 +1461,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
             }
         }
-        self.runtime
-            .peer_crypto
+        self.context
+            .peers
+            .crypto
             .rotate_peer_session_ciphers(peer_session_ciphers);
-        self.runtime.peer_crypto.retain_peers(&active_vips);
-        self.runtime
-            .peer_crypto
-            .clear_previous_ciphers_for(&reset_vips);
-        self.runtime.apply_selected_exit_node_route();
+        self.context
+            .peers
+            .crypto
+            .retain_peers(&identity_plan.active_identities);
+        self.context
+            .peers
+            .crypto
+            .clear_previous_ciphers_for(&identity_plan.reset_identities);
+        self.context.apply_selected_exit_node_route();
         self.callback.peer_client_list(
             ip_list
                 .into_iter()
@@ -1475,11 +1490,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         allow_ip_change: bool,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
-            log::info!("已连接的不需要注册，{:?}", self.runtime.config);
+            log::info!("已连接的不需要注册，{:?}", self.context.config);
             return Ok(());
         }
-        log::info!("发送注册请求，{:?}", self.runtime.config);
-        self.runtime
+        log::info!("发送注册请求，{:?}", self.context.config);
+        self.context
             .control_session
             .send_registration_request(false, allow_ip_change)?;
         Ok(())
@@ -1497,21 +1512,17 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.callback.error(err);
             }
             InErrorPacket::Disconnect => {
-                crate::handle::change_status(
-                    &self.runtime.current_device,
-                    ConnectStatus::Connecting,
-                );
+                self.context
+                    .change_connection_status(ConnectStatus::Connecting);
                 let err = ErrorInfo::new(ErrorType::Disconnect);
                 self.callback.error(err);
                 let _device_list_update_guard = self.device_list_update_lock.lock();
                 //掉线epoch要归零
                 {
-                    let mut dev = self.runtime.peer_state.lock();
-                    dev.epoch = 0;
-                    drop(dev);
+                    self.context.reset_peer_epoch();
                 }
-                self.runtime.peer_crypto.clear_all();
-                self.runtime.control_session.send_handshake()?;
+                self.context.peers.crypto.clear_all();
+                self.context.control_session.send_handshake()?;
                 // self.register(current_device, context, route_key)?;
             }
             InErrorPacket::AddressExhausted => {
@@ -1551,10 +1562,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
                 let from_control_or_gateway =
-                    self.runtime.control_session.is_control_addr(route_key.addr)
+                    self.context.control_session.is_control_addr(route_key.addr)
                         || self
-                            .runtime
-                            .gateway_sessions
+                            .context
+                            .gateway
+                            .sessions
                             .is_gateway_addr(route_key.addr);
                 let learned_metric = if from_control_or_gateway {
                     metric.max(2)
@@ -1563,20 +1575,20 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 };
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, learned_metric, rt);
-                self.runtime
+                self.context
                     .route_manager()
                     .add_path(net_packet.source(), route);
-                let epoch = self.runtime.peer_state.lock().epoch;
+                let epoch = self.context.peer_epoch();
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
-                    self.runtime
+                    self.context
                         .control_session
                         .send_service_header_only(service_packet::Protocol::PullDeviceList)?;
                 }
             }
             ControlPacket::AddrResponse(addr_packet) => {
                 //更新本地公网ipv4
-                self.runtime
+                self.context
                     .nat_test
                     .update_addr(addr_packet.ipv4(), addr_packet.port());
             }
@@ -1586,6 +1598,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     }
 }
 
+#[cfg(test)]
 fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
     if current_epoch == 0 || current_epoch == incoming_epoch {
         return false;
@@ -1593,17 +1606,45 @@ fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
     current_epoch.wrapping_sub(incoming_epoch) < (u16::MAX / 2)
 }
 
+#[cfg(test)]
 fn try_commit_device_list_state(
-    peer_state: &mut crate::handle::PeerState,
+    peer_table: &mut crate::core::PeerTable,
     epoch: u16,
-    next_devices: HashMap<Ipv4Addr, PeerDeviceInfo>,
-) -> Option<HashMap<Ipv4Addr, PeerDeviceInfo>> {
-    if is_stale_epoch(peer_state.epoch, epoch) {
+    next_devices: HashMap<Ipv4Addr, PeerInfo>,
+) -> Option<HashMap<Ipv4Addr, PeerInfo>> {
+    if is_stale_epoch(peer_table.epoch(), epoch) {
         return None;
     }
-    let previous_peers = std::mem::replace(&mut peer_state.devices, next_devices);
-    peer_state.epoch = epoch;
-    Some(previous_peers)
+    Some(peer_table.replace_devices(epoch, next_devices))
+}
+
+fn plan_peer_identity_update(
+    previous_peers: &HashMap<Ipv4Addr, PeerInfo>,
+    ip_list: &[PeerInfo],
+) -> PeerIdentityPlan {
+    let active_identities: HashSet<_> = ip_list.iter().map(PeerInfo::identity).collect();
+    let current_by_vip: HashMap<Ipv4Addr, _> = ip_list
+        .iter()
+        .map(|peer| (peer.virtual_ip, peer.identity()))
+        .collect();
+    let mut reset_identities = HashSet::new();
+    for (vip, previous_peer) in previous_peers {
+        if let Some(next_identity) = current_by_vip.get(vip) {
+            let previous_identity = previous_peer.identity();
+            if &previous_identity != next_identity {
+                reset_identities.insert(previous_identity);
+            }
+        }
+    }
+    for peer in ip_list {
+        if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY {
+            reset_identities.insert(peer.identity());
+        }
+    }
+    PeerIdentityPlan {
+        active_identities,
+        reset_identities,
+    }
 }
 
 fn build_punch_ack(
@@ -1996,7 +2037,7 @@ mod tests {
         build_peer_nat_info_from_punch_start, build_punch_ack, build_punch_result,
         device_auth_error_is_auth_pending, effective_gateway_policy_rev, format_punch_endpoint,
         is_gateway_peer_ipturn_source, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
-        observed_udp_port_from_registration, punch_endpoint_from_route,
+        observed_udp_port_from_registration, plan_peer_identity_update, punch_endpoint_from_route,
         registration_error_is_auth_pending, rewrite_peer_echo_request_as_reply,
         selected_endpoint_for_result, should_apply_gateway_policy_rev,
         should_clear_gateway_grants_from_refresh_response,
@@ -2005,12 +2046,12 @@ mod tests {
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
         ActivePunchSession, ActivePunchState,
     };
+    use crate::core::PeerInfo;
     use crate::data_plane::route::Route;
     use crate::handle::CurrentDeviceInfo;
-    use crate::handle::PeerDeviceInfo;
     use crate::nat::punch::PunchModel;
     use crate::proto::message::{
-        DeviceAuthErrorReason, GatewayAccessGrant, PunchEndpoint, PunchResultCode,
+        ChannelMode, DeviceAuthErrorReason, GatewayAccessGrant, PunchEndpoint, PunchResultCode,
         PunchSessionPhase, PunchStart, RefreshGatewayGrantResponse, RefreshGatewayGrantResult,
         RegistrationErrorReason,
     };
@@ -2054,6 +2095,47 @@ mod tests {
         packet.set_destination(destination);
         packet.set_payload(&ipv4_payload).expect("set payload");
         packet
+    }
+
+    fn test_peer(vip: Ipv4Addr, device_pub_key_seed: u8, channel_mode: ChannelMode) -> PeerInfo {
+        PeerInfo::new(
+            vip,
+            format!("peer-{device_pub_key_seed}"),
+            1,
+            format!("device-{device_pub_key_seed}"),
+            vec![device_pub_key_seed; 32],
+            vec![device_pub_key_seed.saturating_add(1); 32],
+            channel_mode,
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn peer_identity_plan_tracks_same_vip_public_key_change() {
+        let vip = Ipv4Addr::new(10, 26, 0, 4);
+        let old_peer = test_peer(vip, 1, ChannelMode::CHANNEL_MODE_AUTO);
+        let new_peer = test_peer(vip, 2, ChannelMode::CHANNEL_MODE_AUTO);
+        let previous = HashMap::from([(vip, old_peer.clone())]);
+
+        let plan = plan_peer_identity_update(&previous, &[new_peer.clone()]);
+
+        assert!(plan.active_identities.contains(&new_peer.identity()));
+        assert!(!plan.active_identities.contains(&old_peer.identity()));
+        assert!(plan.reset_identities.contains(&old_peer.identity()));
+    }
+
+    #[test]
+    fn peer_identity_plan_clears_grace_cipher_for_relay_only_peer() {
+        let vip = Ipv4Addr::new(10, 26, 0, 5);
+        let peer = test_peer(vip, 3, ChannelMode::CHANNEL_MODE_RELAY);
+        let previous = HashMap::from([(vip, peer.clone())]);
+
+        let plan = plan_peer_identity_update(&previous, &[peer.clone()]);
+
+        assert!(plan.active_identities.contains(&peer.identity()));
+        assert!(plan.reset_identities.contains(&peer.identity()));
     }
 
     #[test]
@@ -2214,7 +2296,7 @@ mod tests {
 
     #[test]
     fn try_commit_device_list_state_rejects_stale_without_overwriting_state() {
-        let existing_peer = PeerDeviceInfo::new(
+        let existing_peer = PeerInfo::new(
             Ipv4Addr::new(10, 26, 0, 3),
             "peer-3".to_string(),
             0,
@@ -2226,11 +2308,11 @@ mod tests {
             false,
             false,
         );
-        let mut peer_state = crate::handle::PeerState {
-            epoch: 83,
-            devices: HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
-        };
-        let next_peer = PeerDeviceInfo::new(
+        let mut peer_table = crate::core::PeerTable::new(
+            83,
+            HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
+        );
+        let next_peer = PeerInfo::new(
             Ipv4Addr::new(10, 26, 0, 4),
             "peer-4".to_string(),
             0,
@@ -2244,20 +2326,20 @@ mod tests {
         );
         let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer)]);
 
-        let previous = try_commit_device_list_state(&mut peer_state, 63, next_devices);
+        let previous = try_commit_device_list_state(&mut peer_table, 63, next_devices);
 
         assert!(previous.is_none());
-        assert_eq!(peer_state.epoch, 83);
-        assert_eq!(peer_state.devices.len(), 1);
+        assert_eq!(peer_table.epoch(), 83);
+        assert_eq!(peer_table.len(), 1);
         assert_eq!(
-            peer_state.devices.get(&Ipv4Addr::new(10, 26, 0, 3)),
+            peer_table.get(&Ipv4Addr::new(10, 26, 0, 3)),
             Some(&existing_peer)
         );
     }
 
     #[test]
     fn try_commit_device_list_state_updates_epoch_and_returns_previous_peers() {
-        let existing_peer = PeerDeviceInfo::new(
+        let existing_peer = PeerInfo::new(
             Ipv4Addr::new(10, 26, 0, 3),
             "peer-3".to_string(),
             0,
@@ -2269,7 +2351,7 @@ mod tests {
             false,
             false,
         );
-        let next_peer = PeerDeviceInfo::new(
+        let next_peer = PeerInfo::new(
             Ipv4Addr::new(10, 26, 0, 4),
             "peer-4".to_string(),
             0,
@@ -2281,13 +2363,13 @@ mod tests {
             false,
             false,
         );
-        let mut peer_state = crate::handle::PeerState {
-            epoch: 63,
-            devices: HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
-        };
+        let mut peer_table = crate::core::PeerTable::new(
+            63,
+            HashMap::from([(existing_peer.virtual_ip, existing_peer.clone())]),
+        );
         let next_devices = HashMap::from([(next_peer.virtual_ip, next_peer.clone())]);
 
-        let previous = try_commit_device_list_state(&mut peer_state, 83, next_devices)
+        let previous = try_commit_device_list_state(&mut peer_table, 83, next_devices)
             .expect("fresh epoch should commit");
 
         assert_eq!(previous.len(), 1);
@@ -2295,12 +2377,17 @@ mod tests {
             previous.get(&Ipv4Addr::new(10, 26, 0, 3)),
             Some(&existing_peer)
         );
-        assert_eq!(peer_state.epoch, 83);
-        assert_eq!(peer_state.devices.len(), 1);
+        assert_eq!(peer_table.epoch(), 83);
+        assert_eq!(peer_table.len(), 1);
         assert_eq!(
-            peer_state.devices.get(&Ipv4Addr::new(10, 26, 0, 4)),
+            peer_table.get(&Ipv4Addr::new(10, 26, 0, 4)),
             Some(&next_peer)
         );
+        assert_eq!(
+            peer_table.vip_for_identity(&next_peer.identity()),
+            Some(next_peer.virtual_ip)
+        );
+        assert_eq!(peer_table.vip_for_identity(&existing_peer.identity()), None);
     }
 
     #[test]

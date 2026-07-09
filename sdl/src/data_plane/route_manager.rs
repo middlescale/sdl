@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::cipher::Cipher;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
@@ -15,9 +16,9 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
-use crate::util::{PeerCryptoManager, PeerProbeTracker, StopManager};
+use crate::util::{PeerProbeTracker, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
 
@@ -32,7 +33,7 @@ pub struct RouteManager {
     direct_route_update_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
     heartbeat_interval: Duration,
     stale_direct_timeout: Duration,
-    pub(crate) peer_state: Option<Arc<Mutex<crate::handle::PeerState>>>,
+    pub(crate) peer_table: Option<Arc<RwLock<crate::core::PeerTable>>>,
 }
 
 #[derive(Clone)]
@@ -61,7 +62,7 @@ impl RouteManager {
         peer_encrypt: bool,
         heartbeat_interval: Duration,
         stale_direct_timeout: Duration,
-        peer_state: Arc<Mutex<crate::handle::PeerState>>,
+        peer_table: Arc<RwLock<crate::core::PeerTable>>,
     ) -> anyhow::Result<Self> {
         let manager = Self {
             route_table,
@@ -73,7 +74,7 @@ impl RouteManager {
             direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval,
             stale_direct_timeout,
-            peer_state: Some(peer_state),
+            peer_table: Some(peer_table),
         };
         manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
         manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
@@ -91,7 +92,7 @@ impl RouteManager {
             direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval: Duration::from_secs(10),
             stale_direct_timeout: Duration::from_secs(30),
-            peer_state: None,
+            peer_table: None,
         }
     }
 
@@ -145,8 +146,8 @@ impl RouteManager {
         if !route.is_p2p() {
             return false;
         }
-        if let Some(peer_state) = &self.peer_state {
-            if let Some(peer) = peer_state.lock().devices.get(vip) {
+        if let Some(peer_table) = &self.peer_table {
+            if let Some(peer) = peer_table.read().get(vip) {
                 if peer.preferred_channel_mode
                     == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
                 {
@@ -155,6 +156,13 @@ impl RouteManager {
             }
         }
         false
+    }
+
+    fn peer_identity(&self, vip: &Ipv4Addr) -> anyhow::Result<crate::core::PeerIdentity> {
+        self.peer_table
+            .as_ref()
+            .and_then(|peer_table| peer_table.read().identity_for_vip(vip))
+            .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", vip))
     }
 
     pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
@@ -366,7 +374,18 @@ impl RouteManager {
             return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip, epoch)?]);
         }
         let mut packets = Vec::with_capacity(2);
-        match self.peer_crypto.current_cipher(&dest_ip) {
+        let peer_identity = match self.peer_identity(&dest_ip) {
+            Ok(peer_identity) => peer_identity,
+            Err(err) => {
+                log::debug!(
+                    "skip heartbeat without peer identity for {}: {:?}",
+                    dest_ip,
+                    err
+                );
+                return Ok(Vec::new());
+            }
+        };
+        match self.peer_crypto.current_cipher(&peer_identity) {
             Ok(cipher) => packets.push(heartbeat_packet_client(
                 Some(cipher),
                 src_ip,
@@ -390,7 +409,7 @@ impl RouteManager {
             }
         }
         if self.peer_crypto.is_grace_active() {
-            match self.peer_crypto.previous_cipher(&dest_ip) {
+            match self.peer_crypto.previous_cipher(&peer_identity) {
                 Ok(cipher) => packets.push(heartbeat_packet_client(
                     Some(cipher),
                     src_ip,
@@ -549,12 +568,14 @@ fn heartbeat_packet_client(
 mod tests {
     use super::{RouteManager, StaleDirectRoute};
     use crate::cipher::Cipher;
+    use crate::core::{PeerInfo, PeerTable};
     use crate::data_plane::route::Route;
     use crate::data_plane::route_table::RouteTable;
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
     use crate::transport::connect_protocol::ConnectProtocol;
     use parking_lot::Mutex;
+    use parking_lot::RwLock;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
     use std::thread;
@@ -747,18 +768,35 @@ mod tests {
     #[test]
     fn heartbeat_packets_include_previous_cipher_during_grace_window() {
         let table = Arc::new(RouteTable::new(UseChannelType::All, false));
-        let manager = RouteManager::new_detached(table);
+        let mut manager = RouteManager::new_detached(table);
         let peer = Ipv4Addr::new(10, 0, 0, 8);
+        let peer_info = PeerInfo::new(
+            peer,
+            "peer-8".to_string(),
+            0,
+            "peer-8".to_string(),
+            vec![8; 32],
+            vec![],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
+        );
+        let peer_identity = peer_info.identity();
+        manager.peer_table = Some(Arc::new(RwLock::new(PeerTable::new(
+            1,
+            std::collections::HashMap::from([(peer, peer_info)]),
+        ))));
         manager
             .peer_crypto
             .rotate_peer_session_ciphers(std::collections::HashMap::from([(
-                peer,
+                peer_identity.clone(),
                 Cipher::new_key([1; 32]).expect("cipher 1"),
             )]));
         manager
             .peer_crypto
             .rotate_peer_session_ciphers(std::collections::HashMap::from([(
-                peer,
+                peer_identity,
                 Cipher::new_key([2; 32]).expect("cipher 2"),
             )]));
 
@@ -771,11 +809,11 @@ mod tests {
 
     #[test]
     fn suppress_p2p_when_peer_is_relay() {
-        use crate::handle::{PeerDeviceInfo, PeerState};
+        use crate::core::{PeerInfo, PeerTable};
         let table = Arc::new(RouteTable::new(UseChannelType::All, false));
         let mut manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 10);
-        let peer_info = PeerDeviceInfo::new(
+        let peer_info = PeerInfo::new(
             peer,
             "peer-10".to_string(),
             0,
@@ -787,11 +825,11 @@ mod tests {
             false,
             false,
         );
-        let peer_state = Arc::new(Mutex::new(PeerState {
-            epoch: 1,
-            devices: std::collections::HashMap::from([(peer, peer_info)]),
-        }));
-        manager.peer_state = Some(peer_state);
+        let peer_table = Arc::new(RwLock::new(PeerTable::new(
+            1,
+            std::collections::HashMap::from([(peer, peer_info)]),
+        )));
+        manager.peer_table = Some(peer_table);
 
         // Try to add a p2p route (metric = 1)
         manager.add_path(peer, route(1, 1010));

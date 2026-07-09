@@ -13,7 +13,7 @@ use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::udp::udp::UdpPacket;
 
 use crate::core::PendingDnsQuery;
-use crate::core::SdlRuntime;
+use crate::core::SdlContext;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::extension::handle_extension_tail;
 use crate::handle::recv_data::PacketHandler;
@@ -80,16 +80,16 @@ fn requires_peer_decrypt(source: Ipv4Addr, current_device: &CurrentDeviceInfo) -
 #[derive(Clone)]
 pub struct ClientPacketHandler<Device> {
     device: Device,
-    runtime: Arc<SdlRuntime>,
+    context: Arc<SdlContext>,
     exit_node_dns_tx: SyncSender<ExitNodeDnsRequest>,
 }
 
 impl<Device: DeviceWrite> ClientPacketHandler<Device> {
-    pub fn new(runtime: Arc<SdlRuntime>, device: Device) -> Self {
+    pub fn new(context: Arc<SdlContext>, device: Device) -> Self {
         let (exit_node_dns_tx, exit_node_dns_rx) = sync_channel(EXIT_NODE_DNS_QUEUE_CAPACITY);
         let exit_node_dns_rx = Arc::new(Mutex::new(exit_node_dns_rx));
         for worker_index in 0..EXIT_NODE_DNS_WORKER_COUNT {
-            let worker_runtime = runtime.clone();
+            let worker_context = context.clone();
             let worker_rx = exit_node_dns_rx.clone();
             if let Err(err) = thread::Builder::new()
                 .name(format!("exit-node-dns-worker-{worker_index}"))
@@ -101,7 +101,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let Ok(request) = request else {
                         break;
                     };
-                    if let Err(err) = handle_exit_node_dns_request(worker_runtime.as_ref(), request)
+                    if let Err(err) = handle_exit_node_dns_request(worker_context.as_ref(), request)
                     {
                         log::warn!("exit-node DNS request failed: {:?}", err);
                     }
@@ -112,7 +112,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         }
         Self {
             device,
-            runtime,
+            context,
             exit_node_dns_tx,
         }
     }
@@ -136,7 +136,25 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             );
             return Ok(false);
         }
-        match self.runtime.peer_crypto.decrypt_ipv4(peer_ip, net_packet) {
+        let Some(peer_identity) = self.context.peer_identity_for_vip(peer_ip) else {
+            log_sampled_drop(
+                &INVALID_CIPHER_DROP_COUNT,
+                &INVALID_CIPHER_DROP_LOG_LIMITER,
+                |count| {
+                    format!(
+                        "dropping peer packets without peer identity (sample via {:?}, peer={}, count={})",
+                        route_key, peer_ip, count
+                    )
+                },
+            );
+            return Ok(false);
+        };
+        match self
+            .context
+            .peers
+            .crypto
+            .decrypt_ipv4(&peer_identity, net_packet)
+        {
             Ok(()) => Ok(true),
             Err(err) => {
                 log_sampled_drop(
@@ -170,18 +188,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             return Ok(false);
         }
         let dns_server_ip = ipv4.destination_ip();
-        if !self.runtime.is_dns_service_ip(dns_server_ip) {
+        if !self.context.is_dns_service_ip(dns_server_ip) {
             return Ok(false);
         }
         let udp = UdpPacket::new(ipv4.source_ip(), dns_server_ip, ipv4.payload())?;
         if udp.destination_port() != 53 || udp.payload().is_empty() {
             return Ok(false);
         }
-        {
-            let exit_node_state = self.runtime.exit_node_state.read();
-            if !(exit_node_state.enabled && exit_node_state.local_ready) {
-                return Ok(false);
-            }
+        if !self.context.exit_node_local_ready() {
+            return Ok(false);
         }
 
         let request = ExitNodeDnsRequest {
@@ -216,37 +231,41 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
 }
 
 fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
-    runtime: &SdlRuntime,
+    context: &SdlContext,
     peer_ip: &Ipv4Addr,
     net_packet: &mut NetPacket<B>,
 ) -> anyhow::Result<()> {
-    runtime
-        .peer_crypto
-        .send_cipher(peer_ip)?
+    let peer_identity = context
+        .peer_identity_for_vip(peer_ip)
+        .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", peer_ip))?;
+    context
+        .peers
+        .crypto
+        .current_cipher(&peer_identity)?
         .encrypt_ipv4(net_packet)
 }
 
 fn send_reply_by_route<B: AsRef<[u8]>>(
-    runtime: &SdlRuntime,
+    context: &SdlContext,
     packet: &NetPacket<B>,
     route_key: RouteKey,
 ) -> anyhow::Result<()> {
     let packet_len = packet.buffer().as_ref().len();
     let destination = packet.destination();
-    runtime.data_plane_stats.record_logical_up(packet_len);
-    if runtime.gateway_sessions.is_gateway_addr(route_key.addr) {
-        runtime.gateway_sessions.send_relay(packet)?;
-        runtime.data_plane_stats.record_gateway_up(packet_len);
+    context.data_plane_stats.record_logical_up(packet_len);
+    if context.gateway.sessions.is_gateway_addr(route_key.addr) {
+        context.gateway.sessions.send_relay(packet)?;
+        context.data_plane_stats.record_gateway_up(packet_len);
     } else if route_key.protocol().is_udp() {
-        runtime
+        context
             .udp_channel
             .send_by_key(packet.buffer(), route_key)?;
     } else {
         return Err(anyhow!("unsupported reply route {:?}", route_key));
     }
-    let gateway_vip = runtime.current_device.load().virtual_gateway;
+    let gateway_vip = context.virtual_gateway();
     if destination != gateway_vip {
-        runtime
+        context
             .data_plane_stats
             .record_peer_up(destination, packet_len);
     }
@@ -254,7 +273,7 @@ fn send_reply_by_route<B: AsRef<[u8]>>(
 }
 
 fn handle_exit_node_dns_request(
-    runtime: &SdlRuntime,
+    context: &SdlContext,
     request: ExitNodeDnsRequest,
 ) -> anyhow::Result<()> {
     let response_payload: Vec<u8> = match forward_dns_query_to_system_resolver(&request.payload) {
@@ -284,8 +303,8 @@ fn handle_exit_node_dns_request(
     reply.set_source(request.current_virtual_ip);
     reply.set_destination(request.source);
     reply.set_payload(&response_packet)?;
-    encrypt_by_route(runtime, &request.source, &mut reply)?;
-    send_reply_by_route(runtime, &reply, request.route_key)
+    encrypt_by_route(context, &request.source, &mut reply)?;
+    send_reply_by_route(context, &reply, request.route_key)
 }
 
 impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
@@ -298,7 +317,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
         if requires_peer_decrypt(source, current_device)
-            && self.runtime.peer_info(&source).is_none()
+            && self.context.peer_info(&source).is_none()
         {
             log_sampled_drop(
                 &UNKNOWN_PEER_DROP_COUNT,
@@ -318,29 +337,30 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             return Ok(());
         }
         let packet_len = net_packet.buffer().as_ref().len();
-        self.runtime
+        self.context
             .data_plane_stats
             .record_logical_down(packet_len);
         if source != current_device.virtual_gateway {
-            self.runtime
+            self.context
                 .data_plane_stats
                 .record_peer_down(source, packet_len);
         }
         if self
-            .runtime
-            .gateway_sessions
+            .context
+            .gateway
+            .sessions
             .is_gateway_addr(route_key.addr)
         {
-            self.runtime
+            self.context
                 .data_plane_stats
                 .record_gateway_down(packet_len);
         }
         if self
-            .runtime
+            .context
             .route_manager()
             .has_direct_path(&source, &route_key)
         {
-            self.runtime.route_manager().touch_path(&source, &route_key);
+            self.context.route_manager().touch_path(&source, &route_key);
         }
         //处理扩展
         let net_packet = if net_packet.is_extension() {
@@ -435,8 +455,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                             ipv4.update_checksum();
                             net_packet.set_source(destination);
                             net_packet.set_destination(source);
-                            encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
-                            send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
+                            encrypt_by_route(self.context.as_ref(), &source, &mut net_packet)?;
+                            send_reply_by_route(self.context.as_ref(), &net_packet, route_key)?;
                             return Ok(());
                         } else if icmp_packet.kind() == Kind::EchoReply {
                             log_peer_echo_reply = Some((ipv4.source_ip(), ipv4.destination_ip()));
@@ -467,7 +487,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                                 let destination_port =
                                     u16::from_be_bytes(payload[2..4].try_into().unwrap());
                                 if self
-                                    .runtime
+                                    .context
                                     .nat_test
                                     .is_local_udp(real_dest, destination_port)
                                 {
@@ -488,7 +508,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
-                    self.runtime.debug_watch.emit(
+                    self.context.debug_watch.emit(
                         "icmp",
                         "peer_echo_reply_received",
                         serde_json::json!({
@@ -506,7 +526,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 let written =
                     write_full_device(&self.device, net_packet.payload(), "peer ip packet inject")?;
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
-                    self.runtime.debug_watch.emit(
+                    self.context.debug_watch.emit(
                         "icmp",
                         "peer_echo_reply_injected",
                         serde_json::json!({
@@ -545,15 +565,15 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(MAX_TTL);
-                encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
-                send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
+                encrypt_by_route(self.context.as_ref(), &source, &mut net_packet)?;
+                send_reply_by_route(self.context.as_ref(), &net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
                 let current_time = crate::handle::now_time() as u16;
                 if current_time < pong_packet.time() {
                     return Ok(());
                 }
-                if !self.runtime.peer_probe_tracker.match_ping_response(
+                if !self.context.peers.probe_tracker.match_ping_response(
                     source,
                     route_key,
                     pong_packet.epoch(),
@@ -562,12 +582,12 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, metric, rt);
-                self.runtime.route_manager().add_path(source, route);
+                self.context.route_manager().add_path(source, route);
             }
             ControlPacket::PunchRequest => {
                 log::info!("PunchRequest={:?},source={}", route_key, source);
                 if self
-                    .runtime
+                    .context
                     .route_manager
                     .use_channel_type()
                     .is_only_relay()
@@ -576,7 +596,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 }
                 //忽略掉来源于自己的包
                 if self
-                    .runtime
+                    .context
                     .nat_test
                     .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
                 {
@@ -588,8 +608,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 net_packet.set_source(current_device.virtual_ip);
                 net_packet.set_destination(source);
                 net_packet.set_initial_ttl(1);
-                encrypt_by_route(self.runtime.as_ref(), &source, &mut net_packet)?;
-                send_reply_by_route(self.runtime.as_ref(), &net_packet, route_key)?;
+                encrypt_by_route(self.context.as_ref(), &source, &mut net_packet)?;
+                send_reply_by_route(self.context.as_ref(), &net_packet, route_key)?;
                 // 收到PunchRequest就添加路由，会导致单向通信的问题，删掉试试
                 // let route = Route::from_default_rt(route_key, 1);
                 // context.route_table.add_route_if_absent(source, route);
@@ -597,7 +617,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             ControlPacket::PunchResponse => {
                 log::info!("PunchResponse={:?},source={}", route_key, source);
                 if self
-                    .runtime
+                    .context
                     .route_manager
                     .use_channel_type()
                     .is_only_relay()
@@ -605,21 +625,22 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 if self
-                    .runtime
+                    .context
                     .nat_test
                     .is_local_address(route_key.protocol().is_base_tcp(), route_key.addr)
                 {
                     return Ok(());
                 }
                 if !self
-                    .runtime
-                    .peer_probe_tracker
+                    .context
+                    .peers
+                    .probe_tracker
                     .match_punch_response(source, route_key.addr)
                 {
                     return Ok(());
                 }
                 let route = Route::from_default_rt(route_key, metric);
-                self.runtime
+                self.context
                     .route_manager()
                     .add_path_if_absent(source, route);
             }
@@ -635,8 +656,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     let mut addr_packet = control_packet::AddrPacket::new(packet.payload_mut())?;
                     addr_packet.set_ipv4(ipv4);
                     addr_packet.set_port(route_key.addr.port());
-                    encrypt_by_route(self.runtime.as_ref(), &source, &mut packet)?;
-                    send_reply_by_route(self.runtime.as_ref(), &packet, route_key)?;
+                    encrypt_by_route(self.context.as_ref(), &source, &mut packet)?;
+                    send_reply_by_route(self.context.as_ref(), &packet, route_key)?;
                 }
                 std::net::IpAddr::V6(_) => {}
             },
@@ -651,7 +672,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         route_key: RouteKey,
     ) -> anyhow::Result<()> {
         if self
-            .runtime
+            .context
             .route_manager
             .use_channel_type()
             .is_only_relay()
@@ -662,10 +683,10 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
         match other_turn_packet::Protocol::from(net_packet.transport_protocol()) {
             other_turn_packet::Protocol::Punch => {
                 if self
-                    .runtime
-                    .peer_state
-                    .lock()
-                    .devices
+                    .context
+                    .peers
+                    .table
+                    .read()
                     .get(&source)
                     .map_or(false, |p| {
                         p.preferred_channel_mode
@@ -763,15 +784,16 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 );
                 {
                     let peer_nat_info = peer_nat_info.clone();
-                    self.runtime
-                        .peer_nat_info_map
+                    self.context
+                        .peers
+                        .nat_info_map
                         .write()
                         .insert(source, peer_nat_info);
                 }
                 if !punch_info.reply {
                     let mut punch_reply = PunchInfo::new();
                     punch_reply.reply = true;
-                    let nat_info = self.runtime.nat_test.nat_info();
+                    let nat_info = self.context.nat_test.nat_info();
                     punch_reply.public_port_range = nat_info.public_port_range as u32;
                     punch_reply.nat_type =
                         protobuf::EnumOrUnknown::new(PunchNatType::from(nat_info.nat_type));
@@ -823,18 +845,18 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     punch_packet.set_source(current_device.virtual_ip());
                     punch_packet.set_destination(source);
                     punch_packet.set_payload(&bytes)?;
-                    encrypt_by_route(self.runtime.as_ref(), &source, &mut punch_packet)?;
+                    encrypt_by_route(self.context.as_ref(), &source, &mut punch_packet)?;
                     if self
-                        .runtime
+                        .context
                         .punch_coordinator
                         .submit_from_peer(source, peer_nat_info)
                     {
-                        self.runtime
+                        self.context
                             .udp_channel
                             .send_by_key(punch_packet.buffer(), route_key)?;
                     }
                 } else {
-                    self.runtime
+                    self.context
                         .punch_coordinator
                         .submit_local(source, peer_nat_info);
                 }

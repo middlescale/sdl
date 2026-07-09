@@ -73,7 +73,6 @@ mod tests {
             client_ip: Ipv4Addr::new(10, 26, 0, 2),
             dns_server_ip: Ipv4Addr::new(10, 26, 0, 53),
             client_port: 40444,
-            created_at_ms: 1,
         };
         let payload = [0x12, 0x34, 0x81, 0x80, 0, 0, 0, 0];
         let packet = build_dns_response_packet(&pending, &payload).unwrap();
