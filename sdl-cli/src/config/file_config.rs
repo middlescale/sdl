@@ -226,6 +226,12 @@ fn parse_config_str(conf: &str) -> anyhow::Result<FileConfig> {
         mapping.remove(serde_yaml::Value::String("out_ips".to_string()));
         mapping.remove(serde_yaml::Value::String("external_route".to_string()));
         mapping.remove(serde_yaml::Value::String("externalroute".to_string()));
+        let exit_node_key = serde_yaml::Value::String("exit_node".to_string());
+        if let Some(serde_yaml::Value::Mapping(exit_node)) = mapping.get_mut(&exit_node_key) {
+            // `client_dns` was emitted by an unreleased exit-node build. It did
+            // not contain restorable DNS state and was replaced by `original_dns`.
+            exit_node.remove(serde_yaml::Value::String("client_dns".to_string()));
+        }
         if let Some(version) = mapping.get(serde_yaml::Value::String("config_version".to_string()))
         {
             let version = version
@@ -567,6 +573,26 @@ externalroute: []
         let (_, file_conf) = read_config(path.to_str().unwrap())
             .expect("config with removed legacy route fields should parse");
         assert_eq!(file_conf.config_version, FILE_CONFIG_VERSION);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_ignores_removed_exit_node_client_dns_field() {
+        let path = write_temp_config(
+            r#"
+config_version: 2
+group: default.ms.net
+device_id: dev-legacy-dns
+name: legacy-dns-node
+server_address: https://control.middlescale.net/control
+exit_node:
+  client_dns: null
+"#,
+            "legacy-exit-node-client-dns",
+        );
+        let (_, file_conf) = read_config(path.to_str().unwrap())
+            .expect("config with removed exit-node client_dns should parse");
+        assert!(file_conf.exit_node.original_dns.is_empty());
         let _ = fs::remove_file(path);
     }
 

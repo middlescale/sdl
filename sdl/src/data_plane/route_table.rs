@@ -43,7 +43,7 @@ impl RouteTable {
             routes.retain(|(route, _)| match use_channel_type {
                 UseChannelType::Relay => !route.is_p2p(),
                 UseChannelType::P2p => route.is_p2p(),
-                UseChannelType::All => true,
+                UseChannelType::Auto => true,
             });
         }
         route_table.retain(|_, routes| !routes.is_empty());
@@ -62,7 +62,7 @@ impl RouteTable {
         match self.use_channel_type() {
             UseChannelType::Relay if route.is_p2p() => return,
             UseChannelType::P2p if !route.is_p2p() => return,
-            UseChannelType::Relay | UseChannelType::P2p | UseChannelType::All => {}
+            UseChannelType::Relay | UseChannelType::P2p | UseChannelType::Auto => {}
         }
         let key = route.route_key();
         if only_if_absent {
@@ -89,6 +89,7 @@ impl RouteTable {
                 }
                 x.metric = route.metric;
                 x.rt = route.rt;
+                x.loss_rate = route.loss_rate;
                 exist = true;
                 time.store(Instant::now());
                 break;
@@ -296,7 +297,7 @@ mod tests {
 
     #[test]
     fn direct_routes_replace_relay_routes_when_not_latency_first() {
-        let table = RouteTable::new(UseChannelType::All, false);
+        let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
         table.add_route(vip, Route::from_default_rt(route_key(1002), 2));
         table.add_route(vip, Route::from_default_rt(route_key(1003), 1));
@@ -308,7 +309,7 @@ mod tests {
 
     #[test]
     fn measured_p2p_route_excludes_default_rt_routes() {
-        let table = RouteTable::new(UseChannelType::All, false);
+        let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
         let default_rt = route_key(1003);
         table.add_route(vip, Route::from_default_rt(default_rt, 1));
@@ -321,7 +322,7 @@ mod tests {
 
     #[test]
     fn retain_peers_drops_stale_routes() {
-        let table = RouteTable::new(UseChannelType::All, false);
+        let table = RouteTable::new(UseChannelType::Auto, false);
         let vip1 = Ipv4Addr::new(10, 0, 0, 4);
         let vip2 = Ipv4Addr::new(10, 0, 0, 5);
         table.add_route(vip1, Route::from_default_rt(route_key(1002), 2));
@@ -335,7 +336,7 @@ mod tests {
 
     #[test]
     fn direct_route_key_index_tracks_route_lifecycle() {
-        let table = RouteTable::new(UseChannelType::All, false);
+        let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 6);
         let direct = route_key(1006);
         let relay = RouteKey::new(
@@ -351,7 +352,7 @@ mod tests {
         table.set_use_channel_type(UseChannelType::Relay);
         assert!(!table.has_direct_route_key(&direct));
 
-        table.set_use_channel_type(UseChannelType::All);
+        table.set_use_channel_type(UseChannelType::Auto);
         table.add_route(vip, Route::from_default_rt(direct, 1));
         assert!(table.has_direct_route_key(&direct));
 
@@ -361,7 +362,7 @@ mod tests {
 
     #[test]
     fn clear_all_drops_routes_and_direct_route_index() {
-        let table = RouteTable::new(UseChannelType::All, false);
+        let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 7);
         let direct = route_key(1007);
 

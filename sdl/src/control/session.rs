@@ -676,7 +676,7 @@ impl ControlSession {
         message.source = device_info.virtual_ip.into();
         let mode = self.data_plane.route_manager.use_channel_type();
         message.preferred_channel_mode = protobuf::EnumOrUnknown::new(match mode {
-            crate::data_plane::use_channel_type::UseChannelType::All => {
+            crate::data_plane::use_channel_type::UseChannelType::Auto => {
                 crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO
             }
             crate::data_plane::use_channel_type::UseChannelType::P2p => {

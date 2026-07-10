@@ -641,7 +641,7 @@ mod tests {
 
     #[test]
     fn next_stale_direct_route_ignores_stale_relay_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         table.add_route(Ipv4Addr::new(10, 0, 0, 2), route(2, 2000));
         thread::sleep(Duration::from_millis(15));
@@ -654,7 +654,7 @@ mod tests {
 
     #[test]
     fn next_stale_direct_route_times_out_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 3);
         let route = route(1, 2001);
@@ -672,7 +672,7 @@ mod tests {
 
     #[test]
     fn cleanup_stale_direct_routes_only_removes_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         let relay_peer = Ipv4Addr::new(10, 0, 0, 4);
         let p2p_peer = Ipv4Addr::new(10, 0, 0, 5);
@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn cleanup_stale_direct_routes_triggers_handler_when_last_direct_route_expires() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 6);
         let timeouts = Arc::new(Mutex::new(Vec::new()));
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn mark_path_failed_triggers_handler_when_last_direct_route_is_removed() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 16);
         let failed_route = route(1, 2016);
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn mark_path_failed_keeps_handler_silent_when_other_direct_route_remains() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 17);
         let first_route = route(1, 2017);
@@ -755,7 +755,7 @@ mod tests {
 
     #[test]
     fn cleanup_stale_direct_routes_does_not_trigger_handler_when_other_direct_route_remains() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 7);
         let timeouts = Arc::new(Mutex::new(Vec::new()));
@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn heartbeat_targets_keep_p2p_routes_when_relay_route_sorts_first() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, true));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 9);
         table.add_route(
@@ -797,7 +797,7 @@ mod tests {
 
     #[test]
     fn heartbeat_packets_include_previous_cipher_during_grace_window() {
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let mut manager = RouteManager::new_detached(table);
         let peer = Ipv4Addr::new(10, 0, 0, 8);
         let peer_info = PeerInfo::new(
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn suppress_p2p_when_peer_is_relay() {
         use crate::core::{PeerInfo, PeerTable};
-        let table = Arc::new(RouteTable::new(UseChannelType::All, false));
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let mut manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 10);
         let peer_info = PeerInfo::new(

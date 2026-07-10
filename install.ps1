@@ -239,6 +239,9 @@ function Migrate-ConfigFileV1ToV2([string]$path) {
     }
     $config.PSObject.Properties.Remove("in_ips")
     $config.PSObject.Properties.Remove("out_ips")
+    if (($null -ne $config.exit_node) -and ($config.exit_node.PSObject.Properties.Name -contains "client_dns")) {
+        $config.exit_node.PSObject.Properties.Remove("client_dns")
+    }
     Write-JsonFile $path $config
     return $true
 }
@@ -267,6 +270,10 @@ function Sanitize-ConfigFileV2([string]$path) {
     }
     if ($config.PSObject.Properties.Name -contains "out_ips") {
         $config.PSObject.Properties.Remove("out_ips")
+        $changed = $true
+    }
+    if (($null -ne $config.exit_node) -and ($config.exit_node.PSObject.Properties.Name -contains "client_dns")) {
+        $config.exit_node.PSObject.Properties.Remove("client_dns")
         $changed = $true
     }
     if (-not $changed) { return }

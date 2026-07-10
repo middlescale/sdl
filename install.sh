@@ -213,6 +213,9 @@ migrate_config_file_v1_to_v2() {
     -e 's/"ports"[[:space:]]*:[[:space:]]*null/"ports": [29873]/' \
     -e '/"in_ips"[[:space:]]*:/d' \
     -e '/"out_ips"[[:space:]]*:/d' \
+    -e ':a;N;$!ba' \
+    -e 's/,[[:space:]]*"client_dns"[[:space:]]*:[[:space:]]*null[[:space:]]*}/}/g' \
+    -e 's/"client_dns"[[:space:]]*:[[:space:]]*null[[:space:]]*,[[:space:]]*//g' \
     "${target_path}" > "${tmp_path}"
   chmod 600 "${tmp_path}"
   mv "${tmp_path}" "${target_path}"
@@ -227,7 +230,7 @@ sanitize_config_file_v2() {
   if [[ "$(config_version_of "${target_path}")" != "2" ]]; then
     return 0
   fi
-  if ! grep -Eq '"in_ips"[[:space:]]*:|"out_ips"[[:space:]]*:|"use_channel"[[:space:]]*:[[:space:]]*"all"|"ports"[[:space:]]*:[[:space:]]*null' "${target_path}"; then
+  if ! grep -Eq '"in_ips"[[:space:]]*:|"out_ips"[[:space:]]*:|"client_dns"[[:space:]]*:|"use_channel"[[:space:]]*:[[:space:]]*"all"|"ports"[[:space:]]*:[[:space:]]*null' "${target_path}"; then
     return 0
   fi
 
@@ -240,6 +243,9 @@ sanitize_config_file_v2() {
     -e 's/"ports"[[:space:]]*:[[:space:]]*null/"ports": [29873]/' \
     -e '/"in_ips"[[:space:]]*:/d' \
     -e '/"out_ips"[[:space:]]*:/d' \
+    -e ':a;N;$!ba' \
+    -e 's/,[[:space:]]*"client_dns"[[:space:]]*:[[:space:]]*null[[:space:]]*}/}/g' \
+    -e 's/"client_dns"[[:space:]]*:[[:space:]]*null[[:space:]]*,[[:space:]]*//g' \
     "${target_path}" > "${tmp_path}"
   chmod 600 "${tmp_path}"
   mv "${tmp_path}" "${target_path}"

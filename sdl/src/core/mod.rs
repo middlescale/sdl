@@ -110,7 +110,7 @@ impl Config {
             10,
             30,
             nic,
-            UseChannelType::All,
+            UseChannelType::Auto,
             None,
             0,
             vec![],

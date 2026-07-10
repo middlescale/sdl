@@ -8,6 +8,7 @@ pub struct Route {
     pub addr: SocketAddr,
     pub(crate) metric: u8,
     pub rt: i64,
+    pub loss_rate: Option<f32>,
 }
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
@@ -25,6 +26,7 @@ impl Route {
             addr,
             metric,
             rt,
+            loss_rate: None,
         }
     }
 
@@ -34,6 +36,7 @@ impl Route {
             addr: route_key.addr,
             metric,
             rt,
+            loss_rate: None,
         }
     }
 
@@ -43,7 +46,13 @@ impl Route {
             addr: route_key.addr,
             metric,
             rt: DEFAULT_RT,
+            loss_rate: None,
         }
+    }
+
+    pub fn with_loss_rate(mut self, loss_rate: Option<f32>) -> Self {
+        self.loss_rate = loss_rate;
+        self
     }
 
     pub fn route_key(&self) -> RouteKey {

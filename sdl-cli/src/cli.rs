@@ -144,7 +144,7 @@ fn use_channel_to_str(use_channel: UseChannelType) -> &'static str {
     match use_channel {
         UseChannelType::Relay => "relay",
         UseChannelType::P2p => "p2p",
-        UseChannelType::All => "auto",
+        UseChannelType::Auto => "auto",
     }
 }
 

@@ -419,7 +419,7 @@ impl ServiceManager {
         let channel_policy = match config.use_channel_type {
             UseChannelType::Relay => "relay".to_string(),
             UseChannelType::P2p => "p2p".to_string(),
-            UseChannelType::All => "auto".to_string(),
+            UseChannelType::Auto => "auto".to_string(),
         };
         #[cfg(feature = "port_mapping")]
         let port_mapping_list = config.port_mapping_list.clone();
@@ -1210,7 +1210,7 @@ impl CommandHandler for ServiceCommandHandler {
         self.0.saved_config.lock().unwrap().use_channel = match use_channel_type {
             UseChannelType::Relay => "relay".to_string(),
             UseChannelType::P2p => "p2p".to_string(),
-            UseChannelType::All => "auto".to_string(),
+            UseChannelType::Auto => "auto".to_string(),
         };
         if let Ok(vnt) = self.0.current_runtime() {
             vnt.set_use_channel_type(use_channel_type);
@@ -1221,7 +1221,7 @@ impl CommandHandler for ServiceCommandHandler {
             match use_channel_type {
                 UseChannelType::Relay => "relay",
                 UseChannelType::P2p => "p2p",
-                UseChannelType::All => "auto",
+                UseChannelType::Auto => "auto",
             }
         ))
     }

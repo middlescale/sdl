@@ -4,7 +4,7 @@ use std::str::FromStr;
 pub enum UseChannelType {
     Relay,
     P2p,
-    All,
+    Auto,
 }
 
 impl UseChannelType {
@@ -14,8 +14,8 @@ impl UseChannelType {
     pub fn is_only_p2p(&self) -> bool {
         self == &UseChannelType::P2p
     }
-    pub fn is_all(&self) -> bool {
-        self == &UseChannelType::All
+    pub fn is_auto(&self) -> bool {
+        self == &UseChannelType::Auto
     }
 }
 
@@ -26,7 +26,7 @@ impl FromStr for UseChannelType {
         match s.to_lowercase().trim() {
             "relay" => Ok(UseChannelType::Relay),
             "p2p" => Ok(UseChannelType::P2p),
-            "auto" => Ok(UseChannelType::All),
+            "auto" => Ok(UseChannelType::Auto),
             _ => Err(format!("not match '{}', enum: relay/p2p/auto", s)),
         }
     }
@@ -34,6 +34,6 @@ impl FromStr for UseChannelType {
 
 impl Default for UseChannelType {
     fn default() -> Self {
-        UseChannelType::All
+        UseChannelType::Auto
     }
 }

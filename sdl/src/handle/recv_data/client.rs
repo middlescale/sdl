@@ -581,7 +581,12 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 let rt = (current_time - pong_packet.time()) as i64;
-                let route = Route::from(route_key, metric, rt);
+                let loss_rate = self
+                    .context
+                    .peers
+                    .probe_tracker
+                    .ping_loss_rate(source, route_key);
+                let route = Route::from(route_key, metric, rt).with_loss_rate(loss_rate);
                 self.context.route_manager().add_path(source, route);
             }
             ControlPacket::PunchRequest => {

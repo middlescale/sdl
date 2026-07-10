@@ -339,7 +339,7 @@ pub fn command_info(sdl: &Sdl) -> Info {
     let channel_policy = match sdl.use_channel_type() {
         UseChannelType::Relay => "relay".to_string(),
         UseChannelType::P2p => "p2p".to_string(),
-        UseChannelType::All => "auto".to_string(),
+        UseChannelType::Auto => "auto".to_string(),
     };
     let (auth_status, auth_detail) = describe_auth_state(&service_state);
     let nat_type = format!("{:?}", nat_info.nat_type);
