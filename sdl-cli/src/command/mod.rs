@@ -55,7 +55,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
     let peer_names: std::collections::HashMap<Ipv4Addr, String> = vnt
         .device_list()
         .into_iter()
-        .map(|peer| (peer.virtual_ip, peer.name))
+        .map(|peer| (peer.virtual_ip(), peer.name().to_string()))
         .collect();
     let mut route_list = Vec::with_capacity(route_table.len());
     let mut has_gateway_route = false;
@@ -219,10 +219,11 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
     let down_connection_speeds = sdl.down_active_speed_by_peer().unwrap_or_default();
     let mut list = Vec::new();
     for peer in device_list {
-        let name = peer.name;
-        let virtual_ip = peer.virtual_ip.to_string();
+        let name = peer.name().to_string();
+        let peer_virtual_ip = peer.virtual_ip();
+        let virtual_ip = peer_virtual_ip.to_string();
         let (nat_type, public_ips, local_ip, ipv6) =
-            if let Some(nat_info) = sdl.peer_nat_info(&peer.virtual_ip) {
+            if let Some(nat_info) = sdl.peer_nat_info(&peer_virtual_ip) {
                 let nat_type = format!("{:?}", nat_info.nat_type);
                 let public_ips: Vec<String> =
                     nat_info.public_ips.iter().map(|v| v.to_string()).collect();
@@ -244,7 +245,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
                     "".to_string(),
                 )
             };
-        let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer.virtual_ip) {
+        let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer_virtual_ip) {
             let next_hop = sdl.route_key(&route.route_key());
             let nat_traversal_type = if route.is_p2p() {
                 if route.is_udp() {
@@ -270,7 +271,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         } else {
             ("gateway-relay".to_string(), "".to_string())
         };
-        let status = format!("{:?}", peer.status);
+        let status = format!("{:?}", peer.status());
         let item = DeviceItem {
             name,
             virtual_ip,
@@ -280,17 +281,17 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
             ipv6,
             nat_traversal_type,
             rt,
-            up_rate: up_rates.get(&peer.virtual_ip).copied().unwrap_or_default(),
+            up_rate: up_rates.get(&peer_virtual_ip).copied().unwrap_or_default(),
             down_rate: down_rates
-                .get(&peer.virtual_ip)
+                .get(&peer_virtual_ip)
                 .copied()
                 .unwrap_or_default(),
             up_connection_speed: up_connection_speeds
-                .get(&peer.virtual_ip)
+                .get(&peer_virtual_ip)
                 .copied()
                 .unwrap_or_default(),
             down_connection_speed: down_connection_speeds
-                .get(&peer.virtual_ip)
+                .get(&peer_virtual_ip)
                 .copied()
                 .unwrap_or_default(),
             status,
@@ -538,11 +539,11 @@ pub fn command_traffic(sdl: &Sdl) -> TrafficSummary {
     let devices = sdl.device_list();
     let device_names: HashMap<Ipv4Addr, String> = devices
         .iter()
-        .map(|device| (device.virtual_ip, device.name.clone()))
+        .map(|device| (device.virtual_ip(), device.name().to_string()))
         .collect();
     let device_statuses: HashMap<Ipv4Addr, String> = devices
         .iter()
-        .map(|device| (device.virtual_ip, format!("{:?}", device.status)))
+        .map(|device| (device.virtual_ip(), format!("{:?}", device.status())))
         .collect();
     let peer_up_total = sdl.logical_up_stream();
     let peer_down_total = sdl.logical_down_stream();

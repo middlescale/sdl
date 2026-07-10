@@ -231,28 +231,28 @@ impl ServiceManager {
         let peer = runtime
             .device_list()
             .into_iter()
-            .find(|peer| peer.device_id == selected_device_id)
+            .find(|peer| peer.device_id() == selected_device_id)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "selected exit node {} is not in current device list",
                     selected_device_id
                 )
             })?;
-        if !peer.exit_node_usable {
+        if !peer.exit_node_usable() {
             anyhow::bail!(
                 "selected exit node '{}' is not currently usable; advertised={}, approved={}, online={}",
-                peer.device_id,
-                peer.exit_node_advertised,
-                peer.exit_node_approved,
-                peer.status.is_online()
+                peer.device_id(),
+                peer.exit_node_advertised(),
+                peer.exit_node_approved(),
+                peer.status().is_online()
             );
         }
         let previous = self.snapshot_exit_node_client_state();
         let peer_identity = peer.identity();
         let selection = self.build_exit_node_client_selection(
             &runtime,
-            peer.name,
-            peer.device_id,
+            peer.name().to_string(),
+            peer.device_id().to_string(),
             peer_identity,
             tun_name,
             &saved_config.exit_node.route_excludes,
@@ -687,11 +687,11 @@ impl ServiceManager {
                 if let Some(peer) = runtime
                     .device_list()
                     .into_iter()
-                    .find(|peer| peer.device_id == selected_device_id)
+                    .find(|peer| peer.device_id() == selected_device_id)
                 {
-                    selected_name = peer.name;
-                    selected_virtual_ip = peer.virtual_ip.to_string();
-                    selected_usable = peer.exit_node_usable;
+                    selected_name = peer.name().to_string();
+                    selected_virtual_ip = peer.virtual_ip().to_string();
+                    selected_usable = peer.exit_node_usable();
                 }
             }
         }
@@ -810,10 +810,10 @@ impl ServiceManager {
         let matches: Vec<_> = peers
             .into_iter()
             .filter(|peer| {
-                peer.device_id == target
-                    || peer.name == target
+                peer.device_id() == target
+                    || peer.name() == target
                     || target_ip
-                        .map(|target_ip| peer.virtual_ip == target_ip)
+                        .map(|target_ip| peer.virtual_ip() == target_ip)
                         .unwrap_or(false)
             })
             .collect();
@@ -830,21 +830,21 @@ impl ServiceManager {
             );
         }
         let peer = matches.into_iter().next().unwrap();
-        if !peer.exit_node_usable {
+        if !peer.exit_node_usable() {
             anyhow::bail!(
                 "device '{}' is not a usable exit node; advertised={}, approved={}, online={}",
-                peer.device_id,
-                peer.exit_node_advertised,
-                peer.exit_node_approved,
-                peer.status.is_online()
+                peer.device_id(),
+                peer.exit_node_advertised(),
+                peer.exit_node_approved(),
+                peer.status().is_online()
             );
         }
         let previous = self.snapshot_exit_node_client_state();
         let peer_identity = peer.identity();
         let selection = self.build_exit_node_client_selection(
             &runtime,
-            peer.name,
-            peer.device_id,
+            peer.name().to_string(),
+            peer.device_id().to_string(),
             peer_identity,
             tun_name,
             excludes,
@@ -1133,14 +1133,14 @@ impl CommandHandler for ServiceCommandHandler {
         let mut items: Vec<ExitNodeItem> = runtime
             .device_list()
             .into_iter()
-            .filter(|peer| peer.exit_node_usable)
+            .filter(|peer| peer.exit_node_usable())
             .map(|peer| ExitNodeItem {
-                name: peer.name,
-                device_id: peer.device_id,
-                virtual_ip: peer.virtual_ip.to_string(),
-                status: format!("{:?}", peer.status),
-                approved: peer.exit_node_approved,
-                usable: peer.exit_node_usable,
+                name: peer.name().to_string(),
+                device_id: peer.device_id().to_string(),
+                virtual_ip: peer.virtual_ip().to_string(),
+                status: format!("{:?}", peer.status()),
+                approved: peer.exit_node_approved(),
+                usable: peer.exit_node_usable(),
             })
             .collect();
         items.sort_by(|a, b| {

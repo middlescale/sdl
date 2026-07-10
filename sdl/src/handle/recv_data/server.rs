@@ -444,20 +444,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     ) -> Option<DeviceListUpdate> {
         let ip_list: Vec<PeerInfo> = device_info_list
             .into_iter()
-            .map(|info| {
-                PeerInfo::new(
-                    Ipv4Addr::from(info.virtual_ip),
-                    info.name,
-                    info.device_status as u8,
-                    info.device_id,
-                    info.device_pub_key,
-                    info.online_kx_pub,
-                    info.preferred_channel_mode.enum_value_or_default(),
-                    info.exit_node_advertised,
-                    info.exit_node_approved,
-                    info.exit_node_usable,
-                )
-            })
+            .map(PeerInfo::from_control_device)
             .collect();
         let next_devices: HashMap<Ipv4Addr, PeerInfo> = ip_list
             .iter()

@@ -111,25 +111,71 @@ fn is_stale_epoch(current_epoch: u16, incoming_epoch: u16) -> bool {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PeerInfo {
-    pub virtual_ip: Ipv4Addr,
-    pub name: String,
-    pub status: PeerStatus,
-    pub device_id: String,
-    pub device_pub_key: Vec<u8>,
+    pub(crate) virtual_ip: Ipv4Addr,
+    pub(crate) name: String,
+    pub(crate) status: PeerStatus,
+    pub(crate) device_id: String,
+    pub(crate) device_pub_key: Vec<u8>,
     identity: PeerIdentity,
-    pub online_kx_pub: Vec<u8>,
-    pub preferred_channel_mode: crate::proto::message::ChannelMode,
-    pub exit_node_advertised: bool,
-    pub exit_node_approved: bool,
-    pub exit_node_usable: bool,
+    pub(crate) online_kx_pub: Vec<u8>,
+    pub(crate) preferred_channel_mode: crate::proto::message::ChannelMode,
+    pub(crate) exit_node_advertised: bool,
+    pub(crate) exit_node_approved: bool,
+    pub(crate) exit_node_usable: bool,
 }
 
 impl PeerInfo {
+    pub fn virtual_ip(&self) -> Ipv4Addr {
+        self.virtual_ip
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn status(&self) -> PeerStatus {
+        self.status
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
     pub fn identity(&self) -> PeerIdentity {
         self.identity.clone()
     }
 
-    pub fn new(
+    pub fn exit_node_advertised(&self) -> bool {
+        self.exit_node_advertised
+    }
+
+    pub fn exit_node_approved(&self) -> bool {
+        self.exit_node_approved
+    }
+
+    pub fn exit_node_usable(&self) -> bool {
+        self.exit_node_usable
+    }
+
+    pub(crate) fn from_control_device(info: crate::proto::message::DeviceInfo) -> Self {
+        let identity = PeerIdentity::from_device_public_key(&info.device_pub_key);
+        Self {
+            virtual_ip: Ipv4Addr::from(info.virtual_ip),
+            name: info.name,
+            status: PeerStatus::from(info.device_status as u8),
+            device_id: info.device_id,
+            device_pub_key: info.device_pub_key,
+            identity,
+            online_kx_pub: info.online_kx_pub,
+            preferred_channel_mode: info.preferred_channel_mode.enum_value_or_default(),
+            exit_node_advertised: info.exit_node_advertised,
+            exit_node_approved: info.exit_node_approved,
+            exit_node_usable: info.exit_node_usable,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new(
         virtual_ip: Ipv4Addr,
         name: String,
         status: u8,
