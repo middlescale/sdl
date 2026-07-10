@@ -64,6 +64,10 @@ impl Route {
         self.metric == 1
     }
 
+    pub fn has_measured_rt(&self) -> bool {
+        self.rt != DEFAULT_RT
+    }
+
     pub fn is_udp(&self) -> bool {
         self.protocol.is_udp()
     }

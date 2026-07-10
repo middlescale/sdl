@@ -25,21 +25,6 @@ impl DataChannel {
         Self { context }
     }
 
-    pub fn direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        let context = self.context.upgrade()?;
-        if let Some(peer) = context.peer_info(vip) {
-            if peer.preferred_channel_mode == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
-            {
-                return None;
-            }
-        }
-        if context.route_manager().use_channel_type().is_only_relay() {
-            None
-        } else {
-            context.route_manager().direct_route(vip)
-        }
-    }
-
     pub fn allows_gateway_relay(&self) -> bool {
         self.context
             .upgrade()
@@ -190,7 +175,8 @@ impl DataChannel {
                 context.route_manager().use_channel_type()
             }
         };
-        select_data_path(use_channel_type, context.route_manager().direct_route(vip))
+        let direct_route = context.route_manager().measured_direct_route(vip);
+        select_data_path(use_channel_type, direct_route)
     }
 
     fn send_udp<B: AsRef<[u8]>>(

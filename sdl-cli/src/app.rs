@@ -30,6 +30,8 @@ struct ServiceManager {
     saved_config: Mutex<FileConfig>,
     runtime: Mutex<Option<Arc<Sdl>>>,
     runtime_start_lock: Mutex<()>,
+    // Serializes system route/DNS changes with their corresponding persisted state.
+    exit_node_client_route_lock: Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -216,6 +218,7 @@ impl ServiceManager {
     }
 
     fn reapply_exit_node_client_routes(&self) -> anyhow::Result<Option<String>> {
+        let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let saved_config = self.saved_config.lock().unwrap().clone();
         if !saved_config.exit_node.client_active {
             return Ok(None);
@@ -262,6 +265,55 @@ impl ServiceManager {
             "exit-node client routes reapplied after TUN recreate: {}; {}",
             apply_result.route_note, apply_result.dns_note
         )))
+    }
+
+    fn refresh_exit_node_client_route_excludes(&self) -> anyhow::Result<Option<String>> {
+        let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        if !saved_config.exit_node.client_active {
+            return Ok(None);
+        }
+        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.clone() else {
+            return Ok(None);
+        };
+        let runtime = self.current_runtime()?;
+        let tun_name = Self::saved_exit_node_tun_name(&saved_config);
+        let next_excludes = exit_node::merge_excludes(
+            &runtime,
+            Some(&selected_device_id),
+            &saved_config.exit_node.route_excludes,
+        )?;
+        if next_excludes == saved_config.exit_node.applied_route_excludes {
+            return Ok(None);
+        }
+        match exit_node::refresh_client_route_excludes(
+            &tun_name,
+            &saved_config.exit_node.applied_route_excludes,
+            &next_excludes,
+        ) {
+            Ok(note) => {
+                {
+                    let mut saved_config = self.saved_config.lock().unwrap();
+                    saved_config.exit_node.applied_route_excludes = next_excludes;
+                }
+                self.persist_saved_config();
+                Ok(Some(note))
+            }
+            Err(err) => {
+                if err.rollback_failed() {
+                    let mut saved_config = self.saved_config.lock().unwrap();
+                    saved_config.exit_node.client_active = false;
+                    saved_config.exit_node.applied_route_excludes = Self::merge_route_exclude_lists(
+                        &saved_config.exit_node.applied_route_excludes,
+                        &next_excludes,
+                    );
+                    drop(saved_config);
+                    self.persist_saved_config();
+                    runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+                }
+                Err(anyhow::Error::new(err))
+            }
+        }
     }
 
     fn persist_device_name(self: &Arc<Self>, applied_name: String) {
@@ -324,6 +376,7 @@ impl ServiceManager {
             saved_config: Mutex::new(saved_config),
             runtime: Mutex::new(None),
             runtime_start_lock: Mutex::new(()),
+            exit_node_client_route_lock: Mutex::new(()),
         }
     }
 
@@ -534,6 +587,7 @@ impl ServiceManager {
     }
 
     fn cleanup_exit_node_client_state(&self) -> anyhow::Result<Option<String>> {
+        let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let saved_config = self.saved_config.lock().unwrap().clone();
         if !saved_config.exit_node.client_active
             && saved_config.exit_node.applied_route_excludes.is_empty()
@@ -736,6 +790,7 @@ impl ServiceManager {
         tun_name: Option<&str>,
         excludes: &[String],
     ) -> anyhow::Result<String> {
+        let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let target = target.trim();
         if target.is_empty() {
             anyhow::bail!("exit-node target cannot be empty");
@@ -808,6 +863,7 @@ impl ServiceManager {
     }
 
     fn clear_exit_node(&self, tun_name: Option<&str>) -> anyhow::Result<String> {
+        let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
         let saved_config = self.saved_config.lock().unwrap().clone();
         let dns_state = Self::saved_client_dns_state(&saved_config);
@@ -1281,6 +1337,26 @@ impl ServiceCallback {
             });
         }
     }
+
+    fn request_exit_node_client_exclude_refresh(&self, peer_ip: Ipv4Addr) {
+        if let Some(manager) = self.manager.upgrade() {
+            std::thread::spawn(move || {
+                match manager.refresh_exit_node_client_route_excludes() {
+                Ok(Some(note)) => log::info!(
+                    "exit-node route excludes refreshed after direct route update for {}: {}",
+                    peer_ip,
+                    note
+                ),
+                Ok(None) => {}
+                Err(err) => log::warn!(
+                    "failed to refresh exit-node route excludes after direct route update for {}: {:?}",
+                    peer_ip,
+                    err
+                ),
+            }
+            });
+        }
+    }
 }
 
 impl SdlCallback for ServiceCallback {
@@ -1316,7 +1392,9 @@ impl SdlCallback for ServiceCallback {
         true
     }
 
-    fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {}
+    fn direct_route_changed(&self, peer_ip: Ipv4Addr) {
+        self.request_exit_node_client_exclude_refresh(peer_ip);
+    }
 
     fn device_renamed(&self, new_name: String) {
         println!(

@@ -177,6 +177,10 @@ impl RouteManager {
         self.route_table.get_one_p2p_route(vip)
     }
 
+    pub fn measured_direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
+        self.route_table.get_one_measured_p2p_route(vip)
+    }
+
     pub fn peer_for_direct_route(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
         self.route_table.get_one_p2p_ip(route_key)
     }
@@ -336,6 +340,32 @@ impl RouteManager {
                 }
             }
         }
+    }
+
+    pub fn send_immediate_heartbeat(
+        &self,
+        current_device: CurrentDeviceInfo,
+        dest_ip: Ipv4Addr,
+        route_key: RouteKey,
+    ) -> anyhow::Result<()> {
+        let Some(sender) = &self.sender else {
+            return Ok(());
+        };
+        if current_device.is_gateway_vip(&dest_ip) {
+            return Ok(());
+        }
+        let Some(epoch) = self
+            .peer_probe_tracker
+            .try_record_ping_probe(dest_ip, route_key)
+        else {
+            return Ok(());
+        };
+        let net_packets =
+            self.heartbeat_packets_for_peer(current_device.virtual_ip, dest_ip, epoch)?;
+        for net_packet in &net_packets {
+            self.send_by_key(sender, net_packet, route_key)?;
+        }
+        Ok(())
     }
 
     pub fn cleanup_stale_direct_routes(&self, read_idle: Duration) -> StaleDirectRouteCleanup {

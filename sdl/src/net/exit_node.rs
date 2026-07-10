@@ -130,6 +130,35 @@ pub fn apply_client_route_dns_selection(
     }
 }
 
+pub fn refresh_client_route_excludes(
+    tun_name: &str,
+    previous_excludes: &[String],
+    next_excludes: &[String],
+) -> Result<String, ClientRouteDnsApplyError> {
+    if previous_excludes == next_excludes {
+        return Ok("exit-node route excludes unchanged".to_string());
+    }
+    match refresh_client_routing_excludes(tun_name, previous_excludes, next_excludes) {
+        Ok(note) => Ok(format!("exit-node route excludes refreshed: {note}")),
+        Err(err) => {
+            let rollback =
+                refresh_client_routing_excludes(tun_name, next_excludes, previous_excludes);
+            let rollback_failed = rollback.is_err();
+            Err(ClientRouteDnsApplyError {
+                message: match rollback {
+                    Ok(note) => format!(
+                        "exit-node route exclude refresh failed: {err:?}; restored previous routes: {note}"
+                    ),
+                    Err(rollback_err) => format!(
+                        "exit-node route exclude refresh failed: {err:?}; rollback failed: {rollback_err:?}"
+                    ),
+                },
+                rollback_failed,
+            })
+        }
+    }
+}
+
 fn rollback_client_route_dns_selection(
     previous: &ClientRouteDnsSnapshot,
     dns_service_ip: Ipv4Addr,
@@ -228,6 +257,23 @@ pub fn teardown_server_routing(egress_interface: &str, tun_name: &str) -> anyhow
     ))
 }
 
+fn route_exclude_diff(
+    previous: &[String],
+    next: &[String],
+) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let previous = previous
+        .iter()
+        .map(|exclude| normalize_route_target(exclude))
+        .collect::<anyhow::Result<BTreeSet<_>>>()?;
+    let next = next
+        .iter()
+        .map(|exclude| normalize_route_target(exclude))
+        .collect::<anyhow::Result<BTreeSet<_>>>()?;
+    let removed = previous.difference(&next).cloned().collect();
+    let added = next.difference(&previous).cloned().collect();
+    Ok((removed, added))
+}
+
 #[cfg(target_os = "linux")]
 pub fn setup_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::Result<String> {
     validate_iface_name(tun_name, "tun name")?;
@@ -278,6 +324,31 @@ pub fn teardown_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::R
     ))
 }
 
+#[cfg(target_os = "linux")]
+pub fn refresh_client_routing_excludes(
+    tun_name: &str,
+    previous_excludes: &[String],
+    next_excludes: &[String],
+) -> anyhow::Result<String> {
+    validate_iface_name(tun_name, "tun name")?;
+    preflight_remote_management_excludes(next_excludes)?;
+    let (removed, added) = route_exclude_diff(previous_excludes, next_excludes)?;
+    for exclude in &removed {
+        run_shell(&format!("ip route del {exclude} 2>/dev/null || true"))?;
+    }
+    for exclude in &added {
+        run_shell(&format!(
+            "ip route del {exclude} 2>/dev/null || true; route=$(ip route show default | head -n 1 | sed 's/^default //'); [ -n \"$route\" ] || exit 1; ip route replace {exclude} $route"
+        ))?;
+    }
+    Ok(format!(
+        "removed {} excludes, added {} excludes; default split routes unchanged via {}",
+        removed.len(),
+        added.len(),
+        tun_name
+    ))
+}
+
 #[cfg(target_os = "macos")]
 pub fn setup_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::Result<String> {
     validate_iface_name(tun_name, "tun name")?;
@@ -320,6 +391,36 @@ pub fn teardown_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::R
     run_shell("route -n delete -net 128.0.0.0 -netmask 128.0.0.0 2>/dev/null || true")?;
     Ok(format!(
         "exit-node client routing removed: default IPv4 split routes via {}",
+        tun_name
+    ))
+}
+
+#[cfg(target_os = "macos")]
+pub fn refresh_client_routing_excludes(
+    tun_name: &str,
+    previous_excludes: &[String],
+    next_excludes: &[String],
+) -> anyhow::Result<String> {
+    validate_iface_name(tun_name, "tun name")?;
+    preflight_remote_management_excludes(next_excludes)?;
+    let gateway = macos_default_gateway()?;
+    let (removed, added) = route_exclude_diff(previous_excludes, next_excludes)?;
+    for exclude in &removed {
+        let (addr, mask) = route_target_addr_mask(exclude)?;
+        run_shell(&format!(
+            "route -n delete -net {addr} -netmask {mask} 2>/dev/null || true"
+        ))?;
+    }
+    for exclude in &added {
+        let (addr, mask) = route_target_addr_mask(exclude)?;
+        run_shell(&format!(
+            "route -n delete -net {addr} -netmask {mask} 2>/dev/null || true; route -n add -net {addr} -netmask {mask} {gateway}"
+        ))?;
+    }
+    Ok(format!(
+        "removed {} excludes, added {} excludes; default split routes unchanged via {}",
+        removed.len(),
+        added.len(),
         tun_name
     ))
 }
@@ -408,6 +509,50 @@ pub fn teardown_client_routing(tun_name: &str, excludes: &[String]) -> anyhow::R
     ))
 }
 
+#[cfg(target_os = "windows")]
+pub fn refresh_client_routing_excludes(
+    tun_name: &str,
+    previous_excludes: &[String],
+    next_excludes: &[String],
+) -> anyhow::Result<String> {
+    validate_iface_name(tun_name, "tun name")?;
+    preflight_remote_management_excludes(next_excludes)?;
+    let gateway = windows_default_gateway()?;
+    let (removed, added) = route_exclude_diff(previous_excludes, next_excludes)?;
+    for exclude in &removed {
+        let (addr, mask) = route_target_addr_mask(exclude)?;
+        let _ = run_command(
+            "route.exe",
+            &["DELETE", &addr.to_string(), "MASK", &mask.to_string()],
+        );
+    }
+    for exclude in &added {
+        let (addr, mask) = route_target_addr_mask(exclude)?;
+        let _ = run_command(
+            "route.exe",
+            &["DELETE", &addr.to_string(), "MASK", &mask.to_string()],
+        );
+        run_command(
+            "route.exe",
+            &[
+                "ADD",
+                &addr.to_string(),
+                "MASK",
+                &mask.to_string(),
+                &gateway,
+                "METRIC",
+                "1",
+            ],
+        )?;
+    }
+    Ok(format!(
+        "removed {} excludes, added {} excludes; default split routes unchanged via {}",
+        removed.len(),
+        added.len(),
+        tun_name
+    ))
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn setup_client_routing(_tun_name: &str, _excludes: &[String]) -> anyhow::Result<String> {
     anyhow::bail!("exit-node client routing setup is supported only on Linux, macOS, and Windows")
@@ -417,6 +562,17 @@ pub fn setup_client_routing(_tun_name: &str, _excludes: &[String]) -> anyhow::Re
 pub fn teardown_client_routing(_tun_name: &str, _excludes: &[String]) -> anyhow::Result<String> {
     anyhow::bail!(
         "exit-node client routing teardown is supported only on Linux, macOS, and Windows"
+    )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub fn refresh_client_routing_excludes(
+    _tun_name: &str,
+    _previous_excludes: &[String],
+    _next_excludes: &[String],
+) -> anyhow::Result<String> {
+    anyhow::bail!(
+        "exit-node client route exclude refresh is supported only on Linux, macOS, and Windows"
     )
 }
 
@@ -657,6 +813,16 @@ fn collect_auto_excludes(runtime: &Sdl, selected_device_id: Option<&str>) -> Vec
     for summary in runtime.gateway_session_summaries() {
         if let Some(endpoint) = summary.endpoint {
             add_socket_addr_exclude(&mut excludes, endpoint);
+        }
+    }
+    for peer in runtime.device_list() {
+        if let Some(nat_info) = runtime.peer_nat_info(&peer.virtual_ip) {
+            for endpoint in &nat_info.public_udp_endpoints {
+                add_socket_addr_exclude(&mut excludes, *endpoint);
+            }
+            for endpoint in nat_info.local_udp_endpoints() {
+                add_socket_addr_exclude(&mut excludes, endpoint);
+            }
         }
     }
     for (_peer_ip, routes) in runtime.route_table() {

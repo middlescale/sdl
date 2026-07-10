@@ -643,6 +643,18 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 self.context
                     .route_manager()
                     .add_path_if_absent(source, route);
+                if let Err(err) = self.context.route_manager().send_immediate_heartbeat(
+                    *current_device,
+                    source,
+                    route_key,
+                ) {
+                    log::warn!(
+                        "failed to send immediate heartbeat after punch response source={} route={:?}: {:?}",
+                        source,
+                        route_key,
+                        err
+                    );
+                }
             }
             ControlPacket::AddrRequest => match route_key.addr.ip() {
                 std::net::IpAddr::V4(ipv4) => {

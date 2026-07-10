@@ -43,8 +43,32 @@ impl PeerProbeTracker {
 
     pub fn record_ping_probe(&self, peer_ip: Ipv4Addr, route_key: RouteKey) -> u16 {
         self.maybe_cleanup();
-        let epoch = self.next_probe_epoch();
         let mut pending = self.pending_pings.lock();
+        self.record_ping_probe_locked(&mut pending, peer_ip, route_key)
+    }
+
+    /// Registers a ping probe only when the same peer and route do not already
+    /// have an outstanding measurement.
+    pub fn try_record_ping_probe(&self, peer_ip: Ipv4Addr, route_key: RouteKey) -> Option<u16> {
+        self.maybe_cleanup();
+        let mut pending = self.pending_pings.lock();
+        if pending.get(&peer_ip).is_some_and(|probes| {
+            probes
+                .iter()
+                .any(|probe| probe.route_key == route_key && probe.expires_at > Instant::now())
+        }) {
+            return None;
+        }
+        Some(self.record_ping_probe_locked(&mut pending, peer_ip, route_key))
+    }
+
+    fn record_ping_probe_locked(
+        &self,
+        pending: &mut HashMap<Ipv4Addr, Vec<PendingPingProbe>>,
+        peer_ip: Ipv4Addr,
+        route_key: RouteKey,
+    ) -> u16 {
+        let epoch = self.next_probe_epoch();
         let probes = pending.entry(peer_ip).or_default();
         probes.retain(|probe| {
             probe.expires_at > Instant::now()
@@ -163,6 +187,19 @@ mod tests {
         assert!(!tracker.match_ping_response(peer, route_key, epoch.wrapping_add(1)));
         assert!(tracker.match_ping_response(peer, route_key, epoch));
         assert!(!tracker.match_ping_response(peer, route_key, epoch));
+    }
+
+    #[test]
+    fn immediate_ping_probe_is_deduplicated_by_peer_and_route() {
+        let tracker = PeerProbeTracker::new(4);
+        let peer = Ipv4Addr::new(10, 0, 0, 2);
+        let route_key = RouteKey::new(
+            ConnectProtocol::UDP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 2), 3000)),
+        );
+
+        assert!(tracker.try_record_ping_probe(peer, route_key).is_some());
+        assert!(tracker.try_record_ping_probe(peer, route_key).is_none());
     }
 
     #[test]

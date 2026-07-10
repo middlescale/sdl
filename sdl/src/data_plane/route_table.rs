@@ -127,6 +127,13 @@ impl RouteTable {
             .and_then(|v| v.iter().find_map(|(i, _)| i.is_p2p().then_some(*i)))
     }
 
+    pub fn get_one_measured_p2p_route(&self, vip: &Ipv4Addr) -> Option<Route> {
+        self.route_table.read().get(vip).and_then(|v| {
+            v.iter()
+                .find_map(|(i, _)| (i.is_p2p() && i.has_measured_rt()).then_some(*i))
+        })
+    }
+
     pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
         let table = self.route_table.read();
         for (k, v) in table.iter() {
@@ -297,6 +304,19 @@ mod tests {
         let routes = table.get_routes(&vip).unwrap();
         assert_eq!(routes.len(), 1);
         assert!(routes[0].is_p2p());
+    }
+
+    #[test]
+    fn measured_p2p_route_excludes_default_rt_routes() {
+        let table = RouteTable::new(UseChannelType::All, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 4);
+        let default_rt = route_key(1003);
+        table.add_route(vip, Route::from_default_rt(default_rt, 1));
+        assert!(table.get_one_p2p_route(&vip).is_some());
+        assert!(table.get_one_measured_p2p_route(&vip).is_none());
+
+        table.add_route(vip, Route::from(default_rt, 1, 42));
+        assert_eq!(table.get_one_measured_p2p_route(&vip).unwrap().rt, 42);
     }
 
     #[test]
