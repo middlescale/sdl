@@ -158,6 +158,19 @@ impl GatewayUdpChannel {
         *self.server_addr.lock() = server_addr;
     }
 
+    pub fn recreate(&self) -> anyhow::Result<Self> {
+        let server_addr = *self.server_addr.lock();
+        let gateway_udp_public_key = *self.gateway_udp_public_key.lock();
+        let gateway_udp_key_id = self.gateway_udp_key_id.lock().clone();
+        let session_id = self.crypto.lock().session_id;
+        Self::new(
+            server_addr,
+            gateway_udp_public_key,
+            gateway_udp_key_id,
+            session_id,
+        )
+    }
+
     pub fn mark_bootstrap_pending(&self) {
         let mut crypto = self.crypto.lock();
         crypto.bootstrap_pending = true;

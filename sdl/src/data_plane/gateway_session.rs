@@ -31,6 +31,9 @@ const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
 const GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS: i64 = 120_000;
 const GATEWAY_UDP_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+const UDP_GATEWAY_HELLOS_BEFORE_REBUILD: u32 = 3;
+const UDP_GATEWAY_REBUILD_BASE_DELAY_MS: i64 = 5_000;
+const UDP_GATEWAY_REBUILD_MAX_DELAY_MS: i64 = 60_000;
 static GATEWAY_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,6 +95,20 @@ struct GatewaySessionState {
     reauth_required: bool,
     last_rtt_ms: Option<i64>,
     consecutive_send_failures: u32,
+    unanswered_hello_count: u32,
+    udp_rebuild_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GatewayTickOutcome {
+    Idle,
+    RebuildUdp,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct UdpGatewayRebuildBackoff {
+    attempts: u32,
+    retry_after_unix_ms: i64,
 }
 
 #[derive(Clone)]
@@ -412,6 +429,35 @@ impl GatewaySession {
         stopped
     }
 
+    fn recreate_udp(&self) -> anyhow::Result<Self> {
+        let GatewayTransport::Udp(channel) = &self.channel else {
+            return Err(anyhow::anyhow!(
+                "cannot recreate non-UDP gateway session {}",
+                self.endpoint
+            ));
+        };
+        let mut state = self.state.lock().clone();
+        state.authenticated = false;
+        state.last_hello_unix_ms = 0;
+        state.keepalive_secs = 0;
+        state.lease_expire_unix_ms = 0;
+        state.grace_expire_unix_ms = 0;
+        state.last_rtt_ms = None;
+        state.consecutive_send_failures = 0;
+        state.unanswered_hello_count = 0;
+        state.udp_rebuild_requested = false;
+        Ok(Self {
+            endpoint: self.endpoint,
+            state: Arc::new(Mutex::new(state)),
+            channel: GatewayTransport::Udp(channel.recreate()?),
+            started: Arc::new(AtomicCell::new(false)),
+            active: Arc::new(AtomicCell::new(false)),
+            udp_stop_handle: Arc::new(Mutex::new(None)),
+            debug_watch: self.debug_watch.clone(),
+            stats: self.stats.clone(),
+        })
+    }
+
     fn update_grant(&self, grant: &GatewayAccessGrant, device_id: String) -> anyhow::Result<()> {
         let mut guard = self.state.lock();
         let auth_changed = guard.session_id != grant.session_id || guard.ticket != grant.ticket;
@@ -441,6 +487,8 @@ impl GatewaySession {
             guard.reauth_required = false;
             guard.last_rtt_ms = None;
             guard.consecutive_send_failures = 0;
+            guard.unanswered_hello_count = 0;
+            guard.udp_rebuild_requested = false;
         }
         guard.lease_secs_hint = grant.lease_secs;
         guard.grace_secs_hint = grant.grace_secs;
@@ -548,12 +596,15 @@ impl GatewaySession {
         self.endpoint == addr
     }
 
-    fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<()> {
+    fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<GatewayTickOutcome> {
+        if self.take_udp_rebuild_request() {
+            return Ok(GatewayTickOutcome::RebuildUdp);
+        }
         if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
-            return Ok(());
+            return Ok(GatewayTickOutcome::Idle);
         }
         let Some(packet) = self.maybe_build_connect_hello(current_device)? else {
-            return Ok(());
+            return Ok(GatewayTickOutcome::Idle);
         };
         log::debug!(
             "sending gateway connect hello endpoint={}, source={}, gateway={}",
@@ -571,11 +622,16 @@ impl GatewaySession {
             }),
         );
         if let Err(e) = self.send_packet(&packet) {
-            self.record_send_failure();
+            if self.record_send_failure(e.kind()) {
+                return Ok(GatewayTickOutcome::RebuildUdp);
+            }
             return Err(e.into());
         }
         self.record_send_success();
-        Ok(())
+        if self.record_unanswered_hello() {
+            return Ok(GatewayTickOutcome::RebuildUdp);
+        }
+        Ok(GatewayTickOutcome::Idle)
     }
 
     fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -602,7 +658,7 @@ impl GatewaySession {
             }
         }
         if let Err(e) = self.send_packet(packet) {
-            self.record_send_failure();
+            self.record_send_failure(e.kind());
             return Err(e);
         }
         self.record_send_success();
@@ -611,17 +667,54 @@ impl GatewaySession {
         Ok(())
     }
 
-    fn record_send_failure(&self) {
+    fn record_send_failure(&self, kind: io::ErrorKind) -> bool {
         let mut guard = self.state.lock();
         guard.consecutive_send_failures += 1;
+        let udp_transport_error = self.is_udp()
+            && matches!(
+                kind,
+                io::ErrorKind::AddrNotAvailable
+                    | io::ErrorKind::NetworkUnreachable
+                    | io::ErrorKind::NotConnected
+            );
+        if udp_transport_error {
+            guard.udp_rebuild_requested = true;
+        }
         if guard.consecutive_send_failures >= 3 {
             guard.authenticated = false;
         }
+        guard.udp_rebuild_requested
     }
 
     fn record_send_success(&self) {
         let mut guard = self.state.lock();
         guard.consecutive_send_failures = 0;
+    }
+
+    fn record_unanswered_hello(&self) -> bool {
+        if !self.is_udp() {
+            return false;
+        }
+        let mut guard = self.state.lock();
+        if guard.authenticated {
+            guard.unanswered_hello_count = 0;
+            return false;
+        }
+        guard.unanswered_hello_count += 1;
+        if guard.unanswered_hello_count >= UDP_GATEWAY_HELLOS_BEFORE_REBUILD {
+            guard.udp_rebuild_requested = true;
+        }
+        guard.udp_rebuild_requested
+    }
+
+    fn take_udp_rebuild_request(&self) -> bool {
+        if !self.is_udp() {
+            return false;
+        }
+        let mut guard = self.state.lock();
+        let requested = guard.udp_rebuild_requested;
+        guard.udp_rebuild_requested = false;
+        requested
     }
 
     fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -665,6 +758,8 @@ impl GatewaySession {
         }
         guard.authenticated = ack.ok;
         guard.consecutive_send_failures = 0;
+        guard.unanswered_hello_count = 0;
+        guard.udp_rebuild_requested = false;
         if ack.ok {
             let now_ms = now_time() as i64;
             if guard.last_hello_unix_ms > 0 && now_ms >= guard.last_hello_unix_ms {
@@ -840,6 +935,7 @@ pub struct GatewaySessions {
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     dormant_stream_sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     selection: Arc<Mutex<GatewaySelectionState>>,
+    udp_rebuild_backoff: Arc<Mutex<HashMap<SocketAddr, UdpGatewayRebuildBackoff>>>,
     refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
     debug_watch: DebugWatch,
@@ -858,6 +954,7 @@ impl GatewaySessions {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             dormant_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
+            udp_rebuild_backoff: Arc::new(Mutex::new(HashMap::new())),
             refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
             debug_watch,
@@ -906,14 +1003,93 @@ impl GatewaySessions {
         let current_device = self.current_device.load();
         let sessions: Vec<GatewaySession> = self.sessions.lock().values().cloned().collect();
         for session in sessions {
-            if let Err(e) = session.tick(&current_device) {
-                log::debug!(
-                    "gateway session tick failed endpoint={}: {:?}",
-                    session.endpoint,
-                    e
+            match session.tick(&current_device) {
+                Ok(GatewayTickOutcome::Idle) => {}
+                Ok(GatewayTickOutcome::RebuildUdp) => self.rebuild_udp_session(session.endpoint),
+                Err(e) => {
+                    log::debug!(
+                        "gateway session tick failed endpoint={}: {:?}",
+                        session.endpoint,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    fn rebuild_udp_session(&self, endpoint: SocketAddr) {
+        let old = {
+            let mut sessions = self.sessions.lock();
+            let Some(session) = sessions.get(&endpoint) else {
+                return;
+            };
+            if !session.is_udp() {
+                return;
+            }
+            if !self.try_begin_udp_rebuild(endpoint) {
+                return;
+            }
+            log::warn!(
+                "rebuilding UDP gateway session after transport failure or unanswered handshakes endpoint={}",
+                endpoint
+            );
+            sessions
+                .remove(&endpoint)
+                .expect("gateway session disappeared")
+        };
+        let replacement = match old.recreate_udp() {
+            Ok(session) => session,
+            Err(err) => {
+                log::warn!(
+                    "recreate UDP gateway session failed endpoint={}: {err:#}",
+                    endpoint
+                );
+                return;
+            }
+        };
+        old.retire();
+        if !old.stop_udp_runtime() {
+            log::warn!(
+                "UDP gateway runtime stop timed out before rebuild; detaching endpoint={}",
+                endpoint
+            );
+        }
+        if let Some((stop_manager, on_packet)) = self.runtime.get() {
+            if let Err(err) = replacement.start(stop_manager, on_packet) {
+                log::warn!(
+                    "restart UDP gateway session failed endpoint={}: {err:#}",
+                    endpoint
                 );
             }
         }
+        replacement.reactivate();
+        let mut sessions = self.sessions.lock();
+        if sessions.contains_key(&endpoint) {
+            log::debug!(
+                "skip stale UDP gateway replacement because a newer session exists endpoint={}",
+                endpoint
+            );
+            replacement.retire();
+            let _ = replacement.stop_udp_runtime();
+            return;
+        }
+        sessions.insert(endpoint, replacement);
+    }
+
+    fn try_begin_udp_rebuild(&self, endpoint: SocketAddr) -> bool {
+        let now_ms = now_time() as i64;
+        let mut backoff = self.udp_rebuild_backoff.lock();
+        let state = backoff.entry(endpoint).or_default();
+        if now_ms < state.retry_after_unix_ms {
+            return false;
+        }
+        let exponent = state.attempts.min(4);
+        let delay_ms = UDP_GATEWAY_REBUILD_BASE_DELAY_MS
+            .saturating_mul(1_i64 << exponent)
+            .min(UDP_GATEWAY_REBUILD_MAX_DELAY_MS);
+        state.attempts = state.attempts.saturating_add(1);
+        state.retry_after_unix_ms = now_ms.saturating_add(delay_ms);
+        true
     }
 
     pub fn set_gateway_grant(
@@ -1014,6 +1190,7 @@ impl GatewaySessions {
             .collect();
         let mut dormant = self.dormant_stream_sessions.lock();
         for endpoint in removed_endpoints {
+            self.udp_rebuild_backoff.lock().remove(&endpoint);
             let Some(session) = guard.remove(&endpoint) else {
                 continue;
             };
@@ -1133,6 +1310,7 @@ impl GatewaySessions {
     pub fn clear_gateway_grant(&self) {
         let mut sessions = self.sessions.lock();
         let mut dormant = self.dormant_stream_sessions.lock();
+        self.udp_rebuild_backoff.lock().clear();
         for (endpoint, session) in sessions.drain() {
             session.retire();
             if session.is_udp() {
@@ -1282,6 +1460,9 @@ impl GatewaySessions {
     pub fn handle_connect_ack(&self, from: SocketAddr, ack: &GatewayConnectAck) {
         if let Some(session) = self.sessions.lock().get(&from).cloned() {
             session.handle_connect_ack(ack);
+            if ack.ok {
+                self.udp_rebuild_backoff.lock().remove(&from);
+            }
         } else {
             log::debug!(
                 "received gateway connect ack from unknown endpoint={} session_id={} ok={} reason={}",
@@ -1552,8 +1733,9 @@ mod tests {
         gateway_http2_idle_timeout, gateway_session_order_key, now_time,
         parse_https_transport_target, parse_transport_endpoint, resolve_gateway_channel,
         GatewayGrantPhase, GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
-        GatewayTransport, UdpStopHandle,
+        GatewayTransport, UdpStopHandle, UDP_GATEWAY_HELLOS_BEFORE_REBUILD,
     };
+    use std::io;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
     use std::time::Duration;
@@ -1561,8 +1743,11 @@ mod tests {
     use crossbeam_utils::atomic::AtomicCell;
     use protobuf::EnumOrUnknown;
 
+    use crate::data_plane::stats::DataPlaneStats;
     use crate::handle::CurrentDeviceInfo;
-    use crate::proto::message::{GatewayAccessGrant, GatewayChannel, GatewayChannelKind};
+    use crate::proto::message::{
+        GatewayAccessGrant, GatewayChannel, GatewayChannelKind, GatewayConnectAck,
+    };
     use crate::protocol::NetPacket;
     use crate::util::StopManager;
 
@@ -1921,6 +2106,151 @@ mod tests {
 
         assert!(packet.is_some());
         assert!(channel.bootstrap_pending_for_test());
+    }
+
+    #[test]
+    fn udp_transport_error_requests_session_rebuild() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        let now_ms = now_time() as i64;
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 9_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let session = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+
+        assert!(session.record_send_failure(io::ErrorKind::NetworkUnreachable));
+        assert!(session.take_udp_rebuild_request());
+        assert!(!session.take_udp_rebuild_request());
+    }
+
+    #[test]
+    fn requested_udp_rebuild_replaces_the_running_session() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        let now_ms = now_time() as i64;
+        let stop_manager = StopManager::new(|| {});
+        sessions
+            .start(stop_manager.clone(), |_, _| {})
+            .expect("start gateway sessions");
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 9_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        let old = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+        assert!(old.record_send_failure(io::ErrorKind::AddrNotAvailable));
+
+        sessions.trigger_connect_now();
+
+        let replacement = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+        assert!(!Arc::ptr_eq(&old.state, &replacement.state));
+        assert!(old.udp_stop_handle.lock().is_none());
+        assert!(replacement.started.load());
+        stop_manager.stop();
+        assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn unanswered_udp_hellos_request_session_rebuild() {
+        let session = GatewaySession::new_udp(
+            "127.0.0.1:29901".parse().unwrap(),
+            &GatewayAccessGrant {
+                session_id: 7,
+                ..Default::default()
+            },
+            &GatewayChannel {
+                udp_public_key: [7; 32].to_vec(),
+                udp_key_id: "key-1".into(),
+                ..Default::default()
+            },
+            Default::default(),
+            DataPlaneStats::new(true),
+        )
+        .unwrap();
+
+        for _ in 0..UDP_GATEWAY_HELLOS_BEFORE_REBUILD - 1 {
+            assert!(!session.record_unanswered_hello());
+        }
+        assert!(session.record_unanswered_hello());
+        assert!(session.take_udp_rebuild_request());
+    }
+
+    #[test]
+    fn successful_gateway_ack_clears_udp_rebuild_backoff() {
+        let sessions = GatewaySessions::default();
+        let endpoint = "127.0.0.1:29901".parse().unwrap();
+        let now_ms = now_time() as i64;
+        sessions.set_gateway_grants(
+            &[GatewayAccessGrant {
+                gateway_id: "gw-udp".into(),
+                ticket: vec![1, 2, 3],
+                session_id: 7,
+                policy_rev: 8,
+                soft_refresh_after_unix_ms: now_ms + 9_000,
+                hard_expire_unix_ms: now_ms + 60_000,
+                ticket_expire_unix_ms: now_ms + 60_000,
+                gateway_channel: Some(GatewayChannel {
+                    kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+                    addr: "udp://127.0.0.1:29901".into(),
+                    udp_public_key: [7; 32].to_vec(),
+                    udp_key_id: "key-1".into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            }],
+            Ipv4Addr::new(10, 26, 0, 3),
+            "device-1".into(),
+        );
+        assert!(sessions.try_begin_udp_rebuild(endpoint));
+        assert!(sessions.udp_rebuild_backoff.lock().contains_key(&endpoint));
+
+        sessions.handle_connect_ack(
+            endpoint,
+            &GatewayConnectAck {
+                session_id: 7,
+                ok: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(!sessions.udp_rebuild_backoff.lock().contains_key(&endpoint));
     }
 
     #[test]

@@ -20,40 +20,6 @@ enum DataPath {
     GatewayRelay,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-struct ChannelPathQuality {
-    p2p_rt_ms: Option<i64>,
-    p2p_loss_rate: Option<f32>,
-}
-
-struct DefaultChannelPolicy;
-
-impl DefaultChannelPolicy {
-    const POOR_P2P_RT_MS: i64 = 800;
-    const POOR_P2P_LOSS_RATE: f32 = 0.15;
-
-    fn decide_auto(direct_route: Option<Route>, quality: ChannelPathQuality) -> DataPath {
-        let Some(route) = direct_route else {
-            return DataPath::GatewayRelay;
-        };
-        if quality
-            .p2p_rt_ms
-            .map(|rt| rt >= Self::POOR_P2P_RT_MS)
-            .unwrap_or(false)
-        {
-            return DataPath::GatewayRelay;
-        }
-        if quality
-            .p2p_loss_rate
-            .map(|loss| loss >= Self::POOR_P2P_LOSS_RATE)
-            .unwrap_or(false)
-        {
-            return DataPath::GatewayRelay;
-        }
-        DataPath::P2pUdp(route.route_key())
-    }
-}
-
 impl DataChannel {
     pub fn new(context: Weak<SdlContext>) -> Self {
         Self { context }
@@ -209,18 +175,10 @@ impl DataChannel {
                 context.route_manager().use_channel_type()
             }
         };
-        let direct_route = context.route_manager().measured_direct_route(vip);
-        let quality = direct_route
-            .map(Self::channel_path_quality)
-            .unwrap_or_default();
-        select_data_path(use_channel_type, direct_route, quality)
-    }
-
-    fn channel_path_quality(direct_route: Route) -> ChannelPathQuality {
-        ChannelPathQuality {
-            p2p_rt_ms: Some(direct_route.rt),
-            p2p_loss_rate: direct_route.loss_rate,
-        }
+        select_data_path(
+            use_channel_type,
+            context.route_manager().measured_direct_route(vip),
+        )
     }
 
     fn send_udp<B: AsRef<[u8]>>(
@@ -242,12 +200,14 @@ impl DataChannel {
 fn select_data_path(
     use_channel_type: UseChannelType,
     direct_route: Option<Route>,
-    quality: ChannelPathQuality,
 ) -> Option<DataPath> {
     match use_channel_type {
         UseChannelType::Relay => Some(DataPath::GatewayRelay),
         UseChannelType::P2p => direct_route.map(|route| DataPath::P2pUdp(route.route_key())),
-        UseChannelType::Auto => Some(DefaultChannelPolicy::decide_auto(direct_route, quality)),
+        UseChannelType::Auto => Some(match direct_route {
+            Some(route) => DataPath::P2pUdp(route.route_key()),
+            None => DataPath::GatewayRelay,
+        }),
     }
 }
 
@@ -255,7 +215,7 @@ fn select_data_path(
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    use super::{select_data_path, ChannelPathQuality, DataPath};
+    use super::{select_data_path, DataPath};
     use crate::data_plane::route::Route;
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -272,57 +232,38 @@ mod tests {
     #[test]
     fn select_data_path_prefers_direct_udp_when_available() {
         let route = sample_route();
-        let path = select_data_path(
-            UseChannelType::Auto,
-            Some(route),
-            ChannelPathQuality::default(),
-        );
+        let path = select_data_path(UseChannelType::Auto, Some(route));
         assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
     }
 
     #[test]
     fn select_data_path_falls_back_to_relay_for_all_mode() {
-        let path = select_data_path(UseChannelType::Auto, None, ChannelPathQuality::default());
+        let path = select_data_path(UseChannelType::Auto, None);
         assert_eq!(path, Some(DataPath::GatewayRelay));
     }
 
     #[test]
     fn select_data_path_requires_direct_route_for_p2p_only_mode() {
-        let path = select_data_path(UseChannelType::P2p, None, ChannelPathQuality::default());
+        let path = select_data_path(UseChannelType::P2p, None);
         assert_eq!(path, None);
     }
 
     #[test]
-    fn auto_policy_uses_gateway_when_p2p_rt_is_poor() {
+    fn auto_policy_keeps_measured_p2p_even_with_high_rt() {
         let route = Route::new(
             ConnectProtocol::UDP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
             1,
             900,
         );
-        let path = select_data_path(
-            UseChannelType::Auto,
-            Some(route),
-            ChannelPathQuality {
-                p2p_rt_ms: Some(route.rt),
-                ..ChannelPathQuality::default()
-            },
-        );
-        assert_eq!(path, Some(DataPath::GatewayRelay));
+        let path = select_data_path(UseChannelType::Auto, Some(route));
+        assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
     }
 
     #[test]
-    fn auto_policy_uses_gateway_when_p2p_loss_is_high() {
+    fn auto_policy_ignores_historical_p2p_loss() {
         let route = sample_route();
-        let path = select_data_path(
-            UseChannelType::Auto,
-            Some(route),
-            ChannelPathQuality {
-                p2p_rt_ms: Some(route.rt),
-                p2p_loss_rate: Some(0.2),
-                ..ChannelPathQuality::default()
-            },
-        );
-        assert_eq!(path, Some(DataPath::GatewayRelay));
+        let path = select_data_path(UseChannelType::Auto, Some(route));
+        assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
     }
 }
