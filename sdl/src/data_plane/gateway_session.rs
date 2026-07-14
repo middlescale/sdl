@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
 use http::Uri;
@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use protobuf::Message;
 use rand::RngCore;
 
+use crate::core::PeerIdentity;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::{now_time, CurrentDeviceInfo};
@@ -34,6 +35,7 @@ const GATEWAY_UDP_STOP_TIMEOUT: Duration = Duration::from_secs(1);
 const UDP_GATEWAY_HELLOS_BEFORE_REBUILD: u32 = 3;
 const UDP_GATEWAY_REBUILD_BASE_DELAY_MS: i64 = 5_000;
 const UDP_GATEWAY_REBUILD_MAX_DELAY_MS: i64 = 60_000;
+const PEER_INGRESS_GATEWAY_TTL: Duration = Duration::from_secs(60);
 static GATEWAY_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -592,6 +594,14 @@ impl GatewaySession {
         }
     }
 
+    fn is_relay_available(&self) -> bool {
+        if !self.active.load() {
+            return false;
+        }
+        let guard = self.state.lock();
+        Self::is_available(&guard, now_time() as i64)
+    }
+
     fn matches_addr(&self, addr: SocketAddr) -> bool {
         self.endpoint == addr
     }
@@ -928,6 +938,12 @@ struct GatewaySelectionState {
     last_switch_unix_ms: i64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PeerIngressGateway {
+    endpoint: SocketAddr,
+    expires_at: Instant,
+}
+
 #[derive(Clone)]
 pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -935,6 +951,7 @@ pub struct GatewaySessions {
     sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     dormant_stream_sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     selection: Arc<Mutex<GatewaySelectionState>>,
+    peer_ingress_gateways: Arc<Mutex<HashMap<PeerIdentity, PeerIngressGateway>>>,
     udp_rebuild_backoff: Arc<Mutex<HashMap<SocketAddr, UdpGatewayRebuildBackoff>>>,
     refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
@@ -954,6 +971,7 @@ impl GatewaySessions {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             dormant_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
+            peer_ingress_gateways: Arc::new(Mutex::new(HashMap::new())),
             udp_rebuild_backoff: Arc::new(Mutex::new(HashMap::new())),
             refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
@@ -1304,6 +1322,9 @@ impl GatewaySessions {
         }
         self.reset_selection_if_missing(&guard);
         drop(guard);
+        self.peer_ingress_gateways
+            .lock()
+            .retain(|_, ingress| desired.contains(&ingress.endpoint));
         self.trigger_connect_now();
     }
 
@@ -1327,6 +1348,7 @@ impl GatewaySessions {
         drop(dormant);
         drop(sessions);
         *self.selection.lock() = GatewaySelectionState::default();
+        self.peer_ingress_gateways.lock().clear();
         self.refresh_requested_at_ms.store(0);
     }
 
@@ -1411,6 +1433,96 @@ impl GatewaySessions {
             .lock()
             .values()
             .any(|session| session.matches_addr(addr))
+    }
+
+    /// Records the gateway that most recently delivered relay traffic for a peer.
+    ///
+    /// This is only a relay fallback hint. Measured P2P routes remain preferred by
+    /// `DataChannel`, and the hint expires so a peer can move to another gateway.
+    pub fn remember_peer_ingress_gateway(&self, peer: PeerIdentity, endpoint: SocketAddr) {
+        if !self.sessions.lock().contains_key(&endpoint) {
+            return;
+        }
+        self.peer_ingress_gateways.lock().insert(
+            peer,
+            PeerIngressGateway {
+                endpoint,
+                expires_at: Instant::now() + PEER_INGRESS_GATEWAY_TTL,
+            },
+        );
+    }
+
+    pub fn retain_peer_ingress_gateways(&self, active_peers: &HashSet<PeerIdentity>) {
+        self.peer_ingress_gateways.lock().retain(|peer, ingress| {
+            active_peers.contains(peer) && ingress.expires_at > Instant::now()
+        });
+    }
+
+    fn peer_ingress_gateway(&self, peer: &PeerIdentity) -> Option<SocketAddr> {
+        let mut ingress_gateways = self.peer_ingress_gateways.lock();
+        let ingress = ingress_gateways.get(peer).copied()?;
+        if ingress.expires_at <= Instant::now() {
+            ingress_gateways.remove(peer);
+            return None;
+        }
+        Some(ingress.endpoint)
+    }
+
+    fn relay_session_at(&self, endpoint: SocketAddr) -> Option<GatewaySession> {
+        let session = self.sessions.lock().get(&endpoint).cloned()?;
+        session.is_relay_available().then_some(session)
+    }
+
+    fn peer_ingress_session(&self, peer: &PeerIdentity) -> Option<GatewaySession> {
+        self.peer_ingress_gateway(peer)
+            .and_then(|endpoint| self.relay_session_at(endpoint))
+    }
+
+    pub fn send_relay_to<B: AsRef<[u8]>>(
+        &self,
+        endpoint: SocketAddr,
+        packet: &NetPacket<B>,
+    ) -> io::Result<()> {
+        let session = self
+            .sessions
+            .lock()
+            .get(&endpoint)
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "requested gateway session is unavailable",
+                )
+            })?;
+        session.send_relay(packet)
+    }
+
+    /// Sends a reply through the gateway that delivered the request when it is
+    /// still usable; otherwise falls back to normal active-gateway selection.
+    ///
+    /// A send failure from a usable preferred session is returned directly. Retrying
+    /// through another gateway at that point could duplicate a packet already handed
+    /// to the transport.
+    pub fn send_relay_to_or_active<B: AsRef<[u8]>>(
+        &self,
+        endpoint: SocketAddr,
+        packet: &NetPacket<B>,
+    ) -> io::Result<()> {
+        if let Some(session) = self.relay_session_at(endpoint) {
+            return session.send_relay(packet);
+        }
+        self.send_relay(packet)
+    }
+
+    pub fn send_relay_for_peer<B: AsRef<[u8]>>(
+        &self,
+        peer: Option<&PeerIdentity>,
+        packet: &NetPacket<B>,
+    ) -> io::Result<()> {
+        if let Some(session) = peer.and_then(|peer| self.peer_ingress_session(peer)) {
+            return session.send_relay(packet);
+        }
+        self.send_relay(packet)
     }
 
     pub fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -1738,11 +1850,12 @@ mod tests {
     use std::io;
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crossbeam_utils::atomic::AtomicCell;
     use protobuf::EnumOrUnknown;
 
+    use crate::core::PeerIdentity;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::handle::CurrentDeviceInfo;
     use crate::proto::message::{
@@ -2730,5 +2843,113 @@ mod tests {
 
         stop_manager.stop();
         assert!(stop_manager.wait_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn peer_ingress_gateway_expiry_is_reclaimed() {
+        let sessions = GatewaySessions::default();
+        let peer = PeerIdentity::from_device_public_key(b"peer-one");
+        let endpoint = "127.0.0.1:29931".parse().unwrap();
+        sessions.peer_ingress_gateways.lock().insert(
+            peer.clone(),
+            super::PeerIngressGateway {
+                endpoint,
+                expires_at: Instant::now() - Duration::from_secs(1),
+            },
+        );
+
+        assert_eq!(sessions.peer_ingress_gateway(&peer), None);
+        assert!(sessions.peer_ingress_gateways.lock().is_empty());
+    }
+
+    #[test]
+    fn peer_ingress_gateways_are_pruned_with_peer_list() {
+        let sessions = GatewaySessions::default();
+        let retained = PeerIdentity::from_device_public_key(b"peer-retained");
+        let removed = PeerIdentity::from_device_public_key(b"peer-removed");
+        let endpoint = "127.0.0.1:29931".parse().unwrap();
+        let expires_at = Instant::now() + Duration::from_secs(60);
+        let mut ingress = sessions.peer_ingress_gateways.lock();
+        ingress.insert(
+            retained.clone(),
+            super::PeerIngressGateway {
+                endpoint,
+                expires_at,
+            },
+        );
+        ingress.insert(
+            removed.clone(),
+            super::PeerIngressGateway {
+                endpoint,
+                expires_at,
+            },
+        );
+        drop(ingress);
+
+        sessions.retain_peer_ingress_gateways(&std::collections::HashSet::from([retained]));
+
+        assert!(sessions
+            .peer_ingress_gateways
+            .lock()
+            .contains_key(&PeerIdentity::from_device_public_key(b"peer-retained")));
+        assert!(!sessions.peer_ingress_gateways.lock().contains_key(&removed));
+    }
+
+    #[test]
+    fn clearing_gateway_grants_clears_peer_ingress_gateways() {
+        let sessions = GatewaySessions::default();
+        sessions.peer_ingress_gateways.lock().insert(
+            PeerIdentity::from_device_public_key(b"peer-one"),
+            super::PeerIngressGateway {
+                endpoint: "127.0.0.1:29931".parse().unwrap(),
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+
+        sessions.clear_gateway_grant();
+
+        assert!(sessions.peer_ingress_gateways.lock().is_empty());
+    }
+
+    #[test]
+    fn peer_ingress_session_prefers_the_learned_gateway() {
+        let sessions = GatewaySessions::default();
+        let peer = PeerIdentity::from_device_public_key(b"peer-one");
+        let ingress_endpoint = "127.0.0.1:29931".parse().unwrap();
+        let active_endpoint = "127.0.0.1:29932".parse().unwrap();
+        let ingress = GatewaySession::new_quic(
+            ingress_endpoint,
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        let active = GatewaySession::new_quic(
+            active_endpoint,
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        for session in [&ingress, &active] {
+            session.active.store(true);
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.hard_expire_unix_ms = now_time() as i64 + 60_000;
+        }
+        let mut configured = sessions.sessions.lock();
+        configured.insert(ingress_endpoint, ingress);
+        configured.insert(active_endpoint, active);
+        drop(configured);
+        sessions.peer_ingress_gateways.lock().insert(
+            peer.clone(),
+            super::PeerIngressGateway {
+                endpoint: ingress_endpoint,
+                expires_at: Instant::now() + Duration::from_secs(60),
+            },
+        );
+
+        assert_eq!(
+            sessions
+                .peer_ingress_session(&peer)
+                .map(|session| session.endpoint),
+            Some(ingress_endpoint)
+        );
     }
 }

@@ -58,7 +58,11 @@ impl DataChannel {
                             route_key,
                             err
                         );
-                            context.gateway.sessions.send_relay(buf)?;
+                            let peer_identity = context.peer_identity_for_vip(vip);
+                            context
+                                .gateway
+                                .sessions
+                                .send_relay_for_peer(peer_identity.as_ref(), buf)?;
                             Ok(RouteKind::GatewayRelay)
                         } else {
                             log::warn!(
@@ -73,7 +77,11 @@ impl DataChannel {
                 }
             }
             Some(DataPath::GatewayRelay) => {
-                context.gateway.sessions.send_relay(buf)?;
+                let peer_identity = context.peer_identity_for_vip(vip);
+                context
+                    .gateway
+                    .sessions
+                    .send_relay_for_peer(peer_identity.as_ref(), buf)?;
                 Ok(RouteKind::GatewayRelay)
             }
             None => Err(io::Error::new(

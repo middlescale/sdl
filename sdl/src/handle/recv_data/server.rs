@@ -230,6 +230,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                             .is_gateway_addr(route_key.addr);
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
+                        if from_gateway_peer {
+                            if let Some(peer) = self.context.peer_identity_for_vip(&source) {
+                                self.context
+                                    .gateway
+                                    .sessions
+                                    .remember_peer_ingress_gateway(peer, route_key.addr);
+                            }
+                        }
                         let mut gateway_echo_reply = None;
                         let mut peer_echo_reply = None;
                         let mut echo_meta = None;
@@ -248,7 +256,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                                         source,
                                         destination,
                                     )?;
-                                    self.send_gateway_reply(&net_packet, current_device)?;
+                                    self.send_gateway_reply(
+                                        &net_packet,
+                                        current_device,
+                                        route_key.addr,
+                                    )?;
                                     return Ok(());
                                 }
                                 if icmp_packet.kind() == Kind::EchoReply {
@@ -354,11 +366,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         &self,
         packet: &NetPacket<B>,
         current_device: &CurrentDeviceInfo,
+        ingress_gateway: SocketAddr,
     ) -> anyhow::Result<()> {
         let packet_len = packet.buffer().len();
         let destination = packet.destination();
         self.context.data_plane_stats.record_logical_up(packet_len);
-        self.context.gateway.sessions.send_relay(packet)?;
+        self.context
+            .gateway
+            .sessions
+            .send_relay_to_or_active(ingress_gateway, packet)?;
         self.context.data_plane_stats.record_gateway_up(packet_len);
         if destination != current_device.virtual_gateway {
             self.context
@@ -1456,6 +1472,10 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .peers
             .crypto
             .retain_peers(&identity_plan.active_identities);
+        self.context
+            .gateway
+            .sessions
+            .retain_peer_ingress_gateways(&identity_plan.active_identities);
         self.context
             .peers
             .crypto

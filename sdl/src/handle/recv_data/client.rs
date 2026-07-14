@@ -254,7 +254,10 @@ fn send_reply_by_route<B: AsRef<[u8]>>(
     let destination = packet.destination();
     context.data_plane_stats.record_logical_up(packet_len);
     if context.gateway.sessions.is_gateway_addr(route_key.addr) {
-        context.gateway.sessions.send_relay(packet)?;
+        context
+            .gateway
+            .sessions
+            .send_relay_to_or_active(route_key.addr, packet)?;
         context.data_plane_stats.record_gateway_up(packet_len);
     } else if route_key.protocol().is_udp() {
         context
