@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 /// online session key. VIPs can be reused, device_id is metadata, and online session
 /// keys rotate. PeerIdentity is the stable key for security-sensitive peer state such
 /// as data-plane session ciphers.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PeerIdentity([u8; 32]);
 
 impl PeerIdentity {
@@ -22,5 +22,37 @@ impl PeerIdentity {
             out.push(HEX[(byte & 0x0f) as usize] as char);
         }
         out
+    }
+
+    pub fn from_fingerprint_hex(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.len() != 64 {
+            return None;
+        }
+        let mut bytes = [0u8; 32];
+        for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+            let high = (chunk[0] as char).to_digit(16)? as u8;
+            let low = (chunk[1] as char).to_digit(16)? as u8;
+            bytes[index] = (high << 4) | low;
+        }
+        Some(Self(bytes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PeerIdentity;
+
+    #[test]
+    fn fingerprint_round_trip() {
+        let identity = PeerIdentity::from_device_public_key(b"test device key");
+        assert_eq!(
+            PeerIdentity::from_fingerprint_hex(&identity.fingerprint_hex()),
+            Some(identity)
+        );
+        assert_eq!(
+            PeerIdentity::from_fingerprint_hex("not-a-fingerprint"),
+            None
+        );
     }
 }

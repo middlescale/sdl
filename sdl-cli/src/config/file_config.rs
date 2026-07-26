@@ -65,7 +65,11 @@ pub struct ExitNodeFileConfig {
     pub enabled: bool,
     pub egress_interface: Option<String>,
     pub client_active: bool,
-    pub selected_device_id: Option<String>,
+    /// Stable device public-key fingerprint. `selected_device_id` is accepted
+    /// only as an on-read legacy alias and normalized when the selection is
+    /// next successfully applied.
+    #[serde(alias = "selected_device_id")]
+    pub selected_identity: Option<String>,
     pub tun_name: Option<String>,
     pub route_excludes: Vec<String>,
     pub applied_route_excludes: Vec<String>,
@@ -593,6 +597,39 @@ exit_node:
         let (_, file_conf) = read_config(path.to_str().unwrap())
             .expect("config with removed exit-node client_dns should parse");
         assert!(file_conf.exit_node.original_dns.is_empty());
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn read_config_accepts_legacy_exit_node_device_id_and_writes_identity_field() {
+        let path = write_temp_config(
+            r#"
+config_version: 2
+group: default.ms.net
+device_id: dev-legacy-exit
+name: legacy-exit-node
+server_address: https://control.middlescale.net/control
+exit_node:
+  client_active: true
+  selected_device_id: old-device-id
+"#,
+            "legacy-exit-node-device-id",
+        );
+        let (_, file_conf) =
+            read_config(path.to_str().unwrap()).expect("legacy exit-node config should parse");
+        assert_eq!(
+            file_conf.exit_node.selected_identity.as_deref(),
+            Some("old-device-id")
+        );
+        let serialized = serde_json::to_value(&file_conf).unwrap();
+        let exit_node = serialized.get("exit_node").unwrap();
+        assert_eq!(
+            exit_node
+                .get("selected_identity")
+                .and_then(|value| value.as_str()),
+            Some("old-device-id")
+        );
+        assert!(exit_node.get("selected_device_id").is_none());
         let _ = fs::remove_file(path);
     }
 

@@ -57,7 +57,7 @@ pub struct ExitNodeStatus {
     pub egress_interface: String,
     #[serde(default)]
     pub client_active: bool,
-    pub selected_device_id: String,
+    pub selected_identity: String,
     pub selected_name: String,
     pub selected_virtual_ip: String,
     pub selected_usable: bool,

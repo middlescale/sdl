@@ -137,7 +137,6 @@ pub struct ExitNodeLocalState {
     pub enabled: bool,
     pub local_ready: bool,
     pub egress_interface: Option<String>,
-    pub selected_device_id: Option<String>,
     pub selected_identity: Option<PeerIdentity>,
 }
 
@@ -182,14 +181,6 @@ impl PeerSubsystem {
         self.table.read().get(ip).cloned()
     }
 
-    pub(crate) fn identity_for_device_id(&self, device_id: &str) -> Option<PeerIdentity> {
-        self.table
-            .read()
-            .values()
-            .find(|peer| peer.device_id == device_id)
-            .map(|peer| peer.identity())
-    }
-
     pub(crate) fn identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {
         self.table.read().identity_for_vip(ip)
     }
@@ -220,6 +211,10 @@ impl PeerSubsystem {
                 .filter(|peer| peer.exit_node_usable && peer.status.is_online())
                 .map(|_| peer_ip)
         })
+    }
+
+    pub(crate) fn vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
+        self.table.read().vip_for_identity(identity)
     }
 }
 
@@ -404,9 +399,7 @@ impl SdlContext {
         if selected_peer_ip.is_none() {
             log::warn!(
                 "selected exit node is not currently usable: {}",
-                state
-                    .selected_device_id
-                    .unwrap_or_else(|| selected_identity.fingerprint_hex())
+                selected_identity.fingerprint_hex()
             );
         }
     }
@@ -454,12 +447,12 @@ impl SdlContext {
         self.peers.info(ip)
     }
 
-    pub fn peer_identity_for_device_id(&self, device_id: &str) -> Option<PeerIdentity> {
-        self.peers.identity_for_device_id(device_id)
-    }
-
     pub fn peer_identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {
         self.peers.identity_for_vip(ip)
+    }
+
+    pub fn peer_vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
+        self.peers.vip_for_identity(identity)
     }
 
     pub fn peer_epoch(&self) -> u16 {

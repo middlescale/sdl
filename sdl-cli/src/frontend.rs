@@ -418,7 +418,7 @@ fn handle_exit_node(args: &[String]) -> i32 {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&status).unwrap());
                     } else {
-                        if !status.selected_device_id.is_empty() {
+                        if !status.selected_identity.is_empty() {
                             println!(
                                 "Using exit node: {}",
                                 if status.client_active {
@@ -444,11 +444,11 @@ fn handle_exit_node(args: &[String]) -> i32 {
                                 println!("{}: {}", label, status.selected_virtual_ip);
                             }
                             let label = if status.client_active {
-                                "Device ID"
+                                "Identity"
                             } else {
-                                "Last selected device ID"
+                                "Last selected identity"
                             };
-                            println!("{}: {}", label, status.selected_device_id);
+                            println!("{}: {}", label, status.selected_identity);
                         } else {
                             println!("Using exit node: disabled");
                         }

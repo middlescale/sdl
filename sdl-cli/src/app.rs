@@ -44,7 +44,6 @@ pub(crate) struct RunningService {
 
 struct ExitNodeClientSelection {
     peer_name: String,
-    peer_device_id: String,
     peer_identity: PeerIdentity,
     tun_name: String,
     route_excludes: Vec<String>,
@@ -108,6 +107,32 @@ impl ServiceManager {
         })
     }
 
+    /// Prefer the persisted public-key fingerprint. If it is not currently
+    /// known, also try the legacy device ID so an old 64-character hexadecimal
+    /// device ID is not mistaken permanently for a fingerprint.
+    fn selected_exit_node_peer(
+        runtime: &Sdl,
+        selected_value: &str,
+    ) -> anyhow::Result<sdl::core::PeerInfo> {
+        if let Some(identity) = PeerIdentity::from_fingerprint_hex(selected_value) {
+            if let Some(vip) = runtime.peer_vip_for_identity(&identity) {
+                if let Some(peer) = runtime.peer_info(&vip) {
+                    return Ok(peer);
+                }
+            }
+        }
+        runtime
+            .device_list()
+            .into_iter()
+            .find(|peer| peer.device_id() == selected_value)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "selected exit-node identity or legacy device ID {} is not in the current device list",
+                    selected_value
+                )
+            })
+    }
+
     fn snapshot_exit_node_client_state(&self) -> exit_node::ClientRouteDnsSnapshot {
         let saved_config = self.saved_config.lock().unwrap().clone();
         exit_node::ClientRouteDnsSnapshot {
@@ -122,20 +147,18 @@ impl ServiceManager {
         &self,
         runtime: &Sdl,
         peer_name: String,
-        peer_device_id: String,
         peer_identity: PeerIdentity,
         tun_name: String,
         route_excludes: &[String],
     ) -> anyhow::Result<ExitNodeClientSelection> {
         Ok(ExitNodeClientSelection {
             peer_name,
-            peer_device_id: peer_device_id.clone(),
             peer_identity,
             tun_name,
             route_excludes: route_excludes.to_vec(),
             applied_route_excludes: exit_node::merge_excludes(
                 runtime,
-                Some(&peer_device_id),
+                Some(&peer_identity),
                 route_excludes,
             )?,
             dns_service_ip: Self::exit_node_dns_service_ip(runtime)?,
@@ -183,8 +206,7 @@ impl ServiceManager {
                     enabled: false,
                     local_ready: false,
                     egress_interface: None,
-                    selected_device_id: Some(next.peer_device_id.clone()),
-                    selected_identity: Some(next.peer_identity.clone()),
+                    selected_identity: Some(next.peer_identity),
                 });
                 Ok(result)
             }
@@ -206,7 +228,7 @@ impl ServiceManager {
     ) {
         let mut saved_config = self.saved_config.lock().unwrap();
         saved_config.exit_node.client_active = true;
-        saved_config.exit_node.selected_device_id = Some(selection.peer_device_id.clone());
+        saved_config.exit_node.selected_identity = Some(selection.peer_identity.fingerprint_hex());
         saved_config.exit_node.tun_name = Some(selection.tun_name.clone());
         saved_config.exit_node.route_excludes = selection.route_excludes.clone();
         saved_config.exit_node.applied_route_excludes = selection.applied_route_excludes.clone();
@@ -223,21 +245,12 @@ impl ServiceManager {
         if !saved_config.exit_node.client_active {
             return Ok(None);
         }
-        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.clone() else {
+        let Some(selected_value) = saved_config.exit_node.selected_identity.as_deref() else {
             return Ok(None);
         };
         let runtime = self.current_runtime()?;
         let tun_name = self.resolve_exit_node_tun_name(None)?;
-        let peer = runtime
-            .device_list()
-            .into_iter()
-            .find(|peer| peer.device_id() == selected_device_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "selected exit node {} is not in current device list",
-                    selected_device_id
-                )
-            })?;
+        let peer = Self::selected_exit_node_peer(&runtime, selected_value)?;
         if !peer.exit_node_usable() {
             anyhow::bail!(
                 "selected exit node '{}' is not currently usable; advertised={}, approved={}, online={}",
@@ -252,7 +265,6 @@ impl ServiceManager {
         let selection = self.build_exit_node_client_selection(
             &runtime,
             peer.name().to_string(),
-            peer.device_id().to_string(),
             peer_identity,
             tun_name,
             &saved_config.exit_node.route_excludes,
@@ -273,14 +285,15 @@ impl ServiceManager {
         if !saved_config.exit_node.client_active {
             return Ok(None);
         }
-        let Some(selected_device_id) = saved_config.exit_node.selected_device_id.clone() else {
+        let Some(selected_value) = saved_config.exit_node.selected_identity.as_deref() else {
             return Ok(None);
         };
         let runtime = self.current_runtime()?;
         let tun_name = Self::saved_exit_node_tun_name(&saved_config);
+        let selected_identity = Self::selected_exit_node_peer(&runtime, selected_value)?.identity();
         let next_excludes = exit_node::merge_excludes(
             &runtime,
-            Some(&selected_device_id),
+            Some(&selected_identity),
             &saved_config.exit_node.route_excludes,
         )?;
         if next_excludes == saved_config.exit_node.applied_route_excludes {
@@ -533,12 +546,12 @@ impl ServiceManager {
             enabled,
             local_ready: exit_node::local_ready(enabled, &saved_config.exit_node.egress_interface),
             egress_interface: saved_config.exit_node.egress_interface.clone(),
-            selected_device_id: saved_config
+            selected_identity: saved_config
                 .exit_node
                 .client_active
-                .then(|| saved_config.exit_node.selected_device_id.clone())
-                .flatten(),
-            selected_identity: None,
+                .then(|| saved_config.exit_node.selected_identity.as_deref())
+                .flatten()
+                .and_then(PeerIdentity::from_fingerprint_hex),
         }
     }
 
@@ -671,24 +684,20 @@ impl ServiceManager {
         let client_active = saved.exit_node.client_active
             && runtime_state
                 .as_ref()
-                .and_then(|state| state.selected_device_id.as_ref())
-                .map(|value| !value.is_empty())
-                .unwrap_or(false);
-        let selected_device_id = runtime_state
+                .and_then(|state| state.selected_identity)
+                .is_some();
+        let selected_identity = runtime_state
             .as_ref()
-            .and_then(|state| state.selected_device_id.clone())
-            .or_else(|| saved.exit_node.selected_device_id.clone())
+            .and_then(|state| state.selected_identity)
+            .map(|identity| identity.fingerprint_hex())
+            .or_else(|| saved.exit_node.selected_identity.clone())
             .unwrap_or_default();
         let mut selected_name = String::new();
         let mut selected_virtual_ip = String::new();
         let mut selected_usable = false;
-        if !selected_device_id.is_empty() {
+        if !selected_identity.is_empty() {
             if let Ok(runtime) = self.current_runtime() {
-                if let Some(peer) = runtime
-                    .device_list()
-                    .into_iter()
-                    .find(|peer| peer.device_id() == selected_device_id)
-                {
+                if let Ok(peer) = Self::selected_exit_node_peer(&runtime, &selected_identity) {
                     selected_name = peer.name().to_string();
                     selected_virtual_ip = peer.virtual_ip().to_string();
                     selected_usable = peer.exit_node_usable();
@@ -697,9 +706,9 @@ impl ServiceManager {
         }
         let note = if client_active && selected_usable {
             "using selected exit node".to_string()
-        } else if !selected_device_id.is_empty() && selected_usable {
+        } else if !selected_identity.is_empty() && selected_usable {
             "last selected exit node is usable but not active; run `sdl exit-node use <target>` to enable it".to_string()
-        } else if !selected_device_id.is_empty() {
+        } else if !selected_identity.is_empty() {
             "last selected exit node is not currently usable".to_string()
         } else if enabled && local_ready {
             "advertising exit-node capability".to_string()
@@ -714,7 +723,7 @@ impl ServiceManager {
             local_ready,
             egress_interface,
             client_active,
-            selected_device_id,
+            selected_identity,
             selected_name,
             selected_virtual_ip,
             selected_usable,
@@ -844,7 +853,6 @@ impl ServiceManager {
         let selection = self.build_exit_node_client_selection(
             &runtime,
             peer.name().to_string(),
-            peer.device_id().to_string(),
             peer_identity,
             tun_name,
             excludes,
@@ -856,7 +864,7 @@ impl ServiceManager {
         Ok(format!(
             "exit-node selection changed to {} ({}); {}; {}",
             selection.peer_name,
-            selection.peer_device_id,
+            selection.peer_identity.fingerprint_hex(),
             apply_result.route_note,
             apply_result.dns_note
         ))
@@ -867,20 +875,23 @@ impl ServiceManager {
         let tun_name = self.resolve_exit_node_tun_name(tun_name)?;
         let saved_config = self.saved_config.lock().unwrap().clone();
         let dns_state = Self::saved_client_dns_state(&saved_config);
-        let current_effective_excludes = if let Some(selected_device_id) =
-            saved_config.exit_node.selected_device_id.as_deref()
-        {
-            match self.current_runtime() {
-                Ok(runtime) => exit_node::merge_excludes(
-                    &runtime,
-                    Some(selected_device_id),
-                    &saved_config.exit_node.route_excludes,
-                )?,
-                Err(_) => saved_config.exit_node.route_excludes.clone(),
-            }
-        } else {
-            saved_config.exit_node.route_excludes.clone()
-        };
+        let current_effective_excludes =
+            if let Some(selected_value) = saved_config.exit_node.selected_identity.as_deref() {
+                match self.current_runtime() {
+                    Ok(runtime) => {
+                        let selected_identity =
+                            Self::selected_exit_node_peer(&runtime, selected_value)?.identity();
+                        exit_node::merge_excludes(
+                            &runtime,
+                            Some(&selected_identity),
+                            &saved_config.exit_node.route_excludes,
+                        )?
+                    }
+                    Err(_) => saved_config.exit_node.route_excludes.clone(),
+                }
+            } else {
+                saved_config.exit_node.route_excludes.clone()
+            };
         let effective_excludes = Self::merge_route_exclude_lists(
             &saved_config.exit_node.applied_route_excludes,
             &current_effective_excludes,
@@ -890,7 +901,7 @@ impl ServiceManager {
         {
             let mut saved_config = self.saved_config.lock().unwrap();
             saved_config.exit_node.client_active = false;
-            saved_config.exit_node.selected_device_id = None;
+            saved_config.exit_node.selected_identity = None;
             saved_config.exit_node.route_excludes.clear();
             saved_config.exit_node.applied_route_excludes.clear();
             saved_config.exit_node.original_dns.clear();

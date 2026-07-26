@@ -4,7 +4,7 @@ use std::process::Command;
 
 use anyhow::Context;
 
-use crate::core::Sdl;
+use crate::core::{PeerIdentity, Sdl};
 
 pub type ClientDnsState = Vec<ClientDnsServiceState>;
 
@@ -69,11 +69,11 @@ pub fn local_ready(enabled: bool, egress_interface: &Option<String>) -> bool {
 
 pub fn merge_excludes(
     runtime: &Sdl,
-    selected_device_id: Option<&str>,
+    selected_identity: Option<&PeerIdentity>,
     user_excludes: &[String],
 ) -> anyhow::Result<Vec<String>> {
     let mut excludes = BTreeSet::new();
-    for exclude in collect_auto_excludes(runtime, selected_device_id) {
+    for exclude in collect_auto_excludes(runtime, selected_identity) {
         excludes.insert(normalize_route_target(&exclude)?);
     }
     for exclude in user_excludes {
@@ -804,7 +804,7 @@ fn teardown_client_dns_platform(_state: Option<&ClientDnsState>) -> anyhow::Resu
     Ok("exit-node DNS unchanged: unsupported platform".to_string())
 }
 
-fn collect_auto_excludes(runtime: &Sdl, selected_device_id: Option<&str>) -> Vec<String> {
+fn collect_auto_excludes(runtime: &Sdl, selected_identity: Option<&PeerIdentity>) -> Vec<String> {
     let mut excludes = BTreeSet::new();
     add_socket_addr_exclude(&mut excludes, runtime.control_server_addr());
     if let Some((host, port)) = parse_control_authority(&runtime.config().server_address_str) {
@@ -832,7 +832,7 @@ fn collect_auto_excludes(runtime: &Sdl, selected_device_id: Option<&str>) -> Vec
             }
         }
     }
-    if let Some(peer_ip) = selected_exit_node_peer_ip(runtime, selected_device_id) {
+    if let Some(peer_ip) = selected_exit_node_peer_ip(runtime, selected_identity) {
         if let Some(route) = runtime.route(&peer_ip) {
             if route.is_p2p() {
                 add_socket_addr_exclude(&mut excludes, route.addr);
@@ -842,16 +842,11 @@ fn collect_auto_excludes(runtime: &Sdl, selected_device_id: Option<&str>) -> Vec
     excludes.into_iter().collect()
 }
 
-fn selected_exit_node_peer_ip(runtime: &Sdl, selected_device_id: Option<&str>) -> Option<Ipv4Addr> {
-    let selected_device_id = selected_device_id?.trim();
-    if selected_device_id.is_empty() {
-        return None;
-    }
-    runtime
-        .device_list()
-        .into_iter()
-        .find(|peer| peer.device_id == selected_device_id)
-        .map(|peer| peer.virtual_ip)
+fn selected_exit_node_peer_ip(
+    runtime: &Sdl,
+    selected_identity: Option<&PeerIdentity>,
+) -> Option<Ipv4Addr> {
+    runtime.peer_vip_for_identity(selected_identity?)
 }
 
 fn validate_iface_name(value: &str, label: &str) -> anyhow::Result<()> {

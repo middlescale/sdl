@@ -11,7 +11,6 @@ use crate::control::ControlSession;
 #[cfg(feature = "integrated_tun")]
 use crate::core::context::TunSubsystem;
 use crate::core::ExitNodeRoute;
-use crate::core::PeerInfo;
 use crate::core::{
     context::{
         AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewaySubsystem,
@@ -19,6 +18,7 @@ use crate::core::{
     },
     Config, SdlContext, SdlContextConfig,
 };
+use crate::core::{PeerIdentity, PeerInfo};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
@@ -420,6 +420,12 @@ impl Sdl {
     pub fn device_list(&self) -> Vec<PeerInfo> {
         self.context.peer_list()
     }
+    pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
+        self.context.peer_info(ip)
+    }
+    pub fn peer_vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
+        self.context.peer_vip_for_identity(identity)
+    }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
         self.context.route_manager().best_route(ip)
     }
@@ -522,18 +528,7 @@ impl Sdl {
             }
         }
     }
-    pub fn set_exit_node_state(&self, mut state: ExitNodeLocalState) {
-        if state.selected_identity.is_none() {
-            if let Some(selected_device_id) = state
-                .selected_device_id
-                .as_ref()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-            {
-                state.selected_identity =
-                    self.context.peer_identity_for_device_id(selected_device_id);
-            }
-        }
+    pub fn set_exit_node_state(&self, state: ExitNodeLocalState) {
         let should_report_status = self.context.set_exit_node_state(state);
         if should_report_status {
             self.context.control_session.report_client_status();
