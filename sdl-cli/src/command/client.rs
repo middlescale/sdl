@@ -2,7 +2,8 @@ use serde::de::DeserializeOwned;
 use std::io;
 
 use crate::command::entity::{
-    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficPolicyStatus,
+    TrafficSummary,
 };
 use crate::command::ipc;
 
@@ -88,6 +89,15 @@ impl CommandClient {
     }
     pub fn traffic(&mut self) -> io::Result<TrafficSummary> {
         self.send_cmd(b"traffic")
+    }
+    pub fn traffic_policy_status(&mut self) -> io::Result<TrafficPolicyStatus> {
+        self.send_cmd(b"traffic_policy:status")
+    }
+    pub fn traffic_policy_up(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"traffic_policy:up")
+    }
+    pub fn traffic_policy_down(&mut self) -> io::Result<String> {
+        self.send_string_cmd(b"traffic_policy:down")
     }
     pub fn down(&mut self) -> io::Result<String> {
         self.send_string_cmd(b"down")

@@ -510,6 +510,27 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 )? {
                     return Ok(());
                 }
+                if let Ok(ipv4) = IpV4Packet::new(net_packet.payload()) {
+                    if ipv4.protocol() == ipv4::protocol::Protocol::Udp
+                        && self.context.is_dns_service_ip(ipv4.source_ip())
+                    {
+                        if let Ok(udp) =
+                            UdpPacket::new(ipv4.source_ip(), ipv4.destination_ip(), ipv4.payload())
+                        {
+                            if udp.source_port() == 53 {
+                                if let Some(observation) =
+                                    crate::net::dns::response::parse_dns_response(udp.payload())
+                                {
+                                    self.context.exit_node.route.observe_dns_response(
+                                        &observation.domain,
+                                        &observation.ipv4_addresses,
+                                        observation.ttl_secs,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some((icmp_source, icmp_destination)) = log_peer_echo_reply {
                     self.context.debug_watch.emit(
                         "icmp",

@@ -6,12 +6,13 @@ use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::ip::ipv4::protocol::Protocol;
 use sdl_packet::udp::udp::UdpPacket;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 use std::{io, thread};
 use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
-use crate::core::ExitNodeRoute;
+use crate::core::{ExitNodeRoute, ExitRouteDecision, SdlContext};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
@@ -25,6 +26,92 @@ use crate::protocol::{ip_turn_packet, NetPacket};
 use crate::tun_tap_device::vnt_device::write_full_sync_device;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::util::StopManager;
+
+const LOCAL_DNS_QUEUE_CAPACITY: usize = 64;
+const LOCAL_DNS_WORKER_COUNT: usize = 4;
+
+struct LocalDnsRequest {
+    pending: crate::core::PendingDnsQuery,
+    payload: Vec<u8>,
+}
+
+pub(crate) struct LocalDnsForwarder {
+    tx: SyncSender<LocalDnsRequest>,
+}
+
+impl LocalDnsForwarder {
+    pub(crate) fn new(device: Arc<SyncDevice>, context: Arc<SdlContext>) -> Self {
+        let (tx, rx) = sync_channel::<LocalDnsRequest>(LOCAL_DNS_QUEUE_CAPACITY);
+        let rx = Arc::new(Mutex::new(rx));
+        for worker_index in 0..LOCAL_DNS_WORKER_COUNT {
+            let worker_rx = rx.clone();
+            let worker_device = device.clone();
+            let worker_context = context.clone();
+            if let Err(err) = thread::Builder::new()
+                .name(format!("local-dns-worker-{worker_index}"))
+                .spawn(move || loop {
+                    let request = {
+                        let receiver = worker_rx.lock().unwrap();
+                        receiver.recv()
+                    };
+                    let Ok(request) = request else {
+                        break;
+                    };
+                    let forward_result = match worker_context.local_dns_resolvers() {
+                        Some(resolvers) => {
+                            crate::net::dns::forward::forward_dns_query_to_resolvers(
+                                &request.payload,
+                                &resolvers,
+                            )
+                        }
+                        None => crate::net::dns::forward::forward_dns_query_to_system_resolver(
+                            &request.payload,
+                        ),
+                    };
+                    let response = match forward_result {
+                        Ok(response) => response,
+                        Err(err) => {
+                            log::warn!("local DNS forward failed: {err:?}");
+                            continue;
+                        }
+                    };
+                    match crate::net::dns::tunnel::build_dns_response_packet(
+                        &request.pending,
+                        &response,
+                    )
+                    .and_then(|packet| {
+                        write_full_sync_device(
+                            &worker_device,
+                            &packet,
+                            "local dns forward response",
+                        )
+                        .map(|_| ())
+                        .map_err(io::Error::other)
+                    }) {
+                        Ok(()) => {}
+                        Err(err) => log::warn!("local DNS response inject failed: {err:?}"),
+                    }
+                })
+            {
+                log::warn!("failed to start local DNS worker: {err:?}");
+            }
+        }
+        Self { tx }
+    }
+
+    fn forward(&self, pending: crate::core::PendingDnsQuery, payload: Vec<u8>) -> io::Result<()> {
+        self.tx
+            .try_send(LocalDnsRequest { pending, payload })
+            .map_err(|err| match err {
+                TrySendError::Full(_) => {
+                    io::Error::new(io::ErrorKind::WouldBlock, "local DNS queue is full")
+                }
+                TrySendError::Disconnected(_) => {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "local DNS worker is stopped")
+                }
+            })
+    }
+}
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {
     if ipv4_packet.protocol() == Protocol::Icmp {
         let mut icmp = IcmpPacket::new(ipv4_packet.payload_mut())?;
@@ -136,6 +223,74 @@ fn overlay_source_for_tun_packet(src_ip: Ipv4Addr, current_device: &CurrentDevic
     }
 }
 
+fn exit_next_hop(
+    route: &ExitNodeRoute,
+    destination: Ipv4Addr,
+    peer_table: &RwLock<crate::core::PeerTable>,
+) -> Option<Ipv4Addr> {
+    match route.decision_for_external_destination(&destination) {
+        ExitRouteDecision::Local => None,
+        ExitRouteDecision::ExitNodeVip(vip) => Some(vip),
+        ExitRouteDecision::ExitNodeDeviceId(device_id) => {
+            peer_table.read().vip_for_device_id(&device_id)
+        }
+    }
+}
+
+fn exit_next_hop_for_decision(
+    decision: ExitRouteDecision,
+    peer_table: &RwLock<crate::core::PeerTable>,
+) -> Option<Ipv4Addr> {
+    match decision {
+        ExitRouteDecision::Local => None,
+        ExitRouteDecision::ExitNodeVip(vip) => Some(vip),
+        ExitRouteDecision::ExitNodeDeviceId(device_id) => {
+            let peer_table = peer_table.read();
+            peer_table.vip_for_device_id(&device_id).and_then(|vip| {
+                peer_table
+                    .get(&vip)
+                    .filter(|peer| peer.exit_node_usable())
+                    .map(|_| vip)
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod dns_policy_tests {
+    use super::exit_next_hop_for_decision;
+    use crate::core::{ExitRouteDecision, PeerInfo, PeerTable};
+    use parking_lot::RwLock;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn dns_exit_target_requires_a_usable_exit_node() {
+        let peer = PeerInfo::new(
+            Ipv4Addr::new(10, 26, 0, 4),
+            "hk".into(),
+            0,
+            "hk-device".into(),
+            vec![],
+            vec![],
+            crate::proto::message::ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
+        );
+        let peer_table = RwLock::new(PeerTable::new(
+            1,
+            std::collections::HashMap::from([(peer.virtual_ip(), peer)]),
+        ));
+        assert_eq!(
+            exit_next_hop_for_decision(
+                ExitRouteDecision::ExitNodeDeviceId("hk-device".into()),
+                &peer_table,
+            ),
+            None
+        );
+    }
+}
+
 /// 接收tun数据，并且转发到udp上
 /// 实现一个原地发送，必须保证是如下结构
 /// |12字节开头|ip报文|至少1024字节结尾|
@@ -152,6 +307,7 @@ pub(crate) fn handle(
     peer_table: &RwLock<crate::core::PeerTable>,
     peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
+    local_dns: &LocalDnsForwarder,
 ) -> anyhow::Result<()> {
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
     let ipv4_packet = match IpV4Packet::new(&mut buf[12..data_len]) {
@@ -224,11 +380,68 @@ pub(crate) fn handle(
                         }
                     }
                 }
-                if let Some(next_hop) = exit_node_route.next_hop_for_external_destination(&dest_ip)
-                {
+                if let Some(query) = crate::net::dns::query::parse_dns_query(&dns_payload) {
+                    if let Some(decision) =
+                        exit_node_route.decision_for_dns_query(&query.domain, query.query_type)
+                    {
+                        match decision {
+                            ExitRouteDecision::Local => {
+                                // With a traffic policy active, the worker uses the
+                                // physical resolver snapshot captured before DNS was
+                                // redirected to SDL, so this cannot loop back to TUN.
+                                local_dns.forward(
+                                    crate::core::PendingDnsQuery::new(
+                                        src_ip,
+                                        dest_ip,
+                                        dns_client_port,
+                                    ),
+                                    dns_payload,
+                                )?;
+                                return Ok(());
+                            }
+                            decision => {
+                                if let Some(next_hop) =
+                                    exit_next_hop_for_decision(decision, peer_table)
+                                {
+                                    dest_ip = next_hop;
+                                } else {
+                                    let pending = crate::core::PendingDnsQuery::new(
+                                        src_ip,
+                                        dest_ip,
+                                        dns_client_port,
+                                    );
+                                    let response =
+                                        crate::net::dns::tunnel::build_dns_servfail_packet(
+                                            &pending,
+                                            &dns_payload,
+                                        )?;
+                                    write_full_sync_device(
+                                        device_writer,
+                                        &response,
+                                        "exit-node DNS SERVFAIL response",
+                                    )?;
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    } else if let Some(next_hop) =
+                        exit_next_hop(exit_node_route, dest_ip, peer_table)
+                    {
+                        dest_ip = next_hop;
+                    } else {
+                        local_dns.forward(
+                            crate::core::PendingDnsQuery::new(src_ip, dest_ip, dns_client_port),
+                            dns_payload,
+                        )?;
+                        return Ok(());
+                    }
+                } else if let Some(next_hop) = exit_next_hop(exit_node_route, dest_ip, peer_table) {
                     dest_ip = next_hop;
                 } else {
-                    data_channel.proxy_dns_query(src_ip, dest_ip, dns_client_port, &dns_payload)?;
+                    local_dns.forward(
+                        crate::core::PendingDnsQuery::new(src_ip, dest_ip, dns_client_port),
+                        dns_payload,
+                    )?;
                     return Ok(());
                 }
             }
@@ -264,7 +477,7 @@ pub(crate) fn handle(
         && current_device.broadcast_ip != dest_ip
         && current_device.is_outside_virtual_network(dest_ip)
     {
-        if let Some(next_hop) = exit_node_route.next_hop_for_external_destination(&dest_ip) {
+        if let Some(next_hop) = exit_next_hop(exit_node_route, dest_ip, peer_table) {
             //路由的目标不能是自己
             if next_hop == src_ip {
                 return Ok(());

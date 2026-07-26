@@ -23,6 +23,7 @@ fn print_usage() {
     println!("  sdl exit-node clear [--json]");
     println!("  sdl route [--json]");
     println!("  sdl traffic [--json]");
+    println!("  sdl traffic policy <up|down|status> [--json]");
     println!("  sdl resume [--json]                   # compatibility alias for up");
     println!(
         "  sdl suspend [--json]                  # suspend the local runtime without full teardown"
@@ -706,6 +707,9 @@ fn handle_route(args: &[String]) -> i32 {
 }
 
 fn handle_traffic(args: &[String]) -> i32 {
+    if args.first().is_some_and(|arg| arg == "policy") {
+        return handle_traffic_policy(&args[1..]);
+    }
     if has_json_flag(args) {
         match CommandClient::new().and_then(|mut client| client.traffic()) {
             Ok(traffic) => {
@@ -727,6 +731,44 @@ fn handle_traffic(args: &[String]) -> i32 {
                 eprintln!("traffic error: {}", e);
                 1
             }
+        }
+    }
+}
+
+fn handle_traffic_policy(args: &[String]) -> i32 {
+    let json = has_json_flag(args);
+    let action = args
+        .iter()
+        .find(|arg| arg.as_str() != "--json")
+        .map(String::as_str);
+    let result = CommandClient::new().and_then(|mut client| match action {
+        Some("up") => client
+            .traffic_policy_up()
+            .map(|message| serde_json::json!({"message": message})),
+        Some("down") => client
+            .traffic_policy_down()
+            .map(|message| serde_json::json!({"message": message})),
+        Some("status") => client
+            .traffic_policy_status()
+            .map(|status| serde_json::to_value(status).unwrap()),
+        _ => Err(std::io::Error::other(
+            "usage: sdl traffic policy <up|down|status> [--json]",
+        )),
+    });
+    match result {
+        Ok(value) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            } else if let Some(message) = value.get("message").and_then(|value| value.as_str()) {
+                println!("{message}");
+            } else {
+                println!("{}", serde_json::to_string_pretty(&value).unwrap());
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("traffic policy error: {error}");
+            1
         }
     }
 }

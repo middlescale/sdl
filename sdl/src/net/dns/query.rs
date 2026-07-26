@@ -1,8 +1,14 @@
-pub(crate) fn is_dns_query_payload(payload: &[u8]) -> bool {
-    parse_dns_query_question_end(payload).is_some()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DnsQuery {
+    pub domain: String,
+    pub query_type: u16,
 }
 
-fn parse_dns_query_question_end(payload: &[u8]) -> Option<usize> {
+pub(crate) fn is_dns_query_payload(payload: &[u8]) -> bool {
+    parse_dns_query(payload).is_some()
+}
+
+pub(crate) fn parse_dns_query(payload: &[u8]) -> Option<DnsQuery> {
     if payload.len() < 12 {
         return None;
     }
@@ -17,34 +23,52 @@ fn parse_dns_query_question_end(payload: &[u8]) -> Option<usize> {
         return None;
     }
 
-    let mut pos = 12usize;
-    loop {
-        if pos >= payload.len() {
-            return None;
-        }
-        let len = payload[pos] as usize;
-        if len == 0 {
-            pos += 1;
-            break;
-        }
-        if (len & 0xC0) != 0 || pos + 1 + len > payload.len() {
-            return None;
-        }
-        pos += 1 + len;
-    }
+    let (domain, pos) = parse_dns_name(payload, 12)?;
     if pos + 4 > payload.len() {
         return None;
     }
+    let query_type = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
     let qclass = u16::from_be_bytes([payload[pos + 2], payload[pos + 3]]);
     if qclass != 1 {
         return None;
     }
-    Some(pos + 4)
+    Some(DnsQuery { domain, query_type })
+}
+
+pub(crate) fn parse_dns_name(payload: &[u8], mut pos: usize) -> Option<(String, usize)> {
+    let mut labels = Vec::new();
+    let mut encoded_end = None;
+    let mut jumps = 0usize;
+    loop {
+        let byte = *payload.get(pos)?;
+        if byte == 0 {
+            let end = encoded_end.unwrap_or(pos + 1);
+            return Some((labels.join(".").to_ascii_lowercase(), end));
+        }
+        if byte & 0xC0 == 0xC0 {
+            let next = *payload.get(pos + 1)?;
+            let pointer = (((byte as usize & 0x3F) << 8) | next as usize) as usize;
+            if pointer >= payload.len() || jumps >= 16 {
+                return None;
+            }
+            encoded_end.get_or_insert(pos + 2);
+            pos = pointer;
+            jumps += 1;
+            continue;
+        }
+        let len = byte as usize;
+        if len > 63 || pos + 1 + len > payload.len() {
+            return None;
+        }
+        let label = std::str::from_utf8(&payload[pos + 1..pos + 1 + len]).ok()?;
+        labels.push(label.to_string());
+        pos += 1 + len;
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_dns_query_payload;
+    use super::{is_dns_query_payload, parse_dns_query};
 
     fn a_query() -> Vec<u8> {
         let mut payload = vec![
@@ -59,6 +83,7 @@ mod tests {
     #[test]
     fn accepts_standard_dns_query() {
         assert!(is_dns_query_payload(&a_query()));
+        assert_eq!(parse_dns_query(&a_query()).unwrap().domain, "example.com");
     }
 
     #[test]

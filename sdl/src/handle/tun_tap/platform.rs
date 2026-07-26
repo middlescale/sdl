@@ -79,6 +79,10 @@ fn start_simple0(
     peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {
+    let local_dns = crate::handle::tun_tap::tun_handler::LocalDnsForwarder::new(
+        device.clone(),
+        data_channel.context()?,
+    );
     let mut buf = [0; BUFFER_SIZE];
     let mut extend = [0; BUFFER_SIZE];
     let mut disabled_retry_count = 0u32;
@@ -125,6 +129,7 @@ fn start_simple0(
             &peer_table,
             &peer_crypto,
             &compressor,
+            &local_dns,
         ) {
             Ok(_) => {}
             Err(e) => {

@@ -1,5 +1,6 @@
 use crate::command::entity::{
-    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficPolicyStatus,
+    TrafficSummary,
 };
 use crate::command::ipc;
 use interprocess::local_socket::traits::ListenerExt;
@@ -63,6 +64,24 @@ pub trait CommandHandler: Send + Sync + 'static {
     fn exit_node_use(&self, use_command: ExitNodeUseCommand) -> io::Result<String>;
     fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String>;
     fn traffic(&self) -> io::Result<TrafficSummary>;
+    fn traffic_policy_status(&self) -> io::Result<TrafficPolicyStatus> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "traffic policy is not configured",
+        ))
+    }
+    fn traffic_policy_up(&self) -> io::Result<String> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "traffic policy is not configured",
+        ))
+    }
+    fn traffic_policy_down(&self) -> io::Result<String> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "traffic policy is not configured",
+        ))
+    }
     fn resume_runtime(&self) -> io::Result<String>;
     fn down_runtime(&self) -> io::Result<String>;
     fn suspend_runtime(&self) -> io::Result<String>;
@@ -143,6 +162,12 @@ where
         "traffic" => {
             serde_yaml::to_string(&handler.traffic()?).unwrap_or_else(|e| format!("error {:?}", e))
         }
+        "traffic_policy:status" => serde_yaml::to_string(&handler.traffic_policy_status()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        "traffic_policy:up" => serde_yaml::to_string(&handler.traffic_policy_up()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
+        "traffic_policy:down" => serde_yaml::to_string(&handler.traffic_policy_down()?)
+            .unwrap_or_else(|e| format!("error {:?}", e)),
         "up" | "resume" => serde_yaml::to_string(&handler.resume_runtime()?)
             .unwrap_or_else(|e| format!("error {:?}", e)),
         "down" => serde_yaml::to_string(&handler.down_runtime()?)

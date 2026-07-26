@@ -57,6 +57,7 @@ pub struct FileConfig {
     pub disable_stats: bool,
     pub local_dev: Option<String>,
     pub exit_node: ExitNodeFileConfig,
+    pub traffic_policy: TrafficPolicyFileConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -70,6 +71,20 @@ pub struct ExitNodeFileConfig {
     pub route_excludes: Vec<String>,
     pub applied_route_excludes: Vec<String>,
     pub original_dns: Vec<OriginalDnsServiceFileConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TrafficPolicyFileConfig {
+    /// The private policy itself is configured by the service argument. This
+    /// state only records DNS changes that must be undone after stop/crash.
+    pub dns_active: bool,
+    pub tun_name: Option<String>,
+    pub original_dns: Vec<OriginalDnsServiceFileConfig>,
+    /// Upstream resolver addresses captured before policy DNS is redirected
+    /// to SDL. They let an explicit policy `local` decision avoid looping
+    /// through the SDL DNS service.
+    pub local_resolvers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -114,6 +129,7 @@ impl Default for FileConfig {
             disable_stats: false,
             local_dev: None,
             exit_node: ExitNodeFileConfig::default(),
+            traffic_policy: TrafficPolicyFileConfig::default(),
         }
     }
 }

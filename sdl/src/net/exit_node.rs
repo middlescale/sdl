@@ -67,6 +67,81 @@ pub fn local_ready(enabled: bool, egress_interface: &Option<String>) -> bool {
             .unwrap_or(false)
 }
 
+/// Captures resolvers before a client policy redirects system DNS to SDL. The
+/// result is later used for policy `local` DNS decisions, so it must contain
+/// real upstream addresses rather than systemd-resolved's loopback stub.
+pub fn capture_client_dns_resolvers() -> anyhow::Result<Vec<SocketAddr>> {
+    let resolvers = crate::net::dns::forward::system_resolvers();
+    let direct: Vec<_> = resolvers
+        .into_iter()
+        .filter(|resolver| !resolver.ip().is_loopback())
+        .collect();
+    if !direct.is_empty() {
+        return Ok(direct);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let interface = default_route_interface()?;
+        let output = Command::new("resolvectl")
+            .args(["dns", &interface])
+            .output()
+            .with_context(|| format!("read DNS servers for default interface {interface}"))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "resolvectl dns {} failed: {}",
+                interface,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        let output = String::from_utf8_lossy(&output.stdout);
+        let mut resolvers = Vec::new();
+        for token in output.split_whitespace() {
+            let token = token.trim_matches(|value: char| {
+                !value.is_ascii_hexdigit() && value != '.' && value != ':'
+            });
+            if let Ok(ip) = token.parse::<IpAddr>() {
+                if !ip.is_loopback() {
+                    resolvers.push(SocketAddr::new(ip, 53));
+                }
+            }
+        }
+        resolvers.sort_unstable();
+        resolvers.dedup();
+        if !resolvers.is_empty() {
+            return Ok(resolvers);
+        }
+    }
+    anyhow::bail!(
+        "cannot capture a non-loopback system DNS resolver; configure a real upstream DNS server before enabling traffic policy"
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn default_route_interface() -> anyhow::Result<String> {
+    let output = Command::new("ip")
+        .args(["-4", "route", "show", "default"])
+        .output()
+        .context("read IPv4 default route")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "ip route show default failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let output = String::from_utf8_lossy(&output.stdout);
+    let line = output
+        .lines()
+        .next()
+        .context("no IPv4 default route is configured")?;
+    let interface = line
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find_map(|values| (values[0] == "dev").then(|| values[1]))
+        .context("default route does not name an interface")?;
+    Ok(interface.to_string())
+}
+
 pub fn merge_excludes(
     runtime: &Sdl,
     selected_device_id: Option<&str>,

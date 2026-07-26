@@ -74,6 +74,17 @@ pub struct ExitNodeItem {
     pub usable: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct TrafficPolicyStatus {
+    pub supported: bool,
+    pub configured: bool,
+    pub active: bool,
+    pub dns_active: bool,
+    pub plugin: String,
+    pub local_ipv4_cidrs: usize,
+    pub note: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RouteItem {
     pub name: String,

@@ -10,6 +10,7 @@ pub mod frontend;
 pub mod fs_access;
 pub mod root_check;
 mod service_lock;
+mod traffic_policy;
 #[cfg(target_os = "windows")]
 mod windows_service;
 

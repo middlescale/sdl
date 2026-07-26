@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -183,11 +184,11 @@ impl PeerSubsystem {
     }
 
     pub(crate) fn identity_for_device_id(&self, device_id: &str) -> Option<PeerIdentity> {
-        self.table
-            .read()
-            .values()
-            .find(|peer| peer.device_id == device_id)
-            .map(|peer| peer.identity())
+        let peer_table = self.table.read();
+        peer_table
+            .vip_for_device_id(device_id)
+            .and_then(|vip| peer_table.get(&vip))
+            .map(PeerInfo::identity)
     }
 
     pub(crate) fn identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {
@@ -239,6 +240,7 @@ impl GatewaySubsystem {
 #[derive(Clone)]
 pub(crate) struct DnsSubsystem {
     pub(crate) profile: Arc<RwLock<Option<DnsProfile>>>,
+    pub(crate) local_resolvers: Arc<RwLock<Option<Vec<SocketAddr>>>>,
     pub(crate) pending_queries: Arc<PendingRequestTable<PendingDnsQuery>>,
     #[cfg(all(
         feature = "integrated_tun",
@@ -269,6 +271,14 @@ impl DnsSubsystem {
         }
         *guard = profile;
         true
+    }
+
+    pub(crate) fn set_local_resolvers(&self, resolvers: Option<Vec<SocketAddr>>) {
+        *self.local_resolvers.write() = resolvers;
+    }
+
+    pub(crate) fn local_resolvers(&self) -> Option<Vec<SocketAddr>> {
+        self.local_resolvers.read().clone()
     }
 
     pub(crate) fn service_ipv4s(&self) -> Vec<Ipv4Addr> {
@@ -505,6 +515,14 @@ impl SdlContext {
 
     pub fn replace_dns_profile(&self, profile: Option<DnsProfile>) -> bool {
         self.dns.replace_profile(profile)
+    }
+
+    pub fn set_local_dns_resolvers(&self, resolvers: Option<Vec<SocketAddr>>) {
+        self.dns.set_local_resolvers(resolvers);
+    }
+
+    pub fn local_dns_resolvers(&self) -> Option<Vec<SocketAddr>> {
+        self.dns.local_resolvers()
     }
 
     pub fn is_dns_service_ip(&self, ip: Ipv4Addr) -> bool {

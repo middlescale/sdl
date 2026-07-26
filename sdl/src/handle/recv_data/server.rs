@@ -1156,6 +1156,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                     return Ok(());
                 }
+                if let Some(observation) =
+                    crate::net::dns::response::parse_dns_response(&response.response)
+                {
+                    self.context.exit_node.route.observe_dns_response(
+                        &observation.domain,
+                        &observation.ipv4_addresses,
+                        observation.ttl_secs,
+                    );
+                }
                 let packet = crate::net::dns::tunnel::build_dns_response_packet(
                     &pending,
                     &response.response,

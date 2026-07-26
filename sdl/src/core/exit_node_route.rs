@@ -3,17 +3,47 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-pub(crate) struct ExitRouteFlow {
+pub struct ExitRouteFlow {
     pub destination: Ipv4Addr,
 }
 
-pub(crate) enum ExitRouteDecision {
-    Local,
-    ExitNode(Ipv4Addr),
+/// A DNS request intercepted by SDL's virtual DNS service. DNS routing is a
+/// separate decision from IP routing because the domain is only available
+/// before resolution.
+pub struct DnsRouteFlow<'a> {
+    pub domain: &'a str,
+    pub query_type: u16,
 }
 
-pub(crate) trait ExitRoutePolicy: Send + Sync {
+/// DNS answers observed on the client after they have passed through either
+/// the control DNS proxy or an exit node resolver.
+pub struct DnsRouteObservation<'a> {
+    pub domain: &'a str,
+    pub ipv4_addresses: &'a [Ipv4Addr],
+    pub ttl_secs: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitRouteDecision {
+    Local,
+    /// Existing exit-node selection, addressed by the currently assigned VIP.
+    ExitNodeVip(Ipv4Addr),
+    /// Stable private-policy target. SDL resolves it against the live peer
+    /// table before forwarding, so a changed VIP does not invalidate policy.
+    ExitNodeDeviceId(String),
+}
+
+pub trait ExitRoutePolicy: Send + Sync {
     fn decide(&self, flow: &ExitRouteFlow) -> ExitRouteDecision;
+
+    /// `None` leaves DNS handling to SDL's ordinary exit-node selection.
+    /// `Some(Local)` sends the query to SDL's local resolver path.
+    fn decide_dns(&self, _flow: &DnsRouteFlow<'_>) -> Option<ExitRouteDecision> {
+        None
+    }
+
+    /// DNS observations are optional. Default routing has no DNS cache.
+    fn observe_dns(&self, _observation: &DnsRouteObservation<'_>) {}
 }
 
 #[derive(Default)]
@@ -31,7 +61,7 @@ impl ExitRoutePolicy for DefaultExitRoutePolicy {
     fn decide(&self, flow: &ExitRouteFlow) -> ExitRouteDecision {
         let _destination = flow.destination;
         match *self.default_next_hop.read() {
-            Some(next_hop) => ExitRouteDecision::ExitNode(next_hop),
+            Some(next_hop) => ExitRouteDecision::ExitNodeVip(next_hop),
             None => ExitRouteDecision::Local,
         }
     }
@@ -52,13 +82,35 @@ impl ExitNodeRoute {
         }
     }
 
-    pub fn next_hop_for_external_destination(&self, destination: &Ipv4Addr) -> Option<Ipv4Addr> {
+    pub fn decision_for_external_destination(&self, destination: &Ipv4Addr) -> ExitRouteDecision {
         let flow = ExitRouteFlow {
             destination: *destination,
         };
-        match self.policy.read().decide(&flow) {
-            ExitRouteDecision::ExitNode(next_hop) => Some(next_hop),
-            ExitRouteDecision::Local => None,
+        self.policy.read().decide(&flow)
+    }
+
+    pub fn decision_for_dns_query(
+        &self,
+        domain: &str,
+        query_type: u16,
+    ) -> Option<ExitRouteDecision> {
+        self.policy
+            .read()
+            .decide_dns(&DnsRouteFlow { domain, query_type })
+    }
+
+    pub fn observe_dns_response(&self, domain: &str, ipv4_addresses: &[Ipv4Addr], ttl_secs: u32) {
+        self.policy.read().observe_dns(&DnsRouteObservation {
+            domain,
+            ipv4_addresses,
+            ttl_secs,
+        });
+    }
+
+    pub fn next_hop_for_external_destination(&self, destination: &Ipv4Addr) -> Option<Ipv4Addr> {
+        match self.decision_for_external_destination(destination) {
+            ExitRouteDecision::ExitNodeVip(next_hop) => Some(next_hop),
+            ExitRouteDecision::Local | ExitRouteDecision::ExitNodeDeviceId(_) => None,
         }
     }
 
@@ -66,11 +118,11 @@ impl ExitNodeRoute {
         self.default_policy.set_default_next_hop(next_hop);
     }
 
-    pub(crate) fn set_policy(&self, policy: Arc<dyn ExitRoutePolicy>) {
+    pub fn set_policy(&self, policy: Arc<dyn ExitRoutePolicy>) {
         *self.policy.write() = policy;
     }
 
-    pub(crate) fn reset_policy_to_default(&self) {
+    pub fn reset_policy_to_default(&self) {
         *self.policy.write() = self.default_policy.clone();
     }
 }
@@ -86,7 +138,7 @@ mod tests {
     impl ExitRoutePolicy for GoogleToJapanPolicy {
         fn decide(&self, flow: &ExitRouteFlow) -> ExitRouteDecision {
             if flow.destination == Ipv4Addr::new(8, 8, 8, 8) {
-                return ExitRouteDecision::ExitNode(Ipv4Addr::new(10, 26, 0, 43));
+                return ExitRouteDecision::ExitNodeVip(Ipv4Addr::new(10, 26, 0, 43));
             }
             ExitRouteDecision::Local
         }

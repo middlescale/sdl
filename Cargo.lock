@@ -2099,6 +2099,7 @@ dependencies = [
  "getopts",
  "interprocess",
  "libc",
+ "libloading 0.8.9",
  "log",
  "log4rs",
  "rand 0.8.5",

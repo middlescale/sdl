@@ -1,5 +1,6 @@
 use crate::command::entity::{
-    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficSummary,
+    DeviceItem, ExitNodeItem, ExitNodeStatus, GatewayItem, Info, RouteItem, TrafficPolicyStatus,
+    TrafficSummary,
 };
 use crate::command::server::{
     AuthCommand, CommandHandler, CommandServer, ExitNodeDisableCommand, ExitNodeEnableCommand,
@@ -19,11 +20,13 @@ use sdl::net::exit_node;
 use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use std::collections::BTreeSet;
 use std::io;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use crate::root_check;
+use crate::traffic_policy::LoadedTrafficPolicy;
 
 struct ServiceManager {
     config: Mutex<Config>,
@@ -32,6 +35,8 @@ struct ServiceManager {
     runtime_start_lock: Mutex<()>,
     // Serializes system route/DNS changes with their corresponding persisted state.
     exit_node_client_route_lock: Mutex<()>,
+    traffic_policy: Option<Arc<LoadedTrafficPolicy>>,
+    traffic_policy_plan: Mutex<Option<sdl::net::traffic_policy::LocalEgressPlan>>,
 }
 
 #[derive(Clone)]
@@ -54,13 +59,23 @@ struct ExitNodeClientSelection {
 
 impl ServiceManager {
     fn saved_client_dns_state(saved_config: &FileConfig) -> Option<exit_node::ClientDnsState> {
-        if saved_config.exit_node.original_dns.is_empty() {
+        Self::dns_state_from_file(&saved_config.exit_node.original_dns)
+    }
+
+    fn saved_traffic_policy_dns_state(
+        saved_config: &FileConfig,
+    ) -> Option<exit_node::ClientDnsState> {
+        Self::dns_state_from_file(&saved_config.traffic_policy.original_dns)
+    }
+
+    fn dns_state_from_file(
+        services: &[OriginalDnsServiceFileConfig],
+    ) -> Option<exit_node::ClientDnsState> {
+        if services.is_empty() {
             return None;
         }
         Some(
-            saved_config
-                .exit_node
-                .original_dns
+            services
                 .iter()
                 .map(|service| exit_node::ClientDnsServiceState {
                     service: service.service.clone(),
@@ -370,13 +385,168 @@ impl ServiceManager {
         }
     }
 
+    fn traffic_policy_status(&self) -> anyhow::Result<TrafficPolicyStatus> {
+        let Some(policy) = self.traffic_policy.as_ref() else {
+            return Ok(TrafficPolicyStatus {
+                supported: cfg!(target_os = "linux"),
+                note: "start sdl-service with --traffic-policy-plugin <path> to configure private traffic routing".to_string(),
+                ..TrafficPolicyStatus::default()
+            });
+        };
+        let active = self.traffic_policy_plan.lock().unwrap().is_some();
+        Ok(TrafficPolicyStatus {
+            supported: cfg!(target_os = "linux"),
+            configured: true,
+            active,
+            dns_active: self.saved_config.lock().unwrap().traffic_policy.dns_active,
+            plugin: policy.plugin_path().display().to_string(),
+            local_ipv4_cidrs: policy.local_ipv4_cidrs()?.len(),
+            note: if active {
+                "local IPv4 CIDRs bypass SDL; other IPv4 traffic enters sdl-tun and is selected by the private policy".to_string()
+            } else {
+                "configured but disabled; run `sdl traffic policy up` to install system routes"
+                    .to_string()
+            },
+        })
+    }
+
+    fn enable_traffic_policy(&self) -> anyhow::Result<String> {
+        if !cfg!(target_os = "linux") {
+            anyhow::bail!("traffic policy is currently supported only on Linux");
+        }
+        let policy = self
+            .traffic_policy
+            .as_ref()
+            .context("traffic policy is not configured; start sdl-service with --traffic-policy-plugin <path>")?;
+        if self.traffic_policy_plan.lock().unwrap().is_some() {
+            return Ok("traffic policy is already active".to_string());
+        }
+        let runtime = self.current_runtime()?;
+        if self.saved_config.lock().unwrap().exit_node.client_active {
+            anyhow::bail!(
+                "traffic policy cannot run while `sdl exit-node use` is active; run `sdl exit-node clear` first"
+            );
+        }
+        let tun_name = self.resolve_exit_node_tun_name(None)?;
+        let dns_service_ip = Self::exit_node_dns_service_ip(&runtime)?;
+        let local_resolvers = exit_node::capture_client_dns_resolvers()?;
+        let mut route_excludes = exit_node::merge_excludes(&runtime, None, &[])?;
+        // Local policy DNS is sent from the service directly to the resolver
+        // snapshot. Keep IPv4 resolvers on the physical route so nftables does
+        // not feed those worker packets back into sdl-tun.
+        route_excludes.extend(
+            local_resolvers
+                .iter()
+                .filter_map(|resolver| match resolver.ip() {
+                    IpAddr::V4(ip) => Some(format!("{ip}/32")),
+                    IpAddr::V6(_) => None,
+                }),
+        );
+        route_excludes.sort();
+        route_excludes.dedup();
+        let plan = sdl::net::traffic_policy::LocalEgressPlan {
+            tun_name,
+            local_ipv4_cidrs: policy.local_ipv4_cidrs()?,
+            route_excludes,
+        };
+        runtime.set_exit_route_policy(policy.clone());
+        runtime.set_local_dns_resolvers(Some(local_resolvers.clone()));
+        if let Err(err) = sdl::net::traffic_policy::enable_local_egress(&plan) {
+            runtime.reset_exit_route_policy();
+            runtime.set_local_dns_resolvers(None);
+            return Err(err);
+        }
+        let previous_dns = Self::saved_traffic_policy_dns_state(&self.saved_config.lock().unwrap());
+        let (dns_state, dns_note) = match exit_node::setup_client_dns(
+            &plan.tun_name,
+            dns_service_ip,
+            previous_dns.as_ref(),
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.reset_exit_route_policy();
+                runtime.set_local_dns_resolvers(None);
+                let _ = sdl::net::traffic_policy::disable_local_egress(&plan);
+                return Err(err);
+            }
+        };
+        let Some(dns_state) = dns_state else {
+            runtime.reset_exit_route_policy();
+            runtime.set_local_dns_resolvers(None);
+            let _ = sdl::net::traffic_policy::disable_local_egress(&plan);
+            anyhow::bail!(
+                "traffic policy requires resolvectl to route external DNS through SDL; install systemd-resolved or keep the policy disabled"
+            );
+        };
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.traffic_policy.dns_active = true;
+            saved_config.traffic_policy.tun_name = Some(plan.tun_name.clone());
+            saved_config.traffic_policy.original_dns = Self::file_client_dns_state(dns_state);
+            saved_config.traffic_policy.local_resolvers =
+                local_resolvers.iter().map(SocketAddr::to_string).collect();
+        }
+        self.persist_saved_config();
+        *self.traffic_policy_plan.lock().unwrap() = Some(plan);
+        Ok(format!(
+            "traffic policy enabled: local traffic bypasses SDL; external DNS is routed through SDL; {dns_note}"
+        ))
+    }
+
+    fn disable_traffic_policy(&self) -> anyhow::Result<String> {
+        let plan = self.traffic_policy_plan.lock().unwrap().take();
+        if let Ok(runtime) = self.current_runtime() {
+            runtime.reset_exit_route_policy();
+            runtime.set_local_dns_resolvers(None);
+        }
+        let saved_config = self.saved_config.lock().unwrap().clone();
+        let dns_state = Self::saved_traffic_policy_dns_state(&saved_config);
+        let dns_note = exit_node::teardown_client_dns(dns_state.as_ref())?;
+        if let Some(plan) = plan {
+            sdl::net::traffic_policy::disable_local_egress(&plan)?;
+        } else if saved_config.traffic_policy.dns_active
+            || saved_config.traffic_policy.tun_name.is_some()
+        {
+            let stale_plan = sdl::net::traffic_policy::LocalEgressPlan {
+                tun_name: saved_config
+                    .traffic_policy
+                    .tun_name
+                    .unwrap_or_else(|| "sdl-tun".to_string()),
+                local_ipv4_cidrs: Vec::new(),
+                route_excludes: Vec::new(),
+            };
+            sdl::net::traffic_policy::disable_local_egress(&stale_plan)?;
+        } else {
+            return Ok("traffic policy is already disabled".to_string());
+        }
+        {
+            let mut saved_config = self.saved_config.lock().unwrap();
+            saved_config.traffic_policy.dns_active = false;
+            saved_config.traffic_policy.tun_name = None;
+            saved_config.traffic_policy.original_dns.clear();
+            saved_config.traffic_policy.local_resolvers.clear();
+        }
+        self.persist_saved_config();
+        Ok(format!("traffic policy disabled; {dns_note}"))
+    }
+
     fn new(config: Config, saved_config: FileConfig) -> Self {
+        Self::new_with_traffic_policy(config, saved_config, None)
+    }
+
+    fn new_with_traffic_policy(
+        config: Config,
+        saved_config: FileConfig,
+        traffic_policy: Option<Arc<LoadedTrafficPolicy>>,
+    ) -> Self {
         Self {
             config: Mutex::new(config),
             saved_config: Mutex::new(saved_config),
             runtime: Mutex::new(None),
             runtime_start_lock: Mutex::new(()),
             exit_node_client_route_lock: Mutex::new(()),
+            traffic_policy,
+            traffic_policy_plan: Mutex::new(None),
         }
     }
 
@@ -485,6 +655,16 @@ impl ServiceManager {
         let result = (|| {
             let config = self.current_config();
             let callback = ServiceCallback::new(Arc::downgrade(self));
+            match self.disable_traffic_policy() {
+                Ok(note) if note != "traffic policy is already disabled" => {
+                    log::info!("reset traffic policy state before runtime start: {}", note)
+                }
+                Ok(_) => {}
+                Err(err) => log::warn!(
+                    "failed to reset traffic policy state before runtime start: {:?}",
+                    err
+                ),
+            }
             match self.cleanup_exit_node_client_state() {
                 Ok(Some(note)) => log::info!(
                     "reset exit-node client state before runtime start: {}",
@@ -947,6 +1127,9 @@ impl ServiceManager {
     }
 
     fn stop_service_runtime(&self) -> anyhow::Result<String> {
+        if let Err(err) = self.disable_traffic_policy() {
+            log::warn!("failed to remove traffic policy routes before runtime stop: {err:?}");
+        }
         match self.cleanup_exit_node_client_state() {
             Ok(Some(note)) => {
                 log::info!("reset exit-node client state before runtime stop: {}", note)
@@ -1185,6 +1368,18 @@ impl CommandHandler for ServiceCommandHandler {
             Ok(vnt) => Ok(crate::command::command_traffic(vnt.as_ref())),
             Err(_) => Ok(TrafficSummary::default()),
         }
+    }
+
+    fn traffic_policy_status(&self) -> io::Result<TrafficPolicyStatus> {
+        self.0.traffic_policy_status().map_err(io::Error::other)
+    }
+
+    fn traffic_policy_up(&self) -> io::Result<String> {
+        self.0.enable_traffic_policy().map_err(io::Error::other)
+    }
+
+    fn traffic_policy_down(&self) -> io::Result<String> {
+        self.0.disable_traffic_policy().map_err(io::Error::other)
     }
 
     fn resume_runtime(&self) -> io::Result<String> {
@@ -1462,6 +1657,14 @@ impl SdlCallback for ServiceCallback {
 
 impl RunningService {
     pub(crate) fn start(config: Config, saved_config: FileConfig) -> Result<Self, i32> {
+        Self::start_with_traffic_policy(config, saved_config, None)
+    }
+
+    fn start_with_traffic_policy(
+        config: Config,
+        saved_config: FileConfig,
+        traffic_policy_plugin: Option<PathBuf>,
+    ) -> Result<Self, i32> {
         if !root_check::is_app_elevated() {
             println!("Please run sdl-service with administrator or root privileges");
             return Err(1);
@@ -1481,7 +1684,25 @@ impl RunningService {
             "acquired service instance lock at {}",
             service_lock.path().display()
         );
-        let manager = Arc::new(ServiceManager::new(config.clone(), saved_config));
+        let traffic_policy = match traffic_policy_plugin {
+            Some(path) => match LoadedTrafficPolicy::load(&path) {
+                Ok(policy) => {
+                    log::info!("loaded traffic policy plugin {}", path.display());
+                    Some(policy)
+                }
+                Err(error) => {
+                    log::error!("load traffic policy plugin failed: {error:#}");
+                    println!("Error loading traffic policy plugin: {error:#}");
+                    return Err(1);
+                }
+            },
+            None => None,
+        };
+        let manager = Arc::new(ServiceManager::new_with_traffic_policy(
+            config.clone(),
+            saved_config,
+            traffic_policy,
+        ));
         manager.mutate_state(|state| {
             state.runtime_starting = true;
             state.runtime_running = false;
@@ -1564,6 +1785,14 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
         println!("{}", style(format!("Error {:?}", e)).red());
         return 1;
     }
+    let mut args = args;
+    let traffic_policy_plugin = match take_traffic_policy_plugin_arg(&mut args) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Error {error}");
+            return 1;
+        }
+    };
     let (config, saved_config) = match crate::cli::parse_args_config_from(args) {
         Ok(rs) => match rs {
             Some(rs) => rs,
@@ -1575,7 +1804,19 @@ pub fn run_service_from_args(args: Vec<String>) -> i32 {
             return 1;
         }
     };
-    run_service(config, saved_config)
+    run_service_with_traffic_policy(config, saved_config, traffic_policy_plugin)
+}
+
+fn take_traffic_policy_plugin_arg(args: &mut Vec<String>) -> anyhow::Result<Option<PathBuf>> {
+    let Some(index) = args.iter().position(|arg| arg == "--traffic-policy-plugin") else {
+        return Ok(None);
+    };
+    if index + 1 >= args.len() {
+        anyhow::bail!("--traffic-policy-plugin requires a shared-library path");
+    }
+    let path = PathBuf::from(args.remove(index + 1));
+    args.remove(index);
+    Ok(Some(path))
 }
 
 pub(crate) fn run_service_with_shutdown(
@@ -1596,6 +1837,14 @@ pub(crate) fn run_service_with_shutdown(
 }
 
 pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
+    run_service_with_traffic_policy(config, saved_config, None)
+}
+
+fn run_service_with_traffic_policy(
+    config: Config,
+    saved_config: FileConfig,
+    traffic_policy_plugin: Option<PathBuf>,
+) -> i32 {
     let (_shutdown_sender, shutdown_receiver) = std::sync::mpsc::channel::<()>();
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1622,5 +1871,18 @@ pub fn run_service(config: Config, saved_config: FileConfig) -> i32 {
         });
     }
 
-    run_service_with_shutdown(config, saved_config, shutdown_receiver)
+    if let Err(e) = write_saved_config(&saved_config) {
+        log::warn!("write saved config at service start failed: {:?}", e);
+    }
+    let running_service = match RunningService::start_with_traffic_policy(
+        config,
+        saved_config,
+        traffic_policy_plugin,
+    ) {
+        Ok(running_service) => running_service,
+        Err(code) => return code,
+    };
+    let _ = shutdown_receiver.recv();
+    running_service.shutdown();
+    0
 }

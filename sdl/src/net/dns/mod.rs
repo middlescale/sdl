@@ -10,6 +10,7 @@ pub(crate) mod macos;
 ))]
 pub(crate) mod platform;
 pub(crate) mod query;
+pub(crate) mod response;
 pub(crate) mod tunnel;
 #[cfg(all(feature = "integrated_tun", target_os = "windows"))]
 pub(crate) mod windows;

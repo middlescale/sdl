@@ -56,6 +56,24 @@ pub(crate) fn build_dns_response_packet(
     Ok(buf)
 }
 
+pub(crate) fn build_dns_servfail_packet(
+    pending: &PendingDnsQuery,
+    query: &[u8],
+) -> io::Result<Vec<u8>> {
+    if query.len() < 12 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "dns query too short for SERVFAIL response",
+        ));
+    }
+    let mut response = query.to_vec();
+    // QR=1, preserve RD, and return SERVFAIL. The original question remains.
+    response[2] = 0x80 | (query[2] & 0x01);
+    response[3] = 0x02;
+    response[6..12].fill(0);
+    build_dns_response_packet(pending, &response)
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
@@ -65,7 +83,7 @@ mod tests {
 
     use crate::core::PendingDnsQuery;
 
-    use super::build_dns_response_packet;
+    use super::{build_dns_response_packet, build_dns_servfail_packet};
 
     #[test]
     fn builds_dns_response_packet_with_expected_addrs_and_ports() {
@@ -83,5 +101,21 @@ mod tests {
         assert_eq!(udp.source_port(), 53);
         assert_eq!(udp.destination_port(), pending.client_port);
         assert_eq!(udp.payload(), &payload);
+    }
+
+    #[test]
+    fn builds_servfail_that_preserves_question() {
+        let pending = PendingDnsQuery::new(
+            Ipv4Addr::new(10, 26, 0, 2),
+            Ipv4Addr::new(10, 26, 0, 53),
+            40444,
+        );
+        let query = [0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0];
+        let packet = build_dns_servfail_packet(&pending, &query).unwrap();
+        let ipv4 = IpV4Packet::new(packet.as_slice()).unwrap();
+        let udp = UdpPacket::new(pending.dns_server_ip, pending.client_ip, ipv4.payload()).unwrap();
+        assert_eq!(&udp.payload()[0..2], &query[0..2]);
+        assert_eq!(udp.payload()[2] & 0x80, 0x80);
+        assert_eq!(udp.payload()[3] & 0x0f, 2);
     }
 }

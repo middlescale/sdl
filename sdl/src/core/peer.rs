@@ -11,6 +11,7 @@ pub struct PeerTable {
     epoch: u16,
     devices: HashMap<Ipv4Addr, PeerInfo>,
     vip_by_identity: HashMap<PeerIdentity, Ipv4Addr>,
+    vip_by_device_id: HashMap<String, Ipv4Addr>,
 }
 
 impl PeerTable {
@@ -19,8 +20,9 @@ impl PeerTable {
             epoch,
             devices,
             vip_by_identity: HashMap::new(),
+            vip_by_device_id: HashMap::new(),
         };
-        table.rebuild_identity_index();
+        table.rebuild_indexes();
         table
     }
 
@@ -64,6 +66,10 @@ impl PeerTable {
         self.vip_by_identity.get(identity).copied()
     }
 
+    pub fn vip_for_device_id(&self, device_id: &str) -> Option<Ipv4Addr> {
+        self.vip_by_device_id.get(device_id).copied()
+    }
+
     pub fn replace_devices(
         &mut self,
         epoch: u16,
@@ -71,7 +77,7 @@ impl PeerTable {
     ) -> HashMap<Ipv4Addr, PeerInfo> {
         let previous = std::mem::replace(&mut self.devices, next_devices);
         self.epoch = epoch;
-        self.rebuild_identity_index();
+        self.rebuild_indexes();
         previous
     }
 
@@ -90,14 +96,21 @@ impl PeerTable {
     pub fn clear_devices(&mut self) {
         self.devices.clear();
         self.vip_by_identity.clear();
+        self.vip_by_device_id.clear();
     }
 
-    fn rebuild_identity_index(&mut self) {
+    fn rebuild_indexes(&mut self) {
         self.vip_by_identity.clear();
         self.vip_by_identity.extend(
             self.devices
                 .values()
                 .map(|peer| (peer.identity(), peer.virtual_ip)),
+        );
+        self.vip_by_device_id.clear();
+        self.vip_by_device_id.extend(
+            self.devices
+                .values()
+                .map(|peer| (peer.device_id.clone(), peer.virtual_ip)),
         );
     }
 }
@@ -234,5 +247,47 @@ impl From<PeerStatus> for u8 {
             PeerStatus::Online => 0,
             PeerStatus::Offline => 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::net::Ipv4Addr;
+
+    use super::{PeerInfo, PeerTable};
+    use crate::proto::message::ChannelMode;
+
+    fn test_peer(vip: Ipv4Addr, device_id: &str) -> PeerInfo {
+        PeerInfo::new(
+            vip,
+            device_id.to_string(),
+            0,
+            device_id.to_string(),
+            vec![vip.octets()[3]],
+            vec![],
+            ChannelMode::CHANNEL_MODE_AUTO,
+            false,
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn device_id_index_tracks_replacement_and_clear() {
+        let first_vip = Ipv4Addr::new(10, 26, 0, 4);
+        let second_vip = Ipv4Addr::new(10, 26, 0, 10);
+        let mut table = PeerTable::new(1, HashMap::from([(first_vip, test_peer(first_vip, "hk"))]));
+        assert_eq!(table.vip_for_device_id("hk"), Some(first_vip));
+
+        table.replace_devices(
+            2,
+            HashMap::from([(second_vip, test_peer(second_vip, "jp"))]),
+        );
+        assert_eq!(table.vip_for_device_id("hk"), None);
+        assert_eq!(table.vip_for_device_id("jp"), Some(second_vip));
+
+        table.clear_devices();
+        assert_eq!(table.vip_for_device_id("jp"), None);
     }
 }

@@ -10,7 +10,6 @@ use parking_lot::{Mutex, RwLock};
 use crate::control::ControlSession;
 #[cfg(feature = "integrated_tun")]
 use crate::core::context::TunSubsystem;
-use crate::core::ExitNodeRoute;
 use crate::core::PeerInfo;
 use crate::core::{
     context::{
@@ -19,6 +18,7 @@ use crate::core::{
     },
     Config, SdlContext, SdlContextConfig,
 };
+use crate::core::{ExitNodeRoute, ExitRoutePolicy};
 use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
@@ -269,6 +269,7 @@ impl Sdl {
                 },
                 dns: DnsSubsystem {
                     profile: Arc::new(RwLock::new(None::<DnsProfile>)),
+                    local_resolvers: Arc::new(RwLock::new(None)),
                     pending_queries: Arc::new(PendingRequestTable::new(PENDING_REQUEST_TTL_MS)),
                     #[cfg(all(
                         feature = "integrated_tun",
@@ -419,6 +420,20 @@ impl Sdl {
     }
     pub fn device_list(&self) -> Vec<PeerInfo> {
         self.context.peer_list()
+    }
+    /// Installs a process-local external traffic policy. The policy receives
+    /// only packets that arrived from the local TUN; exit-node transit traffic
+    /// is handled by the receiver path and is never fed back into this policy.
+    pub fn set_exit_route_policy(&self, policy: Arc<dyn ExitRoutePolicy>) {
+        self.context.exit_node.route.set_policy(policy);
+    }
+
+    pub fn reset_exit_route_policy(&self) {
+        self.context.exit_node.route.reset_policy_to_default();
+    }
+
+    pub fn set_local_dns_resolvers(&self, resolvers: Option<Vec<std::net::SocketAddr>>) {
+        self.context.set_local_dns_resolvers(resolvers);
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
         self.context.route_manager().best_route(ip)

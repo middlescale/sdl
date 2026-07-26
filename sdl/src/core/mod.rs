@@ -12,7 +12,10 @@ pub use context::{
     AuthRequestConfig, ExitNodeLocalState, PendingDnsQuery, RenameRequestOutcome, SdlContext,
     SdlContextConfig,
 };
-pub(crate) use exit_node_route::ExitNodeRoute;
+pub use exit_node_route::{
+    DnsRouteFlow, DnsRouteObservation, ExitNodeRoute, ExitRouteDecision, ExitRouteFlow,
+    ExitRoutePolicy,
+};
 pub use identity::PeerIdentity;
 pub use peer::{PeerInfo, PeerStatus, PeerTable};
 use std::net::{Ipv4Addr, SocketAddr};
