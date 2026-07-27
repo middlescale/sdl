@@ -391,7 +391,7 @@ pub fn parse_args_config_from(
     opts.optmulti("e", "", "stun服务器", "<stun-server>");
     opts.optopt("", "nic", "虚拟网卡名称", "<tun0>");
     opts.optopt("", "tun_name", "指定tun网卡名称", "<sdl-tun>");
-    opts.optopt("u", "", "自定义mtu(默认为1430)", "<mtu>");
+    opts.optopt("u", "", "自定义mtu(默认为1380)", "<mtu>");
     opts.optopt("", "ip", "指定虚拟ip", "<ip>");
     opts.optflag("", "relay", "仅使用服务器转发");
     opts.optopt("", "par", "任务并行度(必须为正整数)", "<parallel>");
@@ -449,7 +449,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("-d <id>", ("设备唯一标识符,不使用--ip参数时,服务端凭此参数分配虚拟ip,注意不能重复", "Device unique identifier, used by the server to allocate virtual IP when --ip parameter is not used, must be unique")),
         ("-s <server>", ("注册和中继服务器地址,当前使用https://host[:port]/control", "Registration and relay server address, use https://host[:port]/control")),
         ("-e <stun-server>", ("stun服务器,用于探测NAT类型,可使用多个地址,如-e stun.miwifi.com -e turn.cloudflare.com", "STUN server for detecting NAT type, can specify multiple addresses, e.g., -e stun.miwifi.com -e turn.cloudflare.com")),
-        ("-u <mtu>", ("自定义mtu(默认为1420)", "Customize MTU (default is 1420)")),
+        ("-u <mtu>", ("自定义mtu(默认为1380)", "Customize MTU (default is 1380)")),
         ("-f <conf_file>", ("读取配置文件中的配置", "Read configuration from file")),
         ("--ip <ip>", ("指定虚拟ip,指定的ip不能和其他设备重复,必须有效并且在服务端所属网段下,默认情况由服务端分配", "Specify virtual IP, must be unique and valid within server subnet, by default allocated by server")),
         ("--punch <punch>", ("取值ipv4/ipv6/ipv4-udp/ipv6-udp/all,ipv4表示仅使用ipv4打洞", "Values ipv4/ipv6/ipv4-udp/ipv6-udp/all, ipv4 for IPv4 hole punching only")),

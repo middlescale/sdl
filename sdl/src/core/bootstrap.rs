@@ -105,7 +105,7 @@ impl Sdl {
             device_id: config.device_id.clone(),
             device_pub_key,
             server_addr: config.server_address_str.clone(),
-            mtu: config.mtu.unwrap_or(1420),
+            mtu: config.mtu.unwrap_or(crate::protocol::DEFAULT_TUN_MTU),
             #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),

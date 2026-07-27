@@ -19,6 +19,18 @@ use std::{fmt, io};
 pub const HEAD_LEN: usize = 12;
 pub const BUFFER_SIZE: usize = 1024 * 64;
 
+/// The common underlay MTU used for the default tunnel packet budget.
+pub const DEFAULT_UNDERLAY_MTU: usize = 1500;
+/// IPv4 and UDP headers added around an SDL packet on a P2P UDP path.
+pub const IPV4_UDP_HEADER_LEN: usize = 20 + 8;
+/// Bytes added to an inner IP packet before it is sent through P2P UDP.
+/// Relay, QUIC, and HTTPS transports apply their MTU limits independently.
+pub const P2P_UDP_ENVELOPE_OVERHEAD: usize = IPV4_UDP_HEADER_LEN + HEAD_LEN + ENCRYPTION_RESERVED;
+/// Largest inner IP packet that avoids outer IPv4 fragmentation on a 1500-byte path.
+pub const MAX_SAFE_TUN_MTU: usize = DEFAULT_UNDERLAY_MTU - P2P_UDP_ENVELOPE_OVERHEAD;
+/// Conservative default that also fits common 1492-byte PPPoE paths.
+pub const DEFAULT_TUN_MTU: u32 = 1380;
+
 pub mod body;
 pub mod control_packet;
 pub mod error_packet;
@@ -26,6 +38,17 @@ pub mod extension;
 pub mod ip_turn_packet;
 pub mod other_turn_packet;
 pub mod service_packet;
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_TUN_MTU, MAX_SAFE_TUN_MTU, P2P_UDP_ENVELOPE_OVERHEAD};
+
+    #[test]
+    fn default_tun_mtu_fits_the_p2p_udp_packet_budget() {
+        assert!(DEFAULT_TUN_MTU as usize <= MAX_SAFE_TUN_MTU);
+        assert_eq!(DEFAULT_TUN_MTU as usize + P2P_UDP_ENVELOPE_OVERHEAD, 1480);
+    }
+}
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum Version {
