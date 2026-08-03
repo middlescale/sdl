@@ -28,7 +28,7 @@ stun-format = { version = "1.0.1", features = ["fmt", "rfc3489"] }
 openssl-sys = { git = "https://github.com/vnt-dev/rust-openssl", optional = true }
 libsm = { git = "https://github.com/vnt-dev/libsm", optional = true }
 
-mio = { version = "=0.8.11", features = ["os-poll", "net", "os-ext"] }
+mio = { version = "1.1", features = ["os-poll", "net", "os-ext"] }
 crossbeam-queue = "0.3.11"
 anyhow = "1.0.82"
 serde_json = "1.0"

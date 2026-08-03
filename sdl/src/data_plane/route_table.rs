@@ -242,6 +242,23 @@ impl RouteTable {
         self.direct_route_keys.write().clear();
     }
 
+    /// Drops only direct P2P paths while retaining relay paths as an immediate
+    /// fallback after the local underlay has changed.
+    pub fn clear_direct_routes(&self) -> Vec<Ipv4Addr> {
+        let mut route_table = self.route_table.write();
+        let mut affected_peers = Vec::new();
+        route_table.retain(|vip, routes| {
+            let before = routes.len();
+            routes.retain(|(route, _)| !route.is_p2p());
+            if routes.len() != before {
+                affected_peers.push(*vip);
+            }
+            !routes.is_empty()
+        });
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        affected_peers
+    }
+
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         let mut route_table = self.route_table.write();
         route_table.retain(|vip, _| valid_peers.contains(vip));
@@ -375,5 +392,24 @@ mod tests {
         assert!(table.get_first_route(&vip).is_none());
         assert!(!table.has_direct_route_key(&direct));
         assert!(table.route_table().is_empty());
+    }
+
+    #[test]
+    fn clear_direct_routes_preserves_relay_fallback() {
+        let table = RouteTable::new(UseChannelType::Auto, true);
+        let vip = Ipv4Addr::new(10, 0, 0, 8);
+        let direct = route_key(1008);
+        let relay = RouteKey::new(
+            ConnectProtocol::TCP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 2008)),
+        );
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+        table.add_route(vip, Route::from_default_rt(relay, 2));
+
+        assert_eq!(table.clear_direct_routes(), vec![vip]);
+
+        assert!(table.get_one_p2p_route(&vip).is_none());
+        assert_eq!(table.get_first_route(&vip).unwrap().route_key(), relay);
+        assert!(!table.has_direct_route_key(&direct));
     }
 }

@@ -207,6 +207,15 @@ impl PeerProbeTracker {
         }
     }
 
+    /// Pending probes and their loss samples describe the old underlay. They
+    /// must not validate routes after a suspend/resume transition.
+    pub fn clear(&self) {
+        self.pending_pings.lock().clear();
+        self.pending_punches.lock().clear();
+        self.ping_probe_stats.lock().clear();
+        self.last_cleanup_at.store(Instant::now());
+    }
+
     fn next_probe_epoch(&self) -> u16 {
         let current = self.next_epoch.load();
         let next = if current == u16::MAX { 1 } else { current + 1 };

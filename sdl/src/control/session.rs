@@ -644,6 +644,24 @@ impl ControlSession {
         self.spawn_status_report_with_nat_ready(reason);
     }
 
+    /// Re-advertises connectivity after a local suspend/resume transition.
+    /// Unlike the normal status path, this deliberately discards and refreshes
+    /// a previously known NAT mapping before control sees the report.
+    pub fn refresh_nat_and_report_punch_status(&self, reason: PunchTriggerReason) {
+        let control_session = self.clone();
+        thread::Builder::new()
+            .name("underlayRecovery".into())
+            .spawn(move || {
+                if let Err(err) = control_session.nat_test.refresh_after_underlay_change() {
+                    log::warn!("underlay NAT refresh failed: {:?}", err);
+                }
+                if let Err(err) = control_session.send_status_report_packet(reason) {
+                    log::warn!("underlay status report failed: {:?}", err);
+                }
+            })
+            .expect("underlay recovery");
+    }
+
     fn spawn_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
         let control_session = self.clone();
         thread::Builder::new()

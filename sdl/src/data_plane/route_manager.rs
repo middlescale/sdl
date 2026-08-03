@@ -261,6 +261,16 @@ impl RouteManager {
         self.route_table.clear_all();
     }
 
+    /// Invalidates P2P routes after a suspend/resume or local underlay change.
+    /// Relay paths remain available while control coordinates fresh punching.
+    pub fn clear_direct_paths(&self) -> usize {
+        let affected_peers = self.route_table.clear_direct_routes();
+        for peer_ip in &affected_peers {
+            self.notify_direct_route_update(*peer_ip);
+        }
+        affected_peers.len()
+    }
+
     pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
         let direct_before = self.direct_path_count(vip);
         self.remove_path(vip, route_key);

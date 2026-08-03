@@ -322,6 +322,30 @@ impl NatTest {
 
         Ok(guard.clone())
     }
+
+    /// Discards endpoints learned on the previous underlay and forces a fresh
+    /// STUN probe. A suspend/resume can preserve this process while invalidating
+    /// every NAT mapping it previously advertised.
+    pub fn refresh_after_underlay_change(&self) -> anyhow::Result<NatInfo> {
+        {
+            let mut info = self.info.lock();
+            info.public_udp_endpoints.clear();
+            info.public_ips.clear();
+            info.public_ports.clear();
+            info.public_port_range = 0;
+        }
+        let local_ipv4 = if self.update_local_ipv4 {
+            local_ipv4()
+        } else {
+            None
+        };
+        let local_ipv6 = local_ipv6();
+        let result = self.re_test(local_ipv4, local_ipv6, &self.default_interface);
+        self.time.store(Instant::now());
+        #[cfg(feature = "upnp")]
+        self.reset_upnp();
+        result
+    }
     #[cfg(feature = "upnp")]
     pub fn reset_upnp(&self) {
         let local_ipv4 = self.info.lock().local_ipv4.clone();

@@ -4,10 +4,13 @@ use mio::{Events, Interest, Poll, Token, Waker};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use parking_lot::{Mutex, RwLock};
 
 use crate::core::Config;
 use crate::data_plane::route::RouteKey;
@@ -39,6 +42,9 @@ static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT: AtomicU64 = AtomicU64::new(
 static PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER: OnceLock<
     crate::util::limit::ConcurrentRateLimiter,
 > = OnceLock::new();
+static UDP_RECV_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
+static UDP_RECV_ERROR_LOG_LIMITER: OnceLock<crate::util::limit::ConcurrentRateLimiter> =
+    OnceLock::new();
 
 fn log_sampled_udp_ingress_drop(
     counter: &AtomicU64,
@@ -171,8 +177,20 @@ fn should_accept_udp_ingress_frame(buf: &[u8]) -> bool {
 
 #[derive(Clone)]
 pub struct UdpChannel {
-    driver: UdpSocketDriver,
+    state: Arc<UdpChannelState>,
     stats: DataPlaneStats,
+}
+
+struct UdpChannelState {
+    driver: RwLock<Option<UdpSocketDriver>>,
+    bind_interface: crate::transport::socket::LocalInterface,
+    command_sender: Mutex<Option<mpsc::Sender<UdpRuntimeCommand>>>,
+    command_waker: Mutex<Option<Arc<Waker>>>,
+}
+
+enum UdpRuntimeCommand {
+    Rebind(mpsc::Sender<anyhow::Result<u16>>),
+    Stop,
 }
 
 #[derive(Clone)]
@@ -189,15 +207,34 @@ impl UdpChannel {
             .and_then(|ports| ports.first().copied())
             .unwrap_or(0);
         let driver = UdpSocketDriver::bind(port, &config.local_interface)?;
-        Ok(Self { driver, stats })
+        Ok(Self {
+            state: Arc::new(UdpChannelState {
+                driver: RwLock::new(Some(driver)),
+                bind_interface: config.local_interface.clone(),
+                command_sender: Mutex::new(None),
+                command_waker: Mutex::new(None),
+            }),
+            stats,
+        })
     }
 
     pub fn local_udp_port(&self) -> io::Result<u16> {
-        Ok(self.driver.local_addr()?.port())
+        let driver = self.state.driver.read();
+        Ok(driver
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "main UDP socket unavailable")
+            })?
+            .local_addr()?
+            .port())
     }
 
     pub fn supports_ipv6(&self) -> bool {
-        self.driver.supports_ipv6()
+        self.state
+            .driver
+            .read()
+            .as_ref()
+            .is_some_and(UdpSocketDriver::supports_ipv6)
     }
 
     pub fn up_traffic_total(&self) -> u64 {
@@ -229,7 +266,13 @@ impl UdpChannel {
     }
 
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        self.driver.send_to(buf, addr)?;
+        let driver = self.state.driver.read();
+        driver
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "main UDP socket unavailable")
+            })?
+            .send_to(buf, addr)?;
         self.record_up_traffic(buf.len());
         self.stats.record_transport_up(addr.ip(), buf.len());
         Ok(())
@@ -255,18 +298,52 @@ impl UdpChannel {
         H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     {
-        let channel = self.clone();
-        self.driver.start_named(
-            stop_manager,
-            "mainUdp",
-            recv_handler,
-            known_source,
-            should_accept_udp_ingress_frame,
-            move |len, addr| {
-                channel.record_down_traffic(len);
-                channel.stats.record_transport_down(addr.ip(), len);
-            },
-        )
+        self.start_main_listener(stop_manager, recv_handler, known_source)
+    }
+
+    /// Rebinds the main data-plane UDP socket while preserving its current
+    /// port. This is used after an underlay change invalidates the old socket's
+    /// interface binding or NAT mapping.
+    pub fn rebind(&self) -> anyhow::Result<u16> {
+        let (sender, waker) = {
+            let sender = self
+                .state
+                .command_sender
+                .lock()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("main UDP listener is not running"))?;
+            let waker = self
+                .state
+                .command_waker
+                .lock()
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("main UDP listener is not running"))?;
+            (sender, waker)
+        };
+        let (reply_sender, reply_receiver) = mpsc::channel();
+        sender
+            .send(UdpRuntimeCommand::Rebind(reply_sender))
+            .map_err(|_| anyhow::anyhow!("main UDP listener is not running"))?;
+        waker.wake()?;
+        reply_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| anyhow::anyhow!("main UDP rebind timed out"))?
+    }
+
+    fn replace_driver(&self) -> anyhow::Result<u16> {
+        let port = {
+            let mut driver = self.state.driver.write();
+            let port = driver
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("main UDP socket unavailable"))?
+                .local_addr()?
+                .port();
+            *driver = None;
+            port
+        };
+        let driver = UdpSocketDriver::bind(port, &self.state.bind_interface)?;
+        *self.state.driver.write() = Some(driver);
+        Ok(port)
     }
 
     fn record_up_traffic(&self, len: usize) {
@@ -275,6 +352,153 @@ impl UdpChannel {
 
     fn record_down_traffic(&self, len: usize) {
         self.stats.record_down(0, len);
+    }
+
+    fn start_main_listener<H, K>(
+        &self,
+        stop_manager: StopManager,
+        recv_handler: H,
+        known_source: K,
+    ) -> anyhow::Result<()>
+    where
+        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
+    {
+        let poll = Poll::new()?;
+        let waker = Arc::new(Waker::new(poll.registry(), NOTIFY)?);
+        let (command_sender, command_receiver) = mpsc::channel();
+        {
+            let mut sender = self.state.command_sender.lock();
+            if sender.is_some() {
+                anyhow::bail!("main UDP listener already running");
+            }
+            *sender = Some(command_sender.clone());
+        }
+        *self.state.command_waker.lock() = Some(waker.clone());
+        let wake = waker.clone();
+        let worker = stop_manager.add_listener("mainUdp".into(), move || {
+            let _ = command_sender.send(UdpRuntimeCommand::Stop);
+            if let Err(err) = wake.wake() {
+                log::error!("wake main UDP listener failed: {:?}", err);
+            }
+        })?;
+        let channel = self.clone();
+        thread::Builder::new()
+            .name("mainUdp".into())
+            .spawn(move || {
+                if let Err(err) = main_listener_loop(
+                    channel.clone(),
+                    poll,
+                    command_receiver,
+                    recv_handler,
+                    known_source,
+                ) {
+                    log::error!("main UDP listener failed: {:?}", err);
+                }
+                channel.state.command_sender.lock().take();
+                channel.state.command_waker.lock().take();
+                drop(waker);
+                // The main UDP socket is the data-plane anchor. Its listener cannot
+                // exit independently, so stop the runtime rather than leave it alive
+                // without a functioning data plane.
+                worker.stop_all();
+            })?;
+        Ok(())
+    }
+}
+
+fn main_listener_socket(channel: &UdpChannel) -> io::Result<MioUdpSocket> {
+    let driver = channel.state.driver.read();
+    let socket = driver
+        .as_ref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "main UDP socket unavailable"))?
+        .socket
+        .try_clone()?;
+    socket.set_nonblocking(true)?;
+    Ok(MioUdpSocket::from_std(socket))
+}
+
+fn main_listener_loop<H, K>(
+    channel: UdpChannel,
+    mut poll: Poll,
+    command_receiver: mpsc::Receiver<UdpRuntimeCommand>,
+    recv_handler: H,
+    known_source: K,
+) -> io::Result<()>
+where
+    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
+{
+    let mut udp = Some(main_listener_socket(&channel)?);
+    poll.registry().register(
+        udp.as_mut().expect("main UDP socket"),
+        Token(1),
+        Interest::READABLE,
+    )?;
+    let mut events = Events::with_capacity(2);
+    let mut buf = [0; BUFFER_SIZE];
+    let mut extend = [0; BUFFER_SIZE];
+    let mut unknown_limiter = UnknownUdpIngressLimiter::new(
+        UNKNOWN_UDP_GLOBAL_BURST,
+        UNKNOWN_UDP_GLOBAL_REFILL_PER_SEC,
+        UNKNOWN_UDP_PER_SOURCE_BURST,
+        UNKNOWN_UDP_PER_SOURCE_REFILL_PER_SEC,
+    );
+    loop {
+        if let Err(err) = poll.poll(&mut events, None) {
+            crate::ignore_io_interrupted(err)?;
+            continue;
+        }
+        for event in events.iter() {
+            match event.token() {
+                NOTIFY => {
+                    while let Ok(command) = command_receiver.try_recv() {
+                        match command {
+                            UdpRuntimeCommand::Stop => return Ok(()),
+                            UdpRuntimeCommand::Rebind(reply) => {
+                                if let Some(mut old_socket) = udp.take() {
+                                    poll.registry().deregister(&mut old_socket)?;
+                                    drop(old_socket);
+                                }
+                                let result = channel.replace_driver().and_then(|port| {
+                                    let mut socket = main_listener_socket(&channel)?;
+                                    poll.registry().register(
+                                        &mut socket,
+                                        Token(1),
+                                        Interest::READABLE,
+                                    )?;
+                                    udp = Some(socket);
+                                    Ok(port)
+                                });
+                                if let Err(err) = &result {
+                                    log::warn!("main UDP rebind failed: {:?}", err);
+                                }
+                                let _ = reply.send(result);
+                            }
+                        }
+                    }
+                }
+                Token(1) => {
+                    let Some(udp) = udp.as_mut() else {
+                        continue;
+                    };
+                    drain_udp_datagrams(
+                        udp,
+                        &mut buf,
+                        &mut extend,
+                        &recv_handler,
+                        &known_source,
+                        should_accept_udp_ingress_frame,
+                        |len, addr| {
+                            channel.record_down_traffic(len);
+                            channel.stats.record_transport_down(addr.ip(), len);
+                        },
+                        &mut unknown_limiter,
+                    )?;
+                }
+                token => log::error!("invalid UDP token {:?}", token),
+            }
+        }
     }
 }
 
@@ -451,85 +675,125 @@ where
         for event in events.iter() {
             match event.token() {
                 NOTIFY => return Ok(()),
-                Token(1) => {}
+                Token(1) => drain_udp_datagrams(
+                    &mut udp,
+                    &mut buf,
+                    &mut extend,
+                    &recv_handler,
+                    &known_source,
+                    &accept_frame,
+                    &down_traffic_hook,
+                    &mut unknown_limiter,
+                )?,
                 token => {
                     log::error!("invalid udp token {:?}", token);
                     continue;
                 }
             }
-            loop {
-                match udp.recv_from(&mut buf) {
-                    Ok((len, addr)) => {
-                        let addr = normalize_recv_addr(addr);
-                        if !known_source(addr) {
-                            match unknown_limiter.check(addr.ip()) {
-                                UnknownUdpLimitDecision::Allow => {}
-                                UnknownUdpLimitDecision::GlobalLimited => {
-                                    log_sampled_udp_ingress_drop(
-                                        &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
-                                        &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
-                                        |count| {
-                                            format!(
-                                                "dropping unknown udp ingress by global rate limit (sample addr={}, count={})",
-                                                addr, count
-                                            )
-                                        },
-                                    );
-                                    continue;
-                                }
-                                UnknownUdpLimitDecision::PerSourceLimited => {
-                                    log_sampled_udp_ingress_drop(
-                                        &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
-                                        &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
-                                        |count| {
-                                            format!(
-                                                "dropping unknown udp ingress by per-source rate limit (sample addr={}, count={})",
-                                                addr, count
-                                            )
-                                        },
-                                    );
-                                    continue;
-                                }
-                            }
-                        }
-                        let buf = &mut buf[..len];
-                        if !accept_frame(buf) {
-                            if len < HEAD_LEN {
-                                log_sampled_udp_ingress_drop(
-                                    &SHORT_UDP_INGRESS_DROP_COUNT,
-                                    &SHORT_UDP_INGRESS_DROP_LOG_LIMITER,
-                                    |count| {
-                                        format!(
-                                            "dropping too-short udp ingress frames (sample addr={}, len={}, count={})",
-                                            addr, len, count
-                                        )
-                                    },
-                                );
-                            } else {
-                                let head = &buf[..HEAD_LEN];
-                                log_sampled_udp_ingress_drop(
-                                    &INVALID_UDP_INGRESS_DROP_COUNT,
-                                    &INVALID_UDP_INGRESS_DROP_LOG_LIMITER,
-                                    |count| {
-                                        format!(
-                                            "dropping invalid udp ingress frames (sample addr={}, head={:?}, count={})",
-                                            addr, head, count
-                                        )
-                                    },
-                                );
-                            }
+        }
+    }
+}
+
+fn drain_udp_datagrams<H, K, A, D>(
+    udp: &mut MioUdpSocket,
+    buf: &mut [u8; BUFFER_SIZE],
+    extend: &mut [u8; BUFFER_SIZE],
+    recv_handler: &H,
+    known_source: &K,
+    accept_frame: A,
+    down_traffic_hook: D,
+    unknown_limiter: &mut UnknownUdpIngressLimiter,
+) -> io::Result<()>
+where
+    H: Fn(&mut [u8], &mut [u8], RouteKey),
+    K: Fn(SocketAddr) -> bool,
+    A: Fn(&[u8]) -> bool,
+    D: Fn(usize, SocketAddr),
+{
+    loop {
+        match udp.recv_from(buf) {
+            Ok((len, addr)) => {
+                let addr = normalize_recv_addr(addr);
+                if !known_source(addr) {
+                    match unknown_limiter.check(addr.ip()) {
+                        UnknownUdpLimitDecision::Allow => {}
+                        UnknownUdpLimitDecision::GlobalLimited => {
+                            log_sampled_udp_ingress_drop(
+                                &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
+                                &GLOBAL_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
+                                |count| {
+                                    format!(
+                                        "dropping unknown udp ingress by global rate limit (sample addr={}, count={})",
+                                        addr, count
+                                    )
+                                },
+                            );
                             continue;
                         }
-                        down_traffic_hook(len, addr);
-                        recv_handler(buf, &mut extend, RouteKey::new(ConnectProtocol::UDP, addr))
-                    }
-                    Err(e) => {
-                        if e.kind() == io::ErrorKind::WouldBlock {
-                            break;
+                        UnknownUdpLimitDecision::PerSourceLimited => {
+                            log_sampled_udp_ingress_drop(
+                                &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_COUNT,
+                                &PER_SOURCE_UNKNOWN_UDP_RATE_LIMIT_DROP_LOG_LIMITER,
+                                |count| {
+                                    format!(
+                                        "dropping unknown udp ingress by per-source rate limit (sample addr={}, count={})",
+                                        addr, count
+                                    )
+                                },
+                            );
+                            continue;
                         }
-                        log::error!("main_udp_listen={:?}", e);
                     }
                 }
+                let packet = &mut buf[..len];
+                if !accept_frame(packet) {
+                    if len < HEAD_LEN {
+                        log_sampled_udp_ingress_drop(
+                            &SHORT_UDP_INGRESS_DROP_COUNT,
+                            &SHORT_UDP_INGRESS_DROP_LOG_LIMITER,
+                            |count| {
+                                format!(
+                                    "dropping too-short udp ingress frames (sample addr={}, len={}, count={})",
+                                    addr, len, count
+                                )
+                            },
+                        );
+                    } else {
+                        let head = &packet[..HEAD_LEN];
+                        log_sampled_udp_ingress_drop(
+                            &INVALID_UDP_INGRESS_DROP_COUNT,
+                            &INVALID_UDP_INGRESS_DROP_LOG_LIMITER,
+                            |count| {
+                                format!(
+                                    "dropping invalid udp ingress frames (sample addr={}, head={:?}, count={})",
+                                    addr, head, count
+                                )
+                            },
+                        );
+                    }
+                    continue;
+                }
+                down_traffic_hook(len, addr);
+                recv_handler(packet, extend, RouteKey::new(ConnectProtocol::UDP, addr));
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(err) => {
+                let count = UDP_RECV_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if UDP_RECV_ERROR_LOG_LIMITER
+                    .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
+                    .try_acquire()
+                {
+                    let sampled = UDP_RECV_ERROR_COUNT.swap(0, Ordering::Relaxed);
+                    log::warn!(
+                        "UDP receive failed; pausing this drain cycle (error={:?}, count={})",
+                        err,
+                        sampled.max(count)
+                    );
+                }
+                // Do not let a persistent socket error spin this listener or stop the
+                // whole runtime. The next readiness notification retries the receive.
+                thread::sleep(Duration::from_millis(10));
+                return Ok(());
             }
         }
     }
@@ -566,22 +830,29 @@ pub(crate) fn normalize_recv_addr(addr: SocketAddr) -> SocketAddr {
 mod tests {
     use super::{
         looks_like_sdl_udp_packet, normalize_recv_addr, normalize_send_addr,
-        should_accept_udp_ingress_frame, UdpChannel, UdpSocketDriver, UnknownUdpIngressLimiter,
-        UnknownUdpLimitDecision,
+        should_accept_udp_ingress_frame, UdpChannel, UdpChannelState, UdpSocketDriver,
+        UnknownUdpIngressLimiter, UnknownUdpLimitDecision,
     };
     use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::util::StopManager;
+    use parking_lot::{Mutex, RwLock};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
     use std::sync::Arc;
     use std::time::Duration;
 
     fn test_channel(socket: UdpSocket, dual_stack: bool, enable_traffic: bool) -> UdpChannel {
         UdpChannel {
-            driver: UdpSocketDriver {
-                socket: Arc::new(socket),
-                dual_stack,
-            },
+            state: Arc::new(UdpChannelState {
+                driver: RwLock::new(Some(UdpSocketDriver {
+                    socket: Arc::new(socket),
+                    dual_stack,
+                })),
+                bind_interface: Default::default(),
+                command_sender: Mutex::new(None),
+                command_waker: Mutex::new(None),
+            }),
             stats: DataPlaneStats::new(enable_traffic),
         }
     }
@@ -591,7 +862,10 @@ mod tests {
         let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000));
 
-        let normalized = normalize_send_addr(channel.driver.dual_stack, addr);
+        let normalized = normalize_send_addr(
+            channel.state.driver.read().as_ref().unwrap().dual_stack,
+            addr,
+        );
 
         assert_eq!(
             normalized,
@@ -638,7 +912,7 @@ mod tests {
         let mut buf = [0_u8; 64];
         let (len, from) = receiver.recv_from(&mut buf).unwrap();
         assert_eq!(&buf[..len], payload);
-        assert_eq!(from, sender.driver.socket.local_addr().unwrap());
+        assert_eq!(from.port(), sender.local_udp_port().unwrap());
         assert_eq!(sender.up_traffic_total(), payload.len() as u64);
         assert_eq!(
             sender.up_traffic_all(),
@@ -647,6 +921,22 @@ mod tests {
                 std::collections::HashMap::from([(0_usize, payload.len() as u64)]),
             ))
         );
+    }
+
+    #[test]
+    fn main_listener_rebind_reuses_the_existing_port() {
+        let channel = test_channel(UdpSocket::bind("0.0.0.0:0").unwrap(), false, false);
+        let port = channel.local_udp_port().unwrap();
+        let stop_manager = StopManager::new(|| {});
+        channel
+            .start(stop_manager.clone(), |_, _, _| {}, |_| true)
+            .unwrap();
+
+        assert_eq!(channel.rebind().unwrap(), port);
+        assert_eq!(channel.local_udp_port().unwrap(), port);
+
+        stop_manager.stop();
+        assert!(stop_manager.wait_timeout(Duration::from_secs(1)));
     }
 
     #[test]

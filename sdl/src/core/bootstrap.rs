@@ -339,6 +339,34 @@ impl Sdl {
                 move |addr| context.is_known_udp_source(addr)
             },
         )?;
+        {
+            let route_manager = route_manager.clone();
+            let peer_probe_tracker = peer_probe_tracker.clone();
+            let control_session = control_session.clone();
+            let gateway_sessions = gateway_sessions.clone();
+            let udp_channel = udp_channel.clone();
+            crate::net::underlay_monitor::start_underlay_monitor(
+                stop_manager.clone(),
+                move || {
+                    let removed = route_manager.clear_direct_paths();
+                    peer_probe_tracker.clear();
+                    match udp_channel.rebind() {
+                        Ok(port) => log::info!("rebound main UDP socket on port {}", port),
+                        Err(err) => {
+                            log::warn!("main UDP rebind after underlay change failed: {:?}", err)
+                        }
+                    }
+                    gateway_sessions.rebuild_udp_sessions_after_underlay_change();
+                    log::info!(
+                        "underlay recovery invalidated {} direct P2P routes; refreshing NAT",
+                        removed
+                    );
+                    control_session.refresh_nat_and_report_punch_status(
+                        crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery,
+                    );
+                },
+            )?;
+        }
         // 打洞逻辑
         let punch = Punch::new(
             udp_channel.clone(),

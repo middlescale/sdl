@@ -1035,6 +1035,23 @@ impl GatewaySessions {
         }
     }
 
+    /// Recreates UDP gateway sockets after the local underlay changed. Stream
+    /// transports keep their self-healing connections and are not rebuilt.
+    pub fn rebuild_udp_sessions_after_underlay_change(&self) {
+        self.udp_rebuild_backoff.lock().clear();
+        let endpoints = self
+            .sessions
+            .lock()
+            .values()
+            .filter(|session| session.is_udp())
+            .map(|session| session.endpoint)
+            .collect::<Vec<_>>();
+        for endpoint in endpoints {
+            self.rebuild_udp_session(endpoint);
+        }
+        self.trigger_connect_now();
+    }
+
     fn rebuild_udp_session(&self, endpoint: SocketAddr) {
         let old = {
             let mut sessions = self.sessions.lock();
@@ -1047,10 +1064,7 @@ impl GatewaySessions {
             if !self.try_begin_udp_rebuild(endpoint) {
                 return;
             }
-            log::warn!(
-                "rebuilding UDP gateway session after transport failure or unanswered handshakes endpoint={}",
-                endpoint
-            );
+            log::warn!("rebuilding UDP gateway session endpoint={}", endpoint);
             sessions
                 .remove(&endpoint)
                 .expect("gateway session disappeared")
