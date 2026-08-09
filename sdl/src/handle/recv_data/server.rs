@@ -771,6 +771,8 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
                 log::info!("注册成功：{:?}", register_info);
                 let _device_list_update_guard = self.device_list_update_lock.lock();
+                let recovering_from_auth_pending =
+                    self.context.reset_peer_epoch_for_auth_pending_recovery();
                 let Some(device_list_update) = self.prepare_device_list_update(
                     response.device_info_list.clone(),
                     response.epoch as _,
@@ -869,6 +871,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         self.context.force_apply_dns_profile(&self.callback);
                     }
                     self.set_device_info_list(device_list_update);
+                    if recovering_from_auth_pending {
+                        self.context.finish_auth_pending_recovery();
+                    }
                     if vip_changed {
                         // apply_gateway_grants() may have kicked the gateway session while
                         // current_device still held the old/unspecified VIP; trigger again
@@ -920,6 +925,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let response = DeviceList::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PushDeviceList {:?}", e)))?;
                 let _device_list_update_guard = self.device_list_update_lock.lock();
+                // Keep a recovered push from being rejected by the epoch
+                // accumulated while authorization was pending.  Do not clear
+                // the flag here: only RegistrationResponse clears CLI/runtime
+                // auth-pending state after its authoritative snapshot commits.
+                self.context.reset_peer_epoch_for_auth_pending_recovery();
                 let device_list_update =
                     self.prepare_device_list_update(response.device_info_list, response.epoch as _);
                 self.apply_gateway_grants(

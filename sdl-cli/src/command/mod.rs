@@ -1,5 +1,6 @@
 use sdl::core::Sdl;
 use sdl::data_plane::gateway_session::GatewaySessionSummary;
+use sdl::data_plane::route::Route;
 use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
 use sdl::transport::connect_protocol::ConnectProtocol;
@@ -245,32 +246,14 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
                     "".to_string(),
                 )
             };
-        let (nat_traversal_type, rt) = if let Some(route) = sdl.route(&peer_virtual_ip) {
-            let next_hop = sdl.route_key(&route.route_key());
-            let nat_traversal_type = if route.is_p2p() {
-                if route.is_udp() {
-                    "udp-p2p".to_string()
-                } else {
-                    format!("{}-p2p", route.protocol_name())
-                }
-            } else if let Some(next_hop) = next_hop {
-                if info.is_gateway_vip(&next_hop) {
-                    "gateway-relay".to_string()
-                } else {
-                    "client-relay".to_string()
-                }
-            } else {
-                "gateway-relay".to_string()
-            };
-            let rt = if route.rt < 0 {
-                "".to_string()
-            } else {
-                route.rt.to_string()
-            };
-            (nat_traversal_type, rt)
-        } else {
-            ("gateway-relay".to_string(), "".to_string())
-        };
+        let route = sdl.route(&peer_virtual_ip);
+        let peer_active = sdl.is_peer_active(&peer_virtual_ip);
+        let next_hop_is_gateway = route
+            .as_ref()
+            .and_then(|route| sdl.route_key(&route.route_key()))
+            .is_some_and(|next_hop| info.is_gateway_vip(&next_hop));
+        let last_path = route_path_label(route.as_ref(), next_hop_is_gateway).unwrap_or_default();
+        let (nat_traversal_type, rt) = device_path_label(route, next_hop_is_gateway, peer_active);
         let status = format!("{:?}", peer.status());
         let item = DeviceItem {
             name,
@@ -280,6 +263,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
             local_ip,
             ipv6,
             nat_traversal_type,
+            last_path,
             rt,
             up_rate: up_rates.get(&peer_virtual_ip).copied().unwrap_or_default(),
             down_rate: down_rates
@@ -299,6 +283,43 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         list.push(item);
     }
     list
+}
+
+fn device_path_label(
+    route: Option<Route>,
+    next_hop_is_gateway: bool,
+    peer_active: bool,
+) -> (String, String) {
+    if !peer_active {
+        return ("idle".to_string(), String::new());
+    }
+    let Some(route) = route else {
+        // Gateway relay remains an on-demand fallback. Without a peer-specific
+        // route, it becomes active only after the first payload uses that path.
+        return ("gateway-relay".to_string(), String::new());
+    };
+    let path = route_path_label(Some(&route), next_hop_is_gateway)
+        .expect("a supplied route always has a path label");
+    let rt = (route.rt >= 0)
+        .then(|| route.rt.to_string())
+        .unwrap_or_default();
+    (path, rt)
+}
+
+fn route_path_label(route: Option<&Route>, next_hop_is_gateway: bool) -> Option<String> {
+    route.map(|route| {
+        if route.is_p2p() {
+            if route.is_udp() {
+                "udp-p2p".to_string()
+            } else {
+                format!("{}-p2p", route.protocol_name())
+            }
+        } else if next_hop_is_gateway {
+            "gateway-relay".to_string()
+        } else {
+            "client-relay".to_string()
+        }
+    })
 }
 
 pub fn command_info(sdl: &Sdl) -> Info {
@@ -645,10 +666,13 @@ pub fn command_traffic(sdl: &Sdl) -> TrafficSummary {
 #[cfg(test)]
 mod tests {
     use super::{
-        control_route_metric_rt, display_destination, route_name, RouteItem, CONTROL_DESTINATION,
+        control_route_metric_rt, device_path_label, display_destination, route_name,
+        route_path_label, RouteItem, CONTROL_DESTINATION,
     };
+    use sdl::data_plane::route::Route;
+    use sdl::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashMap;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     #[test]
     fn display_destination_relabels_control_vip() {
@@ -710,5 +734,65 @@ mod tests {
             ),
             "aliyun-hk"
         );
+    }
+
+    #[test]
+    fn device_path_label_marks_missing_peer_route_idle() {
+        assert_eq!(
+            device_path_label(None, false, false),
+            ("idle".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn device_path_label_reports_active_route_less_peer_as_gateway_relay() {
+        assert_eq!(
+            device_path_label(None, false, true),
+            ("gateway-relay".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn device_path_label_describes_known_routes() {
+        let p2p = Route::new(
+            ConnectProtocol::UDP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000)),
+            1,
+            12,
+        );
+        assert_eq!(
+            device_path_label(Some(p2p), false, true),
+            ("udp-p2p".to_string(), "12".to_string())
+        );
+
+        let relay = Route::new(
+            ConnectProtocol::UDP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3001)),
+            2,
+            -1,
+        );
+        assert_eq!(
+            device_path_label(Some(relay), true, true),
+            ("gateway-relay".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn last_path_label_retains_route_when_peer_is_idle() {
+        let p2p = Route::new(
+            ConnectProtocol::UDP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3002)),
+            1,
+            12,
+        );
+        assert_eq!(
+            device_path_label(Some(p2p), false, false),
+            ("idle".to_string(), String::new())
+        );
+        assert_eq!(
+            route_path_label(Some(&p2p), false),
+            Some("udp-p2p".to_string())
+        );
+        assert_eq!(route_path_label(None, false), None);
     }
 }

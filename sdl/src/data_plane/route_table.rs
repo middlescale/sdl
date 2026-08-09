@@ -1,7 +1,7 @@
 use fnv::{FnvHashMap, FnvHashSet};
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::RwLock;
@@ -11,18 +11,43 @@ use crate::data_plane::use_channel_type::UseChannelType;
 
 type RouteLiveness = AtomicCell<Instant>;
 type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
+type PeerActivityMap = FnvHashMap<Ipv4Addr, PeerActivity>;
+
+// Payloads can be much more frequent than the idle window needs.  Updating at
+// this cadence keeps a busy peer active without serialising every packet on a
+// map write lock.
+const PEER_ACTIVITY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub struct RouteTable {
     pub(crate) route_table: RwLock<RouteMap>,
+    peer_activity: RwLock<PeerActivityMap>,
     direct_route_keys: RwLock<FnvHashSet<RouteKey>>,
     pub(crate) latency_first: bool,
     pub(crate) use_channel_type: AtomicCell<UseChannelType>,
+}
+
+struct PeerActivity {
+    last_payload: AtomicCell<Instant>,
+    direct_recovery_requested: AtomicCell<bool>,
+}
+
+impl PeerActivity {
+    fn new(now: Instant) -> Self {
+        Self {
+            last_payload: AtomicCell::new(now),
+            direct_recovery_requested: AtomicCell::new(false),
+        }
+    }
 }
 
 impl RouteTable {
     pub(crate) fn new(use_channel_type: UseChannelType, latency_first: bool) -> Self {
         Self {
             route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
+            peer_activity: RwLock::new(FnvHashMap::with_capacity_and_hasher(
+                64,
+                Default::default(),
+            )),
             direct_route_keys: RwLock::new(FnvHashSet::with_capacity_and_hasher(
                 64,
                 Default::default(),
@@ -105,6 +130,10 @@ impl RouteTable {
             list.push((route, AtomicCell::new(Instant::now())));
         }
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        drop(route_table);
+        if route.is_p2p() {
+            self.reset_direct_recovery_request(&vip);
+        }
     }
 
     pub fn get_routes(&self, vip: &Ipv4Addr) -> Option<Vec<Route>> {
@@ -115,10 +144,26 @@ impl RouteTable {
     }
 
     pub fn get_first_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        self.route_table
-            .read()
-            .get(vip)
-            .and_then(|v| v.first().map(|(i, _)| *i))
+        self.route_table.read().get(vip).and_then(|routes| {
+            routes
+                .iter()
+                // A negative RTT marks a direct route that is being
+                // re-measured. It must not be used by forwarding or the
+                // public route/CLI view before its Pong is received.
+                .find_map(|(route, _)| (route.rt >= 0).then_some(*route))
+        })
+    }
+
+    /// Like `get_first_route`, but never exposes a direct route whose
+    /// liveness has already expired. This keeps forwarding and the public
+    /// route view aligned with payload selection while cleanup catches up.
+    pub fn get_first_live_route(&self, vip: &Ipv4Addr, stale_timeout: Duration) -> Option<Route> {
+        self.route_table.read().get(vip).and_then(|routes| {
+            routes.iter().find_map(|(route, liveness)| {
+                (route.rt >= 0 && (!route.is_p2p() || liveness.load().elapsed() < stale_timeout))
+                    .then_some(*route)
+            })
+        })
     }
 
     pub fn get_one_p2p_route(&self, vip: &Ipv4Addr) -> Option<Route> {
@@ -133,6 +178,32 @@ impl RouteTable {
             v.iter()
                 .find_map(|(i, _)| (i.is_p2p() && i.has_measured_rt()).then_some(*i))
         })
+    }
+
+    /// Returns the measured, live direct route usable for this payload and
+    /// whether a live direct route exists.  A route that has outlived the
+    /// maintenance window is treated as absent immediately, rather than
+    /// waiting for the cleanup worker to remove it.
+    pub fn payload_route_read(
+        &self,
+        vip: &Ipv4Addr,
+        stale_timeout: Duration,
+    ) -> (Option<Route>, bool) {
+        let route_table = self.route_table.read();
+        let Some(routes) = route_table.get(vip) else {
+            return (None, false);
+        };
+        let mut measured_direct = None;
+        let mut has_direct = false;
+        for (route, liveness) in routes {
+            if route.is_p2p() && liveness.load().elapsed() < stale_timeout {
+                has_direct = true;
+                if measured_direct.is_none() && route.has_measured_rt() {
+                    measured_direct = Some(*route);
+                }
+            }
+        }
+        (measured_direct, has_direct)
     }
 
     pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
@@ -209,6 +280,68 @@ impl RouteTable {
             .collect()
     }
 
+    /// Records application payload traffic for the UI activity state. Route
+    /// health is maintained independently by the route heartbeat and stale
+    /// cleanup loops.
+    pub fn activate_peer(&self, vip: &Ipv4Addr, idle_timeout: std::time::Duration) -> bool {
+        let now = Instant::now();
+        if let Some(activity) = self.peer_activity.read().get(vip) {
+            let previous = activity.last_payload.load();
+            let elapsed = now.saturating_duration_since(previous);
+            if elapsed >= idle_timeout {
+                if activity
+                    .last_payload
+                    .compare_exchange(previous, now)
+                    .is_ok()
+                {
+                    return true;
+                }
+                return false;
+            }
+            if elapsed >= PEER_ACTIVITY_REFRESH_INTERVAL {
+                let _ = activity.last_payload.compare_exchange(previous, now);
+            }
+            return false;
+        }
+
+        // Only the thread that inserts this first activity marker reports the
+        // first activation. Concurrent payload handlers see the marker.
+        let mut activity = self.peer_activity.write();
+        if activity.contains_key(vip) {
+            return false;
+        }
+        activity.insert(*vip, PeerActivity::new(now));
+        drop(activity);
+        true
+    }
+
+    pub fn is_peer_active(&self, vip: &Ipv4Addr, idle_timeout: std::time::Duration) -> bool {
+        self.peer_activity
+            .read()
+            .get(vip)
+            .is_some_and(|activity| activity.last_payload.load().elapsed() < idle_timeout)
+    }
+
+    /// Claims the one immediate control-plane recovery request permitted while
+    /// a peer has traffic but no direct route. A new direct route resets it.
+    pub fn take_direct_recovery_request(&self, vip: &Ipv4Addr, has_direct_route: bool) -> bool {
+        if has_direct_route {
+            return false;
+        }
+        self.peer_activity.read().get(vip).is_some_and(|activity| {
+            activity
+                .direct_recovery_requested
+                .compare_exchange(false, true)
+                .is_ok()
+        })
+    }
+
+    fn reset_direct_recovery_request(&self, vip: &Ipv4Addr) {
+        if let Some(activity) = self.peer_activity.read().get(vip) {
+            activity.direct_recovery_requested.store(false);
+        }
+    }
+
     pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) {
         let mut write_guard = self.route_table.write();
         if let Some(routes) = write_guard.get_mut(vip) {
@@ -218,6 +351,13 @@ impl RouteTable {
             }
         }
         Self::rebuild_direct_route_keys(&write_guard, &mut self.direct_route_keys.write());
+        let has_direct_route = write_guard
+            .get(vip)
+            .is_some_and(|routes| routes.iter().any(|(route, _)| route.is_p2p()));
+        drop(write_guard);
+        if !has_direct_route {
+            self.reset_direct_recovery_request(vip);
+        }
     }
 
     pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
@@ -235,11 +375,14 @@ impl RouteTable {
         let mut route_table = self.route_table.write();
         route_table.remove(vip);
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        drop(route_table);
+        self.peer_activity.write().remove(vip);
     }
 
     pub fn clear_all(&self) {
         self.route_table.write().clear();
         self.direct_route_keys.write().clear();
+        self.peer_activity.write().clear();
     }
 
     /// Drops only direct P2P paths while retaining relay paths as an immediate
@@ -256,6 +399,10 @@ impl RouteTable {
             !routes.is_empty()
         });
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        drop(route_table);
+        for vip in &affected_peers {
+            self.reset_direct_recovery_request(vip);
+        }
         affected_peers
     }
 
@@ -263,6 +410,10 @@ impl RouteTable {
         let mut route_table = self.route_table.write();
         route_table.retain(|vip, _| valid_peers.contains(vip));
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        drop(route_table);
+        self.peer_activity
+            .write()
+            .retain(|vip, _| valid_peers.contains(vip));
     }
 
     fn rebuild_direct_route_keys(
@@ -288,6 +439,9 @@ mod tests {
     use crate::transport::connect_protocol::ConnectProtocol;
     use std::collections::HashSet;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+    use std::time::Duration;
 
     fn route_key(port: u16) -> RouteKey {
         RouteKey::new(
@@ -335,6 +489,49 @@ mod tests {
 
         table.add_route(vip, Route::from(default_rt, 1, 42));
         assert_eq!(table.get_one_measured_p2p_route(&vip).unwrap().rt, 42);
+    }
+
+    #[test]
+    fn payload_route_read_treats_stale_direct_routes_as_absent() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 22);
+        table.add_route(
+            vip,
+            Route::new(ConnectProtocol::UDP, route_key(2022).addr, 1, 7),
+        );
+
+        assert!(table
+            .payload_route_read(&vip, Duration::from_secs(1))
+            .0
+            .is_some());
+        thread::sleep(Duration::from_millis(5));
+        let (route, has_direct) = table.payload_route_read(&vip, Duration::from_millis(1));
+        assert!(route.is_none());
+        assert!(!has_direct);
+    }
+
+    #[test]
+    fn live_route_view_falls_back_when_direct_route_is_stale() {
+        let table = RouteTable::new(UseChannelType::Auto, true);
+        let vip = Ipv4Addr::new(10, 0, 0, 23);
+        let direct = Route::new(ConnectProtocol::UDP, route_key(2023).addr, 1, 1);
+        let relay = Route::new(
+            ConnectProtocol::TCP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2024)),
+            2,
+            10,
+        );
+        table.add_route(vip, direct);
+        table.add_route(vip, relay);
+
+        thread::sleep(Duration::from_millis(5));
+        assert_eq!(
+            table
+                .get_first_live_route(&vip, Duration::from_millis(1))
+                .unwrap()
+                .route_key(),
+            relay.route_key()
+        );
     }
 
     #[test]
@@ -411,5 +608,104 @@ mod tests {
         assert!(table.get_one_p2p_route(&vip).is_none());
         assert_eq!(table.get_first_route(&vip).unwrap().route_key(), relay);
         assert!(!table.has_direct_route_key(&direct));
+    }
+
+    #[test]
+    fn unmeasured_direct_route_does_not_outrank_relay() {
+        let table = RouteTable::new(UseChannelType::Auto, true);
+        let vip = Ipv4Addr::new(10, 0, 0, 13);
+        let direct = Route::new(ConnectProtocol::UDP, route_key(1013).addr, 1, -1);
+        let relay = Route::new(
+            ConnectProtocol::TCP,
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2013)),
+            2,
+            10,
+        );
+        table.add_route(vip, direct);
+        table.add_route(vip, relay);
+
+        assert_eq!(
+            table.get_first_route(&vip).unwrap().route_key(),
+            relay.route_key()
+        );
+    }
+
+    #[test]
+    fn learning_a_direct_route_does_not_mark_the_peer_active() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 9);
+        table.add_route(vip, Route::from_default_rt(route_key(1009), 1));
+
+        assert!(!table.is_peer_active(&vip, Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn peer_activity_reactivation_preserves_route_measurement() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 10);
+        let direct = Route::new(ConnectProtocol::UDP, route_key(1010).addr, 1, 42);
+        table.add_route(vip, direct);
+        assert!(table.get_one_measured_p2p_route(&vip).is_some());
+
+        assert!(table.activate_peer(&vip, Duration::from_secs(1)));
+        assert!(table.get_one_measured_p2p_route(&vip).is_some());
+        assert!(table.is_peer_active(&vip, Duration::from_secs(1)));
+        assert!(!table.activate_peer(&vip, Duration::from_secs(1)));
+
+        thread::sleep(Duration::from_millis(5));
+        assert!(!table.is_peer_active(&vip, Duration::from_millis(1)));
+        assert!(table.activate_peer(&vip, Duration::from_millis(1)));
+        assert_eq!(
+            table.get_one_measured_p2p_route(&vip).unwrap().route_key(),
+            direct.route_key()
+        );
+    }
+
+    #[test]
+    fn concurrent_peer_activity_reactivation_reports_one_activation() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let vip = Ipv4Addr::new(10, 0, 0, 11);
+        table.add_route(vip, Route::from_default_rt(route_key(1011), 1));
+        let _ = table.activate_peer(&vip, Duration::from_millis(1));
+        thread::sleep(Duration::from_millis(5));
+
+        let barrier = Arc::new(Barrier::new(3));
+        let workers = (0..2)
+            .map(|_| {
+                let table = table.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    usize::from(table.activate_peer(&vip, Duration::from_millis(1)))
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+
+        assert_eq!(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap())
+                .sum::<usize>(),
+            1
+        );
+    }
+
+    #[test]
+    fn traffic_after_direct_routes_are_cleared_requests_one_recovery() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 12);
+        let direct = Route::from_default_rt(route_key(1012), 1);
+        table.add_route(vip, direct);
+        let _ = table.activate_peer(&vip, Duration::from_secs(30));
+
+        assert!(!table.take_direct_recovery_request(&vip, true));
+        assert_eq!(table.clear_direct_routes(), vec![vip]);
+        assert!(table.take_direct_recovery_request(&vip, false));
+        assert!(!table.take_direct_recovery_request(&vip, false));
+
+        table.add_route(vip, direct);
+        table.remove_route(&vip, direct.route_key());
+        assert!(table.take_direct_recovery_request(&vip, false));
     }
 }

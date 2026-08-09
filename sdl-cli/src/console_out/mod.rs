@@ -324,7 +324,19 @@ pub fn console_device_list(mut list: Vec<DeviceItem>) {
     for item in list {
         let name = item.name;
         if &item.status == "Online" {
-            if item.nat_traversal_type.contains("p2p") {
+            if item.nat_traversal_type == "idle" {
+                out_list.push(vec![
+                    (name, Style::new().green()),
+                    (item.virtual_ip, Style::new().green()),
+                    (item.status, Style::new().green()),
+                    (item.nat_traversal_type, Style::new().color256(102)),
+                    (item.rt, Style::new().color256(102)),
+                    (
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
+                        Style::new().color256(102),
+                    ),
+                ]);
+            } else if item.nat_traversal_type.contains("p2p") {
                 out_list.push(vec![
                     (name, Style::new().green()),
                     (item.virtual_ip, Style::new().green()),
@@ -386,7 +398,23 @@ pub fn console_device_list_all(mut list: Vec<DeviceItem>) {
     ]);
     for item in list {
         if &item.status == "Online" {
-            if &item.nat_traversal_type == "p2p" {
+            if item.nat_traversal_type == "idle" {
+                out_list.push(vec![
+                    (item.name, Style::new().green()),
+                    (item.virtual_ip, Style::new().green()),
+                    (item.status, Style::new().green()),
+                    (item.nat_traversal_type, Style::new().color256(102)),
+                    (item.rt, Style::new().color256(102)),
+                    (
+                        connection_speed(item.up_connection_speed, item.down_connection_speed),
+                        Style::new().color256(102),
+                    ),
+                    (item.nat_type, Style::new().color256(102)),
+                    (item.public_ips, Style::new().color256(102)),
+                    (item.local_ip, Style::new().color256(102)),
+                    (item.ipv6, Style::new().color256(102)),
+                ]);
+            } else if item.nat_traversal_type.contains("p2p") {
                 out_list.push(vec![
                     (item.name, Style::new().green()),
                     (item.virtual_ip, Style::new().green()),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -179,6 +179,20 @@ impl PeerSubsystem {
 
     pub(crate) fn info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
         self.table.read().get(ip).cloned()
+    }
+
+    pub(crate) fn contains(&self, ip: &Ipv4Addr) -> bool {
+        self.table.read().get(ip).is_some()
+    }
+
+    pub(crate) fn preferred_channel_mode(
+        &self,
+        ip: &Ipv4Addr,
+    ) -> Option<crate::proto::message::ChannelMode> {
+        self.table
+            .read()
+            .get(ip)
+            .map(|peer| peer.preferred_channel_mode)
     }
 
     pub(crate) fn identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {
@@ -365,6 +379,10 @@ pub struct SdlContext {
     pub(crate) gateway: GatewaySubsystem,
     pub(crate) dns: DnsSubsystem,
     pub(crate) exit_node: ExitNodeSubsystem,
+    // Runtime state, independent of the CLI's presentation state.  It makes
+    // auth-pending data-plane teardown idempotent and marks the next control
+    // snapshot as an auth-recovery snapshot.
+    pub(crate) auth_pending_block_applied: Arc<AtomicBool>,
     pub(crate) pending_rename_requests: Arc<PendingRequestTable<PendingRenameRequest>>,
     pub(crate) current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub(crate) debug_watch: DebugWatch,
@@ -380,12 +398,34 @@ pub struct SdlContext {
 
 impl SdlContext {
     pub fn block_data_plane_for_auth_pending(&self) {
+        if self.auth_pending_block_applied.swap(true, Ordering::AcqRel) {
+            return;
+        }
         self.peers.reset_for_auth_pending();
         self.route_manager.clear_all_paths();
         self.gateway.reset_for_auth_pending();
         self.dns.reset_for_auth_pending();
         self.pending_rename_requests.clear();
         self.exit_node.reset_for_auth_pending();
+    }
+
+    // The caller must hold ServerPacketHandler::device_list_update_lock and
+    // invoke this immediately before applying a control device-list snapshot.
+    // A long auth-pending retry loop can otherwise move the local epoch ahead
+    // of a restarted control server's epoch.
+    pub(crate) fn reset_peer_epoch_for_auth_pending_recovery(&self) -> bool {
+        if !self.auth_pending_block_applied.load(Ordering::Acquire) {
+            return false;
+        }
+        self.reset_peer_epoch();
+        true
+    }
+
+    // Clear only after a successful RegistrationResponse has committed its
+    // authoritative snapshot.  A later auth failure must tear down once too.
+    pub(crate) fn finish_auth_pending_recovery(&self) {
+        self.auth_pending_block_applied
+            .store(false, Ordering::Release);
     }
 
     pub(crate) fn apply_selected_exit_node_route(&self) {
@@ -445,6 +485,17 @@ impl SdlContext {
 
     pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
         self.peers.info(ip)
+    }
+
+    pub fn has_peer(&self, ip: &Ipv4Addr) -> bool {
+        self.peers.contains(ip)
+    }
+
+    pub fn peer_preferred_channel_mode(
+        &self,
+        ip: &Ipv4Addr,
+    ) -> Option<crate::proto::message::ChannelMode> {
+        self.peers.preferred_channel_mode(ip)
     }
 
     pub fn peer_identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {

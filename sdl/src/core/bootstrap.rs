@@ -290,6 +290,7 @@ impl Sdl {
                     state: exit_node_state.clone(),
                     route: exit_node_route.clone(),
                 },
+                auth_pending_block_applied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 pending_rename_requests: Arc::new(PendingRequestTable::new(PENDING_REQUEST_TTL_MS)),
                 current_device: current_device.clone(),
                 debug_watch: debug_watch.clone(),
@@ -348,6 +349,8 @@ impl Sdl {
             crate::net::underlay_monitor::start_underlay_monitor(
                 stop_manager.clone(),
                 move || {
+                    // Direct endpoints can no longer be trusted after a
+                    // suspend/resume, so discard them before refreshing NAT.
                     let removed = route_manager.clear_direct_paths();
                     peer_probe_tracker.clear();
                     match udp_channel.rebind() {
@@ -361,8 +364,11 @@ impl Sdl {
                         "underlay recovery invalidated {} direct P2P routes; refreshing NAT",
                         removed
                     );
+                    // Refresh the control-plane NAT view without proactively
+                    // coordinating peers. The next payload requests direct
+                    // recovery on demand while relay remains available.
                     control_session.refresh_nat_and_report_punch_status(
-                        crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery,
+                        crate::proto::message::PunchTriggerReason::StatusReportOnly,
                     );
                 },
             )?;
@@ -456,6 +462,9 @@ impl Sdl {
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
         self.context.route_manager().best_route(ip)
+    }
+    pub fn is_peer_active(&self, ip: &Ipv4Addr) -> bool {
+        self.context.route_manager().is_peer_active(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
         self.context.is_gateway_vip(ip)

@@ -93,6 +93,10 @@ pub struct DeviceItem {
     pub local_ip: String,
     pub ipv6: String,
     pub nat_traversal_type: String,
+    /// Most recently maintained route, independent of the peer activity
+    /// label. Empty when no peer-specific route is known.
+    #[serde(default)]
+    pub last_path: String,
     pub rt: String,
     #[serde(default)]
     pub up_rate: u64,

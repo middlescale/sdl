@@ -319,9 +319,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
-        if requires_peer_decrypt(source, current_device)
-            && self.context.peer_info(&source).is_none()
-        {
+        if requires_peer_decrypt(source, current_device) && !self.context.has_peer(&source) {
             log_sampled_drop(
                 &UNKNOWN_PEER_DROP_COUNT,
                 &UNKNOWN_PEER_DROP_LOG_LIMITER,
@@ -383,6 +381,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
                 self.control(current_device, net_packet, route_key)?;
             }
             Protocol::IpTurn => {
+                self.activate_peer_for_payload(source);
                 self.ip_turn(net_packet, current_device, route_key)?;
             }
             Protocol::OtherTurn => {
@@ -391,6 +390,26 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
             Protocol::Unknown(_) => {}
         }
         Ok(())
+    }
+}
+
+impl<Device> ClientPacketHandler<Device> {
+    fn activate_peer_for_payload(&self, peer_ip: Ipv4Addr) {
+        if self.context.is_gateway_vip(&peer_ip) {
+            return;
+        }
+        let route_manager = self.context.route_manager();
+        route_manager.activate_peer(&peer_ip);
+        let (_, has_direct_route) = route_manager.payload_route_read(&peer_ip);
+        if !route_manager.use_channel_type().is_only_relay()
+            && route_manager.take_direct_recovery_request(&peer_ip, has_direct_route)
+        {
+            self.context
+                .control_session
+                .request_punch_status_report_with_nat_ready(
+                    crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
+                );
+        }
     }
 }
 

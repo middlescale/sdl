@@ -74,7 +74,7 @@ impl Route {
     }
 
     pub fn has_measured_rt(&self) -> bool {
-        self.rt != DEFAULT_RT
+        self.rt >= 0 && self.rt != DEFAULT_RT
     }
 
     pub fn is_udp(&self) -> bool {

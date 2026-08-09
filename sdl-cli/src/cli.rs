@@ -399,7 +399,12 @@ pub fn parse_args_config_from(
     opts.optopt("", "ports", "监听的端口", "<port,port>");
     opts.optflag("", "latency-first", "优先延迟");
     opts.optopt("", "p2p-heartbeat-sec", "P2P心跳间隔秒数", "<sec>");
-    opts.optopt("", "p2p-route-idle-sec", "P2P路由空闲清理秒数", "<sec>");
+    opts.optopt(
+        "",
+        "p2p-route-idle-sec",
+        "P2P直连路由 stale 维护及 peer 活动判定窗口秒数",
+        "<sec>",
+    );
     opts.optopt("", "use-channel", "使用通道 relay/p2p", "<use-channel>");
     opts.optopt("", "packet-loss", "丢包率", "<packet-loss>");
     opts.optopt("", "packet-delay", "延迟", "<packet-delay>");
@@ -456,7 +461,7 @@ fn get_description(key: &str, language: &str) -> String {
         ("--ports <port,port>", ("取值0~65535,指定本地监听的一组端口,默认监听29873,使用过多端口会增加网络负担", "Values 0~65535, specify a group of local listening ports, defaults to 29873, using many ports increases network load")),
         ("--latency-first", ("优先低延迟的通道,默认情况优先使用p2p通道", "Prioritize low-latency channels, defaults to prioritizing p2p channel")),
         ("--p2p-heartbeat-sec <sec>", ("P2P保活心跳间隔秒数,默认10秒", "P2P keepalive heartbeat interval in seconds, default 10s")),
-        ("--p2p-route-idle-sec <sec>", ("P2P直连路由空闲清理秒数,默认30秒", "P2P direct-route idle cleanup timeout in seconds, default 30s")),
+        ("--p2p-route-idle-sec <sec>", ("P2P直连路由 stale 维护及 peer 活动判定窗口,默认30秒", "P2P direct-route stale maintenance and peer activity window in seconds, default 30s")),
         ("--use-channel <auto|p2p|relay>", ("使用通道 auto/p2p/relay,默认自动选择", "Use channel auto/p2p/relay, defaults to automatic selection")),
         ("--nic <tun0>", ("指定虚拟网卡名称, Windows 下对应 Wintun/TUN 名称", "Specify virtual network card name, on Windows this is the Wintun/TUN interface name")),
         ("--tun_name <sdl-tun>", ("指定tun网卡名称", "Specify TUN interface name")),

@@ -113,15 +113,23 @@ fn broadcast(
         };
         cipher.encrypt_ipv4(&mut peer_packet)?;
 
-        match channel.send_to_peer(&peer_packet, &peer_ip)? {
-            RouteKind::P2p => {
+        match channel.send_to_peer(&peer_packet, &peer_ip) {
+            Ok(RouteKind::P2p) => {
                 channel.record_logical_up_traffic(peer_packet.buffer().len());
                 channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
             }
-            RouteKind::GatewayRelay | RouteKind::Relay => {
+            Ok(RouteKind::GatewayRelay | RouteKind::Relay) => {
                 channel.record_logical_up_traffic(peer_packet.buffer().len());
                 channel.record_gateway_up_traffic(peer_packet.buffer().len());
                 channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
+            }
+            Err(err) => {
+                log::debug!(
+                    "skip broadcast peer {} after send failure: {:?}",
+                    peer_ip,
+                    err
+                );
+                continue;
             }
         }
     }

@@ -170,7 +170,8 @@ impl RouteManager {
     }
 
     pub fn best_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        self.route_table.get_first_route(vip)
+        self.route_table
+            .get_first_live_route(vip, self.stale_direct_timeout)
     }
 
     pub fn direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
@@ -179,6 +180,11 @@ impl RouteManager {
 
     pub fn measured_direct_route(&self, vip: &Ipv4Addr) -> Option<Route> {
         self.route_table.get_one_measured_p2p_route(vip)
+    }
+
+    pub fn payload_route_read(&self, vip: &Ipv4Addr) -> (Option<Route>, bool) {
+        self.route_table
+            .payload_route_read(vip, self.stale_direct_timeout)
     }
 
     pub fn peer_for_direct_route(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
@@ -205,6 +211,22 @@ impl RouteManager {
         self.route_table.route_table_one_p2p()
     }
 
+    /// Records application traffic for the peer activity display.
+    pub fn activate_peer(&self, vip: &Ipv4Addr) -> bool {
+        self.route_table
+            .activate_peer(vip, self.stale_direct_timeout)
+    }
+
+    pub fn is_peer_active(&self, vip: &Ipv4Addr) -> bool {
+        self.route_table
+            .is_peer_active(vip, self.stale_direct_timeout)
+    }
+
+    pub fn take_direct_recovery_request(&self, vip: &Ipv4Addr, has_direct_route: bool) -> bool {
+        self.route_table
+            .take_direct_recovery_request(vip, has_direct_route)
+    }
+
     pub fn has_any_route(&self, vip: &Ipv4Addr) -> bool {
         self.best_route(vip).is_some()
     }
@@ -213,9 +235,13 @@ impl RouteManager {
         self.snapshot_routes()
             .into_iter()
             .filter_map(|(peer_ip, routes)| {
-                let routes = self.limit_heartbeat_routes(
-                    routes.into_iter().filter(|route| route.is_p2p()).collect(),
-                );
+                let routes: Vec<_> = routes
+                    .into_iter()
+                    // Include unmeasured routes as well: their immediate
+                    // punch-time Ping may be lost, and the maintenance loop
+                    // must continue probing until liveness expires.
+                    .filter(|route| route.is_p2p())
+                    .collect();
                 if routes.is_empty() {
                     None
                 } else {
@@ -319,11 +345,19 @@ impl RouteManager {
     }
 
     pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo) {
+        self.send_heartbeats_to(current_device, self.heartbeat_targets());
+    }
+
+    fn send_heartbeats_to(
+        &self,
+        current_device: CurrentDeviceInfo,
+        targets: Vec<(Ipv4Addr, Vec<Route>)>,
+    ) {
         let Some(sender) = &self.sender else {
             return;
         };
         let src_ip = current_device.virtual_ip;
-        for (dest_ip, routes) in self.heartbeat_targets() {
+        for (dest_ip, routes) in targets {
             if current_device.is_gateway_vip(&dest_ip) {
                 continue;
             }
@@ -397,11 +431,6 @@ impl RouteManager {
                 delay: Duration::from_millis(3000),
             },
         }
-    }
-
-    fn limit_heartbeat_routes(&self, routes: Vec<Route>) -> Vec<Route> {
-        let limit = if self.latency_first() { 2 } else { 1 };
-        routes.into_iter().take(limit).collect()
     }
 
     fn heartbeat_packets_for_peer(
@@ -669,6 +698,7 @@ mod tests {
         let peer = Ipv4Addr::new(10, 0, 0, 3);
         let route = route(1, 2001);
         table.add_route(peer, route);
+        let _ = manager.activate_peer(&peer);
         thread::sleep(Duration::from_millis(15));
 
         match manager.next_stale_direct_route(Duration::from_millis(5)) {
@@ -681,6 +711,22 @@ mod tests {
     }
 
     #[test]
+    fn inactive_peer_does_not_protect_a_stale_route_from_cleanup() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 18);
+        table.add_route(peer, route(1, 2019));
+        let _ = table.activate_peer(&peer, Duration::from_millis(5));
+        thread::sleep(Duration::from_millis(60));
+
+        assert!(table.activate_peer(&peer, Duration::from_millis(5)));
+        assert!(matches!(
+            manager.next_stale_direct_route(Duration::from_millis(50)),
+            StaleDirectRoute::Timeout(_, _)
+        ));
+    }
+
+    #[test]
     fn cleanup_stale_direct_routes_only_removes_stale_p2p_routes() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
@@ -690,6 +736,7 @@ mod tests {
         let p2p = route(1, 2003);
         table.add_route(relay_peer, relay);
         table.add_route(p2p_peer, p2p);
+        let _ = manager.activate_peer(&p2p_peer);
         thread::sleep(Duration::from_millis(15));
 
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
@@ -712,6 +759,7 @@ mod tests {
             }));
         }
         table.add_route(peer, route(1, 2004));
+        let _ = manager.activate_peer(&peer);
         thread::sleep(Duration::from_millis(15));
 
         let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
@@ -777,6 +825,7 @@ mod tests {
         }
         table.add_route(peer, route(1, 2005));
         table.add_route(peer, route(1, 2006));
+        let _ = manager.activate_peer(&peer);
         table.update_read_time(&peer, &route(1, 2006).route_key());
         thread::sleep(Duration::from_millis(15));
 
@@ -787,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_targets_keep_p2p_routes_when_relay_route_sorts_first() {
+    fn heartbeat_targets_keep_idle_p2p_routes_when_relay_route_sorts_first() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 9);
@@ -796,13 +845,39 @@ mod tests {
             Route::new(route(2, 2010).protocol, route(2, 2010).addr, 2, 1),
         );
         table.add_route(peer, route(1, 2011));
-
         let targets = manager.heartbeat_targets();
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].0, peer);
         assert_eq!(targets[0].1.len(), 1);
         assert!(targets[0].1[0].is_p2p());
+    }
+
+    #[test]
+    fn heartbeat_targets_retry_unmeasured_direct_routes() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 20);
+        table.add_route(
+            peer,
+            Route::new(ConnectProtocol::UDP, route(1, 2021).addr, 1, -1),
+        );
+
+        let targets = manager.heartbeat_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, peer);
+        assert_eq!(targets[0].1.len(), 1);
+        assert_eq!(targets[0].1[0].rt, -1);
+    }
+
+    #[test]
+    fn direct_route_status_snapshot_includes_idle_peers() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 19);
+        table.add_route(peer, route(1, 2020));
+
+        assert_eq!(manager.snapshot_direct_routes().len(), 1);
     }
 
     #[test]

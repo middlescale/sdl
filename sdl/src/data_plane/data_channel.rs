@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::core::SdlContext;
 use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteKind;
 use crate::data_plane::use_channel_type::UseChannelType;
 
@@ -45,13 +46,48 @@ impl DataChannel {
         vip: &Ipv4Addr,
     ) -> io::Result<RouteKind> {
         let context = self.context()?;
-        match self.select_path(context.as_ref(), vip) {
+        let route_manager = context.route_manager();
+        let is_gateway_vip = context.is_gateway_vip(vip);
+        let peer_channel_mode = context.peer_preferred_channel_mode(vip);
+        let measured_direct_route = if !is_gateway_vip {
+            route_manager.activate_peer(vip);
+            let (measured_direct_route, has_direct_route) = route_manager.payload_route_read(vip);
+            if !route_manager.use_channel_type().is_only_relay()
+                && route_manager.take_direct_recovery_request(vip, has_direct_route)
+            {
+                // The first packet still follows the normal relay fallback while
+                // control coordinates a direct route in the background.
+                context
+                    .control_session
+                    .request_punch_status_report_with_nat_ready(
+                        crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
+                    );
+            }
+            measured_direct_route
+        } else {
+            None
+        };
+        match Self::select_path(
+            &route_manager,
+            is_gateway_vip,
+            peer_channel_mode,
+            measured_direct_route,
+        ) {
             Some(DataPath::P2pUdp(route_key)) => {
                 match self.send_udp(context.as_ref(), buf, route_key) {
                     Ok(()) => Ok(RouteKind::P2p),
                     Err(err) => {
-                        context.route_manager().mark_path_failed(vip, route_key);
-                        if self.allows_gateway_relay() {
+                        if !is_definitive_p2p_path_error(&err) {
+                            log::debug!(
+                                "p2p send failed for {}, preserving route {:?}: {:?}",
+                                vip,
+                                route_key,
+                                err
+                            );
+                            return Err(err);
+                        }
+                        route_manager.mark_path_failed(vip, route_key);
+                        if !route_manager.use_channel_type().is_only_p2p() {
                             log::warn!(
                             "p2p send failed for {}, removed route {:?}, falling back to relay: {:?}",
                             vip,
@@ -169,24 +205,19 @@ impl DataChannel {
         }
     }
 
-    fn select_path(&self, context: &SdlContext, vip: &Ipv4Addr) -> Option<DataPath> {
-        let use_channel_type = {
-            if let Some(peer) = context.peer_info(vip) {
-                if peer.preferred_channel_mode
-                    == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
-                {
-                    UseChannelType::Relay
-                } else {
-                    context.route_manager().use_channel_type()
-                }
+    fn select_path(
+        route_manager: &RouteManager,
+        is_gateway_vip: bool,
+        peer_channel_mode: Option<crate::proto::message::ChannelMode>,
+        measured_direct_route: Option<Route>,
+    ) -> Option<DataPath> {
+        let use_channel_type =
+            if peer_channel_mode == Some(crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY) {
+                UseChannelType::Relay
             } else {
-                context.route_manager().use_channel_type()
-            }
-        };
-        select_data_path(
-            use_channel_type,
-            context.route_manager().measured_direct_route(vip),
-        )
+                route_manager.use_channel_type()
+            };
+        select_data_path(is_gateway_vip, use_channel_type, measured_direct_route)
     }
 
     fn send_udp<B: AsRef<[u8]>>(
@@ -205,10 +236,27 @@ impl DataChannel {
     }
 }
 
+fn is_definitive_p2p_path_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::HostUnreachable
+            | io::ErrorKind::NetworkUnreachable
+    )
+}
+
 fn select_data_path(
+    is_gateway_vip: bool,
     use_channel_type: UseChannelType,
     direct_route: Option<Route>,
 ) -> Option<DataPath> {
+    // P2p-only constrains peer-to-peer paths. The virtual gateway is a
+    // service endpoint and, like the TUN gateway fast path, always uses its
+    // authenticated gateway session.
+    if is_gateway_vip {
+        return Some(DataPath::GatewayRelay);
+    }
     match use_channel_type {
         UseChannelType::Relay => Some(DataPath::GatewayRelay),
         UseChannelType::P2p => direct_route.map(|route| DataPath::P2pUdp(route.route_key())),
@@ -223,7 +271,7 @@ fn select_data_path(
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-    use super::{select_data_path, DataPath};
+    use super::{is_definitive_p2p_path_error, select_data_path, DataPath};
     use crate::data_plane::route::Route;
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::transport::connect_protocol::ConnectProtocol;
@@ -240,19 +288,19 @@ mod tests {
     #[test]
     fn select_data_path_prefers_direct_udp_when_available() {
         let route = sample_route();
-        let path = select_data_path(UseChannelType::Auto, Some(route));
+        let path = select_data_path(false, UseChannelType::Auto, Some(route));
         assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
     }
 
     #[test]
     fn select_data_path_falls_back_to_relay_for_all_mode() {
-        let path = select_data_path(UseChannelType::Auto, None);
+        let path = select_data_path(false, UseChannelType::Auto, None);
         assert_eq!(path, Some(DataPath::GatewayRelay));
     }
 
     #[test]
     fn select_data_path_requires_direct_route_for_p2p_only_mode() {
-        let path = select_data_path(UseChannelType::P2p, None);
+        let path = select_data_path(false, UseChannelType::P2p, None);
         assert_eq!(path, None);
     }
 
@@ -264,14 +312,44 @@ mod tests {
             1,
             900,
         );
-        let path = select_data_path(UseChannelType::Auto, Some(route));
+        let path = select_data_path(false, UseChannelType::Auto, Some(route));
         assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
     }
 
     #[test]
     fn auto_policy_ignores_historical_p2p_loss() {
         let route = sample_route();
-        let path = select_data_path(UseChannelType::Auto, Some(route));
+        let path = select_data_path(false, UseChannelType::Auto, Some(route));
         assert_eq!(path, Some(DataPath::P2pUdp(route.route_key())));
+    }
+
+    #[test]
+    fn gateway_always_uses_gateway_relay_in_p2p_mode() {
+        assert_eq!(
+            select_data_path(true, UseChannelType::P2p, None),
+            Some(DataPath::GatewayRelay)
+        );
+    }
+
+    #[test]
+    fn only_unreachable_errors_invalidate_a_p2p_route() {
+        assert!(is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused,
+        )));
+        assert!(is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::ConnectionReset,
+        )));
+        assert!(is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::HostUnreachable,
+        )));
+        assert!(is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::NetworkUnreachable,
+        )));
+        assert!(!is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::WouldBlock,
+        )));
+        assert!(!is_definitive_p2p_path_error(&std::io::Error::from(
+            std::io::ErrorKind::Other,
+        )));
     }
 }

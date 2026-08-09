@@ -449,6 +449,13 @@ impl ControlSession {
             .read()
             .values()
             .filter(|info| info.status.is_online())
+            // Idle peers intentionally do not drive periodic coordination;
+            // their next payload claims a one-shot recovery request instead.
+            .filter(|info| {
+                self.data_plane
+                    .route_manager
+                    .is_peer_active(&info.virtual_ip)
+            })
             .filter_map(|info| {
                 (self
                     .data_plane
@@ -689,6 +696,8 @@ impl ControlSession {
         if device_info.status.offline() {
             return Ok(());
         }
+        // Direct-route health is independent of the peer activity display, so
+        // maintained P2P routes remain visible to control while a peer is idle.
         let routes = self.data_plane.route_manager.snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
