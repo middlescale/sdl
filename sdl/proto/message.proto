@@ -414,6 +414,9 @@ message ClientStatusInfo {
     ChannelMode preferred_channel_mode = 13;
     bool exit_node_advertised = 14;
     bool exit_node_local_ready = 15;
+    // Set only for an on-demand direct-route recovery. Control must coordinate
+    // punching with this peer instead of choosing an arbitrary online client.
+    fixed32 recovery_punch_target = 16;
 }
 message RouteItem {
     fixed32 next_ip = 1;

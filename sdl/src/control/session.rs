@@ -651,6 +651,16 @@ impl ControlSession {
         self.spawn_status_report_with_nat_ready(reason);
     }
 
+    /// Requests direct-route recovery for the peer that just carried payload.
+    /// The target keeps control from selecting an unrelated online peer when
+    /// several peers are present in the virtual network.
+    pub fn request_direct_recovery_for(&self, target: std::net::Ipv4Addr) {
+        self.spawn_status_report_with_nat_ready_for_target(
+            PunchTriggerReason::PunchTriggerManualRequest,
+            Some(target),
+        );
+    }
+
     /// Re-advertises connectivity after a local suspend/resume transition.
     /// Unlike the normal status path, this deliberately discards and refreshes
     /// a previously known NAT mapping before control sees the report.
@@ -670,6 +680,14 @@ impl ControlSession {
     }
 
     fn spawn_status_report_with_nat_ready(&self, reason: PunchTriggerReason) {
+        self.spawn_status_report_with_nat_ready_for_target(reason, None);
+    }
+
+    fn spawn_status_report_with_nat_ready_for_target(
+        &self,
+        reason: PunchTriggerReason,
+        recovery_punch_target: Option<std::net::Ipv4Addr>,
+    ) {
         let control_session = self.clone();
         thread::Builder::new()
             .name("statusReport".into())
@@ -680,7 +698,9 @@ impl ControlSession {
                     }
                     thread::sleep(Duration::from_secs(2));
                 }
-                if let Err(e) = control_session.send_status_report_packet(reason) {
+                if let Err(e) = control_session
+                    .send_status_report_packet_for_target(reason, recovery_punch_target)
+                {
                     log::warn!("{:?}", e)
                 }
             })
@@ -692,6 +712,14 @@ impl ControlSession {
     }
 
     fn send_status_report_packet(&self, reason: PunchTriggerReason) -> io::Result<()> {
+        self.send_status_report_packet_for_target(reason, None)
+    }
+
+    fn send_status_report_packet_for_target(
+        &self,
+        reason: PunchTriggerReason,
+        recovery_punch_target: Option<std::net::Ipv4Addr>,
+    ) -> io::Result<()> {
         let device_info = self.current_device();
         if device_info.status.offline() {
             return Ok(());
@@ -701,6 +729,7 @@ impl ControlSession {
         let routes = self.data_plane.route_manager.snapshot_direct_routes();
         let mut message = ClientStatusInfo::new();
         message.source = device_info.virtual_ip.into();
+        message.recovery_punch_target = recovery_punch_target.map(u32::from).unwrap_or_default();
         let mode = self.data_plane.route_manager.use_channel_type();
         message.preferred_channel_mode = protobuf::EnumOrUnknown::new(match mode {
             crate::data_plane::use_channel_type::UseChannelType::Auto => {

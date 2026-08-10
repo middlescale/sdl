@@ -57,11 +57,7 @@ impl DataChannel {
             {
                 // The first packet still follows the normal relay fallback while
                 // control coordinates a direct route in the background.
-                context
-                    .control_session
-                    .request_punch_status_report_with_nat_ready(
-                        crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
-                    );
+                context.control_session.request_direct_recovery_for(*vip);
             }
             measured_direct_route
         } else {

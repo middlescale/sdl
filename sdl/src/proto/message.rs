@@ -8104,6 +8104,8 @@ pub struct ClientStatusInfo {
     pub exit_node_advertised: bool,
     // @@protoc_insertion_point(field:ClientStatusInfo.exit_node_local_ready)
     pub exit_node_local_ready: bool,
+    // @@protoc_insertion_point(field:ClientStatusInfo.recovery_punch_target)
+    pub recovery_punch_target: u32,
     // special fields
     // @@protoc_insertion_point(special_field:ClientStatusInfo.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -8121,7 +8123,7 @@ impl ClientStatusInfo {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(11);
+        let mut fields = ::std::vec::Vec::with_capacity(12);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
             "source",
@@ -8178,6 +8180,11 @@ impl ClientStatusInfo {
             |m: &ClientStatusInfo| { &m.exit_node_local_ready },
             |m: &mut ClientStatusInfo| { &mut m.exit_node_local_ready },
         ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "recovery_punch_target",
+            |m: &ClientStatusInfo| { &m.recovery_punch_target },
+            |m: &mut ClientStatusInfo| { &mut m.recovery_punch_target },
+        ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<ClientStatusInfo>(
             "ClientStatusInfo",
             fields,
@@ -8229,6 +8236,9 @@ impl ::protobuf::Message for ClientStatusInfo {
                 120 => {
                     self.exit_node_local_ready = is.read_bool()?;
                 },
+                133 => {
+                    self.recovery_punch_target = is.read_fixed32()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -8277,6 +8287,9 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.exit_node_local_ready != false {
             my_size += 1 + 1;
         }
+        if self.recovery_punch_target != 0 {
+            my_size += 2 + 4;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -8316,6 +8329,9 @@ impl ::protobuf::Message for ClientStatusInfo {
         if self.exit_node_local_ready != false {
             os.write_bool(15, self.exit_node_local_ready)?;
         }
+        if self.recovery_punch_target != 0 {
+            os.write_fixed32(16, self.recovery_punch_target)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -8344,6 +8360,7 @@ impl ::protobuf::Message for ClientStatusInfo {
         self.preferred_channel_mode = ::protobuf::EnumOrUnknown::new(ChannelMode::CHANNEL_MODE_AUTO);
         self.exit_node_advertised = false;
         self.exit_node_local_ready = false;
+        self.recovery_punch_target = 0;
         self.special_fields.clear();
     }
 
@@ -8360,6 +8377,7 @@ impl ::protobuf::Message for ClientStatusInfo {
             preferred_channel_mode: ::protobuf::EnumOrUnknown::from_i32(0),
             exit_node_advertised: false,
             exit_node_local_ready: false,
+            recovery_punch_target: 0,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -9449,7 +9467,7 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     empt\x12$\n\x04code\x18\x05\x20\x01(\x0e2\x10.PunchResultCodeR\x04code\
     \x12\x16\n\x06reason\x18\x06\x20\x01(\tR\x06reason\x12;\n\x11selected_en\
     dpoint\x18\x07\x20\x01(\x0b2\x0e.PunchEndpointR\x10selectedEndpoint\x12(\
-    \n\x05phase\x18\x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\xc3\
+    \n\x05phase\x18\x08\x20\x01(\x0e2\x12.PunchSessionPhaseR\x05phase\"\xf7\
     \x04\n\x10ClientStatusInfo\x12\x16\n\x06source\x18\x01\x20\x01(\x07R\x06\
     source\x12%\n\x08p2p_list\x18\x02\x20\x03(\x0b2\n.RouteItemR\x07p2pList\
     \x12\x1b\n\tup_stream\x18\x03\x20\x01(\x04R\x08upStream\x12\x1f\n\x0bdow\
@@ -9461,48 +9479,49 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     .PunchEndpointR\x11localUdpEndpoints\x12B\n\x16preferred_channel_mode\
     \x18\r\x20\x01(\x0e2\x0c.ChannelModeR\x14preferredChannelMode\x120\n\x14\
     exit_node_advertised\x18\x0e\x20\x01(\x08R\x12exitNodeAdvertised\x121\n\
-    \x15exit_node_local_ready\x18\x0f\x20\x01(\x08R\x12exitNodeLocalReadyJ\
-    \x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\x08\t\
-    \x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\x06nex\
-    tIp*\xb5\x02\n\x17RegistrationErrorReason\x12)\n%REGISTRATION_ERROR_REAS\
-    ON_UNSPECIFIED\x10\0\x122\n.REGISTRATION_ERROR_REASON_INVALID_GROUP_DOMA\
-    IN\x10\x01\x12(\n$REGISTRATION_ERROR_REASON_NOT_AUTHED\x10\x02\x12-\n)RE\
-    GISTRATION_ERROR_REASON_INVALID_REQUEST\x10\x03\x12:\n6REGISTRATION_ERRO\
-    R_REASON_MISSING_HANDSHAKE_CAPABILITY\x10\x04\x12&\n\"REGISTRATION_ERROR\
-    _REASON_INTERNAL\x10d*\x7f\n\x12GatewayChannelKind\x12\x1b\n\x17GATEWAY_\
-    CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\x01\x12\x18\n\
-    \x14GATEWAY_CHANNEL_QUIC\x10\x02\x12\x19\n\x15GATEWAY_CHANNEL_HTTPS\x10\
-    \x03*\x83\x02\n\x19RefreshGatewayGrantResult\x12,\n(REFRESH_GATEWAY_GRAN\
-    T_RESULT_UNSPECIFIED\x10\0\x12(\n$REFRESH_GATEWAY_GRANT_RESULT_UPDATED\
-    \x10\x01\x12*\n&REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE\x10\x02\x128\n4RE\
-    FRESH_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE\x10\x03\x12(\n$REFRES\
-    H_GATEWAY_GRANT_RESULT_REVOKED\x10\x04*\x83\x02\n\x15DeviceAuthErrorReas\
-    on\x12(\n$DEVICE_AUTH_ERROR_REASON_UNSPECIFIED\x10\0\x12.\n*DEVICE_AUTH_\
-    ERROR_REASON_CHALLENGE_EXPIRED\x10\x01\x120\n,DEVICE_AUTH_ERROR_REASON_D\
-    EVICE_KEY_MISMATCH\x10\x02\x12.\n*DEVICE_AUTH_ERROR_REASON_INVALID_SIGNA\
-    TURE\x10\x03\x12.\n*DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_FAILED\x10\x04*U\
-    \n\x0bChannelMode\x12\x15\n\x11CHANNEL_MODE_AUTO\x10\0\x12\x17\n\x13CHAN\
-    NEL_MODE_DIRECT\x10\x01\x12\x16\n\x12CHANNEL_MODE_RELAY\x10\x02*'\n\x0cP\
-    unchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\x10\x01*F\n\rPunc\
-    hNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\x01\x12\x08\n\x04\
-    IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\x07IPv6Udp\x10\x04*\
-    \xc1\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchTriggerUnknown\x10\0\
-    \x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\x1c\n\x18PunchTrigger\
-    RouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconnectRecovery\x10\x03\x12\
-    \x1d\n\x19PunchTriggerManualRequest\x10\x04\x12\x14\n\x10StatusReportOnl\
-    y\x10\x05*\xb5\x01\n\x11PunchSessionPhase\x12\x15\n\x11PunchPhaseUnknown\
-    \x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\x01\x12\x15\n\x11PunchPhaseS\
-    ending\x10\x02\x12\x15\n\x11PunchPhaseWaiting\x10\x03\x12\x15\n\x11Punch\
-    PhaseSuccess\x10\x04\x12\x15\n\x11PunchPhaseTimeout\x10\x05\x12\x14\n\
-    \x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPunchEndpointSelectionPolicy\
-    \x12!\n\x1dPunchEndpointSelectionDefault\x10\0\x12\x1d\n\x19PunchEndpoin\
-    tSelectionAll\x10\x01\x12&\n\"PunchEndpointSelectionPreferPublic\x10\x02\
-    *\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12PunchResultUnknown\x10\0\x12\
-    \x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\x11PunchResultFailed\x10\
-    \x02\x12\x16\n\x12PunchResultTimeout\x10\x03\x12\x17\n\x13PunchResultCan\
-    celed\x10\x04\x12\x17\n\x13PunchResultRejected\x10\x05\x12\x19\n\x15Punc\
-    hResultNoResponse\x10\x06\x12\x19\n\x15PunchResultSuperseded\x10\x07b\
-    \x06proto3\
+    \x15exit_node_local_ready\x18\x0f\x20\x01(\x08R\x12exitNodeLocalReady\
+    \x122\n\x15recovery_punch_target\x18\x10\x20\x01(\x07R\x13recoveryPunchT\
+    argetJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08J\x04\x08\x08\x10\tJ\x04\
+    \x08\t\x10\n\"$\n\tRouteItem\x12\x17\n\x07next_ip\x18\x01\x20\x01(\x07R\
+    \x06nextIp*\xb5\x02\n\x17RegistrationErrorReason\x12)\n%REGISTRATION_ERR\
+    OR_REASON_UNSPECIFIED\x10\0\x122\n.REGISTRATION_ERROR_REASON_INVALID_GRO\
+    UP_DOMAIN\x10\x01\x12(\n$REGISTRATION_ERROR_REASON_NOT_AUTHED\x10\x02\
+    \x12-\n)REGISTRATION_ERROR_REASON_INVALID_REQUEST\x10\x03\x12:\n6REGISTR\
+    ATION_ERROR_REASON_MISSING_HANDSHAKE_CAPABILITY\x10\x04\x12&\n\"REGISTRA\
+    TION_ERROR_REASON_INTERNAL\x10d*\x7f\n\x12GatewayChannelKind\x12\x1b\n\
+    \x17GATEWAY_CHANNEL_UNKNOWN\x10\0\x12\x17\n\x13GATEWAY_CHANNEL_UDP\x10\
+    \x01\x12\x18\n\x14GATEWAY_CHANNEL_QUIC\x10\x02\x12\x19\n\x15GATEWAY_CHAN\
+    NEL_HTTPS\x10\x03*\x83\x02\n\x19RefreshGatewayGrantResult\x12,\n(REFRESH\
+    _GATEWAY_GRANT_RESULT_UNSPECIFIED\x10\0\x12(\n$REFRESH_GATEWAY_GRANT_RES\
+    ULT_UPDATED\x10\x01\x12*\n&REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE\x10\
+    \x02\x128\n4REFRESH_GATEWAY_GRANT_RESULT_TEMPORARILY_UNAVAILABLE\x10\x03\
+    \x12(\n$REFRESH_GATEWAY_GRANT_RESULT_REVOKED\x10\x04*\x83\x02\n\x15Devic\
+    eAuthErrorReason\x12(\n$DEVICE_AUTH_ERROR_REASON_UNSPECIFIED\x10\0\x12.\
+    \n*DEVICE_AUTH_ERROR_REASON_CHALLENGE_EXPIRED\x10\x01\x120\n,DEVICE_AUTH\
+    _ERROR_REASON_DEVICE_KEY_MISMATCH\x10\x02\x12.\n*DEVICE_AUTH_ERROR_REASO\
+    N_INVALID_SIGNATURE\x10\x03\x12.\n*DEVICE_AUTH_ERROR_REASON_AUTH_CHECK_F\
+    AILED\x10\x04*U\n\x0bChannelMode\x12\x15\n\x11CHANNEL_MODE_AUTO\x10\0\
+    \x12\x17\n\x13CHANNEL_MODE_DIRECT\x10\x01\x12\x16\n\x12CHANNEL_MODE_RELA\
+    Y\x10\x02*'\n\x0cPunchNatType\x12\r\n\tSymmetric\x10\0\x12\x08\n\x04Cone\
+    \x10\x01*F\n\rPunchNatModel\x12\x07\n\x03All\x10\0\x12\x08\n\x04IPv4\x10\
+    \x01\x12\x08\n\x04IPv6\x10\x02\x12\x0b\n\x07IPv4Udp\x10\x03\x12\x0b\n\
+    \x07IPv6Udp\x10\x04*\xc1\x01\n\x12PunchTriggerReason\x12\x17\n\x13PunchT\
+    riggerUnknown\x10\0\x12\x1c\n\x18PunchTriggerStatusUpdate\x10\x01\x12\
+    \x1c\n\x18PunchTriggerRouteTimeout\x10\x02\x12!\n\x1dPunchTriggerReconne\
+    ctRecovery\x10\x03\x12\x1d\n\x19PunchTriggerManualRequest\x10\x04\x12\
+    \x14\n\x10StatusReportOnly\x10\x05*\xb5\x01\n\x11PunchSessionPhase\x12\
+    \x15\n\x11PunchPhaseUnknown\x10\0\x12\x17\n\x13PunchPhaseScheduled\x10\
+    \x01\x12\x15\n\x11PunchPhaseSending\x10\x02\x12\x15\n\x11PunchPhaseWaiti\
+    ng\x10\x03\x12\x15\n\x11PunchPhaseSuccess\x10\x04\x12\x15\n\x11PunchPhas\
+    eTimeout\x10\x05\x12\x14\n\x10PunchPhaseFailed\x10\x06*\x88\x01\n\x1cPun\
+    chEndpointSelectionPolicy\x12!\n\x1dPunchEndpointSelectionDefault\x10\0\
+    \x12\x1d\n\x19PunchEndpointSelectionAll\x10\x01\x12&\n\"PunchEndpointSel\
+    ectionPreferPublic\x10\x02*\xd8\x01\n\x0fPunchResultCode\x12\x16\n\x12Pu\
+    nchResultUnknown\x10\0\x12\x16\n\x12PunchResultSuccess\x10\x01\x12\x15\n\
+    \x11PunchResultFailed\x10\x02\x12\x16\n\x12PunchResultTimeout\x10\x03\
+    \x12\x17\n\x13PunchResultCanceled\x10\x04\x12\x17\n\x13PunchResultReject\
+    ed\x10\x05\x12\x19\n\x15PunchResultNoResponse\x10\x06\x12\x19\n\x15Punch\
+    ResultSuperseded\x10\x07b\x06proto3\
 ";
 
 /// `FileDescriptorProto` object which was a source for this generated file

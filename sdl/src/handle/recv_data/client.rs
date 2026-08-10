@@ -406,9 +406,7 @@ impl<Device> ClientPacketHandler<Device> {
         {
             self.context
                 .control_session
-                .request_punch_status_report_with_nat_ready(
-                    crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
-                );
+                .request_direct_recovery_for(peer_ip);
         }
     }
 }
