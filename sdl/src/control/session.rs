@@ -11,7 +11,8 @@ use protobuf::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::{AuthRequestConfig, ExitNodeLocalState, SdlContextConfig};
+use crate::core::context::{AuthRequestConfig, SdlContextConfig};
+use crate::core::ExitNodeLocalState;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route_manager::RouteManager;
@@ -91,7 +92,7 @@ pub struct ControlSession {
 }
 
 impl ControlSession {
-    pub fn new(
+    pub(crate) fn new(
         channel: Http3Channel,
         config: SdlContextConfig,
         auth_request: Arc<RwLock<AuthRequestConfig>>,

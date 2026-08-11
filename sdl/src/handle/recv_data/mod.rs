@@ -76,7 +76,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
     }
 
-    pub fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
         let server = ServerPacketHandler::new(context.clone(), device.clone(), callback);
         let client = ClientPacketHandler::new(context.clone(), device.clone());
         let turn = TurnPacketHandler::new(context.clone());
@@ -101,7 +101,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             log_sampled_stale_drop(net_packet.head(), route_key.addr);
             return Ok(());
         }
-        let current_device = self.context.current_device();
+        let current_device = self.context.current_device.load();
         let dest = net_packet.destination();
         if dest == current_device.virtual_ip
             || dest.is_broadcast()

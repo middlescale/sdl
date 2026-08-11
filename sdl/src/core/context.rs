@@ -36,14 +36,14 @@ use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
 
 #[derive(Clone, Debug, Default)]
-pub struct AuthRequestConfig {
+pub(crate) struct AuthRequestConfig {
     pub user_id: Option<String>,
     pub group: Option<String>,
     pub ticket: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub struct SdlContextConfig {
+pub(crate) struct SdlContextConfig {
     pub name: String,
     pub token: String,
     pub ip: Option<Ipv4Addr>,
@@ -59,14 +59,14 @@ pub struct SdlContextConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct PendingDnsQuery {
+pub(crate) struct PendingDnsQuery {
     pub client_ip: Ipv4Addr,
     pub dns_server_ip: Ipv4Addr,
     pub client_port: u16,
 }
 
 impl PendingDnsQuery {
-    pub fn new(client_ip: Ipv4Addr, dns_server_ip: Ipv4Addr, client_port: u16) -> Self {
+    pub(crate) fn new(client_ip: Ipv4Addr, dns_server_ip: Ipv4Addr, client_port: u16) -> Self {
         Self {
             client_ip,
             dns_server_ip,
@@ -75,8 +75,8 @@ impl PendingDnsQuery {
     }
 }
 
-pub struct PendingRenameRequest {
-    pub responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
+pub(crate) struct PendingRenameRequest {
+    pub(crate) responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
 }
 
 pub(crate) const PENDING_REQUEST_TTL_MS: u64 = 30_000;
@@ -372,7 +372,7 @@ pub(crate) struct TunSubsystem {
 // `Arc` state or local handles whose `Clone` implementations share inner state.
 // Keep new fields on that model; this type is cloned into callbacks and workers.
 #[derive(Clone)]
-pub struct SdlContext {
+pub(crate) struct SdlContext {
     pub(crate) config: SdlContextConfig,
     pub(crate) auth_request: Arc<RwLock<AuthRequestConfig>>,
     pub(crate) peers: PeerSubsystem,
@@ -417,7 +417,7 @@ impl SdlContext {
         if !self.auth_pending_block_applied.load(Ordering::Acquire) {
             return false;
         }
-        self.reset_peer_epoch();
+        self.peers.reset_epoch();
         true
     }
 
@@ -444,92 +444,6 @@ impl SdlContext {
         }
     }
 
-    pub fn route_manager(&self) -> RouteManager {
-        self.route_manager.clone()
-    }
-
-    pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.current_device.load()
-    }
-
-    pub fn current_device_handle(&self) -> Arc<AtomicCell<CurrentDeviceInfo>> {
-        self.current_device.clone()
-    }
-
-    pub fn connection_status(&self) -> crate::handle::ConnectStatus {
-        self.current_device().status
-    }
-
-    pub fn change_connection_status(
-        &self,
-        connect_status: crate::handle::ConnectStatus,
-    ) -> CurrentDeviceInfo {
-        crate::handle::change_status(&self.current_device, connect_status)
-    }
-
-    pub fn virtual_gateway(&self) -> Ipv4Addr {
-        self.current_device().virtual_gateway
-    }
-
-    pub fn is_gateway_vip(&self, ip: &Ipv4Addr) -> bool {
-        self.current_device().is_gateway_vip(ip)
-    }
-
-    pub fn peer_nat_info(&self, ip: &Ipv4Addr) -> Option<NatInfo> {
-        self.peers.nat_info(ip)
-    }
-
-    pub fn peer_list(&self) -> Vec<PeerInfo> {
-        self.peers.list()
-    }
-
-    pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
-        self.peers.info(ip)
-    }
-
-    pub fn has_peer(&self, ip: &Ipv4Addr) -> bool {
-        self.peers.contains(ip)
-    }
-
-    pub fn peer_preferred_channel_mode(
-        &self,
-        ip: &Ipv4Addr,
-    ) -> Option<crate::proto::message::ChannelMode> {
-        self.peers.preferred_channel_mode(ip)
-    }
-
-    pub fn peer_identity_for_vip(&self, ip: &Ipv4Addr) -> Option<PeerIdentity> {
-        self.peers.identity_for_vip(ip)
-    }
-
-    pub fn peer_vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
-        self.peers.vip_for_identity(identity)
-    }
-
-    pub fn peer_epoch(&self) -> u16 {
-        self.peers.epoch()
-    }
-
-    pub fn reset_peer_epoch(&self) {
-        self.peers.reset_epoch();
-    }
-
-    pub fn replace_peer_devices(
-        &self,
-        epoch: u16,
-        next_devices: HashMap<Ipv4Addr, PeerInfo>,
-    ) -> Result<HashMap<Ipv4Addr, PeerInfo>, u16> {
-        self.peers.replace_devices_if_fresh(epoch, next_devices)
-    }
-
-    pub fn exit_node_state(&self) -> ExitNodeLocalState {
-        self.exit_node.snapshot()
-    }
-
-    pub fn exit_node_local_ready(&self) -> bool {
-        self.exit_node.local_ready()
-    }
-
     pub fn set_exit_node_state(&self, state: ExitNodeLocalState) -> bool {
         let Some(should_report_status) = self.exit_node.replace_state(state) else {
             return false;
@@ -545,60 +459,6 @@ impl SdlContext {
             || self
                 .route_manager
                 .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
-    }
-
-    pub fn replace_dns_profile(&self, profile: Option<DnsProfile>) -> bool {
-        self.dns.replace_profile(profile)
-    }
-
-    pub fn is_dns_service_ip(&self, ip: Ipv4Addr) -> bool {
-        self.dns.is_service_ip(ip)
-    }
-
-    pub fn remember_dns_query(
-        &self,
-        client_ip: Ipv4Addr,
-        dns_server_ip: Ipv4Addr,
-        client_port: u16,
-    ) -> u64 {
-        self.dns
-            .remember_query(client_ip, dns_server_ip, client_port)
-    }
-
-    pub fn forget_dns_query(&self, request_id: u64) {
-        self.dns.forget_query(request_id);
-    }
-
-    pub fn take_dns_query(&self, request_id: u64) -> Option<PendingDnsQuery> {
-        self.dns.take_query(request_id)
-    }
-
-    pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
-        self.dns.primary_service_ip()
-    }
-
-    pub fn remember_rename_request(
-        &self,
-        responder: mpsc::Sender<Result<RenameRequestOutcome, String>>,
-    ) -> u64 {
-        self.pending_rename_requests
-            .remember(PendingRenameRequest { responder })
-    }
-
-    pub fn forget_rename_request(&self, request_id: u64) {
-        self.pending_rename_requests.forget(request_id);
-    }
-
-    pub fn complete_rename_request(
-        &self,
-        request_id: u64,
-        result: Result<RenameRequestOutcome, String>,
-    ) -> bool {
-        let Some(request) = self.pending_rename_requests.take(request_id) else {
-            return false;
-        };
-        let _ = request.responder.send(result);
-        true
     }
 
     #[cfg(feature = "integrated_tun")]
@@ -800,7 +660,10 @@ impl SdlContext {
         }
 
         if wants("routes") {
-            root.insert("routes".into(), self.snapshot_routes(self.current_device()));
+            root.insert(
+                "routes".into(),
+                self.snapshot_routes(self.current_device.load()),
+            );
         }
 
         if wants("traffic") {
@@ -811,7 +674,7 @@ impl SdlContext {
     }
 
     fn snapshot_runtime(&self) -> Value {
-        let current_device = self.current_device();
+        let current_device = self.current_device.load();
         let dns_profile = self.dns.profile.read().clone();
         let auth_request = self.auth_request.read().clone();
         json!({

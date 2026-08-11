@@ -212,7 +212,7 @@ pub(crate) fn handle(
                         )
                     };
                     if let LocalDnsResolution::Answered(dns_response_payload) = decision {
-                        let pending = crate::core::PendingDnsQuery::new(
+                        let pending = crate::core::context::PendingDnsQuery::new(
                             src_ip,
                             dest_ip,
                             udp_packet.source_port(),

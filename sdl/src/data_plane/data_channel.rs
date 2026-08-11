@@ -22,21 +22,21 @@ enum DataPath {
 }
 
 impl DataChannel {
-    pub fn new(context: Weak<SdlContext>) -> Self {
+    pub(crate) fn new(context: Weak<SdlContext>) -> Self {
         Self { context }
     }
 
     pub fn allows_gateway_relay(&self) -> bool {
         self.context
             .upgrade()
-            .map(|context| !context.route_manager().use_channel_type().is_only_p2p())
+            .map(|context| !context.route_manager.use_channel_type().is_only_p2p())
             .unwrap_or(false)
     }
 
     pub fn is_dns_service_ip(&self, vip: &Ipv4Addr) -> bool {
         self.context
             .upgrade()
-            .map(|context| context.is_dns_service_ip(*vip))
+            .map(|context| context.dns.is_service_ip(*vip))
             .unwrap_or(false)
     }
 
@@ -46,9 +46,9 @@ impl DataChannel {
         vip: &Ipv4Addr,
     ) -> io::Result<RouteKind> {
         let context = self.context()?;
-        let route_manager = context.route_manager();
-        let is_gateway_vip = context.is_gateway_vip(vip);
-        let peer_channel_mode = context.peer_preferred_channel_mode(vip);
+        let route_manager = context.route_manager.clone();
+        let is_gateway_vip = context.current_device.load().is_gateway_vip(vip);
+        let peer_channel_mode = context.peers.preferred_channel_mode(vip);
         let measured_direct_route = if !is_gateway_vip {
             route_manager.activate_peer(vip);
             let (measured_direct_route, has_direct_route) = route_manager.payload_route_read(vip);
@@ -90,7 +90,7 @@ impl DataChannel {
                             route_key,
                             err
                         );
-                            let peer_identity = context.peer_identity_for_vip(vip);
+                            let peer_identity = context.peers.identity_for_vip(vip);
                             context
                                 .gateway
                                 .sessions
@@ -109,7 +109,7 @@ impl DataChannel {
                 }
             }
             Some(DataPath::GatewayRelay) => {
-                let peer_identity = context.peer_identity_for_vip(vip);
+                let peer_identity = context.peers.identity_for_vip(vip);
                 context
                     .gateway
                     .sessions
@@ -140,12 +140,14 @@ impl DataChannel {
         payload: &[u8],
     ) -> io::Result<()> {
         let context = self.context()?;
-        let request_id = context.remember_dns_query(client_ip, dns_server_ip, client_port);
+        let request_id = context
+            .dns
+            .remember_query(client_ip, dns_server_ip, client_port);
         let query_payload =
             match crate::net::dns::tunnel::build_dns_query_payload(request_id, payload) {
                 Ok(payload) => payload,
                 Err(err) => {
-                    context.forget_dns_query(request_id);
+                    context.dns.forget_query(request_id);
                     return Err(err);
                 }
             };
@@ -153,7 +155,7 @@ impl DataChannel {
             crate::protocol::service_packet::Protocol::DnsQueryRequest,
             &query_payload,
         ) {
-            context.forget_dns_query(request_id);
+            context.dns.forget_query(request_id);
             return Err(io::Error::other(err));
         }
         Ok(())

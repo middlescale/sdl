@@ -14,9 +14,10 @@ use crate::core::ExitNodeRoute;
 use crate::core::{
     context::{
         AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewaySubsystem,
-        PeerSubsystem, PendingRequestTable, RenameRequestOutcome, PENDING_REQUEST_TTL_MS,
+        PeerSubsystem, PendingRenameRequest, PendingRequestTable, RenameRequestOutcome,
+        SdlContextConfig, PENDING_REQUEST_TTL_MS,
     },
-    Config, SdlContext, SdlContextConfig,
+    Config, SdlContext,
 };
 use crate::core::{PeerIdentity, PeerInfo};
 use crate::data_plane::data_channel::DataChannel;
@@ -427,10 +428,10 @@ impl Sdl {
         &self.config.name
     }
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.context.current_device()
+        self.context.current_device.load()
     }
     pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
-        self.context.primary_dns_service_ip()
+        self.context.dns.primary_service_ip()
     }
     #[cfg(feature = "integrated_tun")]
     pub fn tun_device_name(&self) -> Option<String> {
@@ -440,42 +441,40 @@ impl Sdl {
         self.context.control_session.server_addr()
     }
     pub fn current_device_info(&self) -> Arc<AtomicCell<CurrentDeviceInfo>> {
-        self.context.current_device_handle()
+        self.context.current_device.clone()
     }
     pub fn peer_nat_info(&self, ip: &Ipv4Addr) -> Option<NatInfo> {
-        self.context.peer_nat_info(ip)
+        self.context.peers.nat_info(ip)
     }
     pub fn connection_status(&self) -> ConnectStatus {
-        self.context.connection_status()
+        self.context.current_device.load().status
     }
     pub fn nat_info(&self) -> NatInfo {
         self.context.nat_test.nat_info()
     }
     pub fn device_list(&self) -> Vec<PeerInfo> {
-        self.context.peer_list()
+        self.context.peers.list()
     }
     pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
-        self.context.peer_info(ip)
+        self.context.peers.info(ip)
     }
     pub fn peer_vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
-        self.context.peer_vip_for_identity(identity)
+        self.context.peers.vip_for_identity(identity)
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
-        self.context.route_manager().best_route(ip)
+        self.context.route_manager.best_route(ip)
     }
     pub fn is_peer_active(&self, ip: &Ipv4Addr) -> bool {
-        self.context.route_manager().is_peer_active(ip)
+        self.context.route_manager.is_peer_active(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
-        self.context.is_gateway_vip(ip)
+        self.context.current_device.load().is_gateway_vip(ip)
     }
     pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        self.context
-            .route_manager()
-            .peer_for_direct_route(route_key)
+        self.context.route_manager.peer_for_direct_route(route_key)
     }
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        self.context.route_manager().snapshot_routes()
+        self.context.route_manager.snapshot_routes()
     }
     pub fn gateway_session_summary(
         &self,
@@ -491,18 +490,18 @@ impl Sdl {
         self.context.gateway.sessions.set_manual_endpoint(endpoint)
     }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
-        self.context.route_manager().use_channel_type()
+        self.context.route_manager.use_channel_type()
     }
     pub fn set_use_channel_type(
         &self,
         use_channel_type: crate::data_plane::use_channel_type::UseChannelType,
     ) {
-        let previous = self.context.route_manager().use_channel_type();
+        let previous = self.context.route_manager.use_channel_type();
         if previous == use_channel_type {
             return;
         }
         self.context
-            .route_manager()
+            .route_manager
             .set_use_channel_type(use_channel_type);
         if use_channel_type.is_only_relay() {
             if let Err(err) = self
@@ -543,24 +542,27 @@ impl Sdl {
         timeout: Duration,
     ) -> anyhow::Result<RenameRequestOutcome> {
         let (sender, receiver) = mpsc::channel();
-        let request_id = self.context.remember_rename_request(sender);
+        let request_id = self
+            .context
+            .pending_rename_requests
+            .remember(PendingRenameRequest { responder: sender });
         if let Err(err) = self
             .context
             .control_session
             .send_device_rename_request(request_id, new_name)
         {
-            self.context.forget_rename_request(request_id);
+            self.context.pending_rename_requests.forget(request_id);
             return Err(err);
         }
         match receiver.recv_timeout(timeout) {
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(reason)) => anyhow::bail!("rename rejected: {}", reason),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.context.forget_rename_request(request_id);
+                self.context.pending_rename_requests.forget(request_id);
                 anyhow::bail!("rename request timed out")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.context.forget_rename_request(request_id);
+                self.context.pending_rename_requests.forget(request_id);
                 anyhow::bail!("rename response channel disconnected")
             }
         }
@@ -572,12 +574,12 @@ impl Sdl {
         }
     }
     pub fn exit_node_state(&self) -> ExitNodeLocalState {
-        self.context.exit_node_state()
+        self.context.exit_node.snapshot()
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
-        let current_device = self.context.current_device();
+        let current_device = self.context.current_device.load();
         self.context
-            .route_manager()
+            .route_manager
             .snapshot_route_states(current_device.virtual_gateway)
     }
     pub fn up_stream(&self) -> u64 {

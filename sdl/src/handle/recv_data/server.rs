@@ -137,7 +137,7 @@ impl ActivePunchState {
 }
 
 impl<Call, Device> ServerPacketHandler<Call, Device> {
-    pub fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
         Self {
             context,
             device,
@@ -171,7 +171,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
             return Ok(());
         }
         self.context
-            .route_manager()
+            .route_manager
             .touch_path(&net_packet.source(), &route_key);
         self.reconcile_punch_sessions(current_device)?;
         if net_packet.protocol() == Protocol::Error
@@ -231,7 +231,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
                         if from_gateway_peer {
-                            if let Some(peer) = self.context.peer_identity_for_vip(&source) {
+                            if let Some(peer) = self.context.peers.identity_for_vip(&source) {
                                 self.context
                                     .gateway
                                     .sessions
@@ -468,7 +468,11 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             .map(|peer| (peer.virtual_ip, peer))
             .collect();
         let previous_peers = {
-            let previous_peers = match self.context.replace_peer_devices(epoch, next_devices) {
+            let previous_peers = match self
+                .context
+                .peers
+                .replace_devices_if_fresh(epoch, next_devices)
+            {
                 Ok(previous_peers) => previous_peers,
                 Err(current_epoch) => {
                     log::info!(
@@ -494,7 +498,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         {
             let mut sessions = self.punch_active_sessions.lock();
             sessions.retain(|peer_ip, state| {
-                if self.context.route_manager().direct_path_count(peer_ip) > 0 {
+                if self.context.route_manager.direct_path_count(peer_ip) > 0 {
                     succeeded.push(state.sessions());
                     return false;
                 }
@@ -551,7 +555,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let selected_endpoint = selected_endpoint_for_result(
             code,
             self.context
-                .route_manager()
+                .route_manager
                 .direct_route(&Ipv4Addr::from(target)),
         );
         log::info!(
@@ -614,7 +618,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     {
                         return;
                     }
-                    if context.route_manager().direct_path_count(&peer_ip) > 0 {
+                    if context.route_manager.direct_path_count(&peer_ip) > 0 {
                         let state = guard.remove(&peer_ip).expect("active punch state");
                         Some((
                             state.sessions(),
@@ -655,7 +659,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                     );
                     let selected_endpoint = selected_endpoint_for_result(
                         code,
-                        context.route_manager().direct_route(&peer_ip),
+                        context.route_manager.direct_route(&peer_ip),
                     );
                     for punch_session in sessions {
                         if let Err(err) = send_punch_result_via_control(
@@ -797,7 +801,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);
                     self.context
-                        .route_manager()
+                        .route_manager
                         .add_path_if_absent(virtual_gateway, route);
                     let public_ip = response.public_ip.into();
                     let public_port = response.public_port as u16;
@@ -809,7 +813,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         .nat_test
                         .update_addr(public_ip, observed_udp_port);
                     let old = current_device;
-                    let dns_changed = self.context.replace_dns_profile(dns_profile);
+                    let dns_changed = self.context.dns.replace_profile(dns_profile);
                     let vip_changed = old.virtual_ip != virtual_ip
                         || old.virtual_gateway != virtual_gateway
                         || old.virtual_netmask != virtual_netmask;
@@ -1027,10 +1031,15 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 } else {
                     Err(response.reason.clone())
                 };
-                if !self
+                let rename_completed = self
                     .context
-                    .complete_rename_request(response.request_id, result)
-                {
+                    .pending_rename_requests
+                    .take(response.request_id)
+                    .map(|request| {
+                        let _ = request.responder.send(result);
+                    })
+                    .is_some();
+                if !rename_completed {
                     if response.ok
                         && !response.pending_approval
                         && !response.applied_name.is_empty()
@@ -1144,7 +1153,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
             service_packet::Protocol::DnsQueryResponse => {
                 let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("DnsQueryResponse {:?}", e)))?;
-                let Some(pending) = self.context.take_dns_query(response.request_id) else {
+                let Some(pending) = self.context.dns.take_query(response.request_id) else {
                     log::debug!(
                         "drop dns response for unknown request_id={}",
                         response.request_id
@@ -1221,7 +1230,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 };
                 let local_forced_relay = self
                     .context
-                    .route_manager()
+                    .route_manager
                     .use_channel_type()
                     .is_only_relay();
                 let peer_forced_relay =
@@ -1529,14 +1538,16 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 self.callback.error(err);
             }
             InErrorPacket::Disconnect => {
-                self.context
-                    .change_connection_status(ConnectStatus::Connecting);
+                crate::handle::change_status(
+                    &self.context.current_device,
+                    ConnectStatus::Connecting,
+                );
                 let err = ErrorInfo::new(ErrorType::Disconnect);
                 self.callback.error(err);
                 let _device_list_update_guard = self.device_list_update_lock.lock();
                 //掉线epoch要归零
                 {
-                    self.context.reset_peer_epoch();
+                    self.context.peers.reset_epoch();
                 }
                 self.context.peers.crypto.clear_all();
                 self.context.control_session.send_handshake()?;
@@ -1593,9 +1604,9 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, learned_metric, rt);
                 self.context
-                    .route_manager()
+                    .route_manager
                     .add_path(net_packet.source(), route);
-                let epoch = self.context.peer_epoch();
+                let epoch = self.context.peers.epoch();
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
                     self.context

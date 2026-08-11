@@ -12,7 +12,7 @@ use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::udp::udp::UdpPacket;
 
-use crate::core::PendingDnsQuery;
+use crate::core::context::PendingDnsQuery;
 use crate::core::SdlContext;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::extension::handle_extension_tail;
@@ -85,7 +85,7 @@ pub struct ClientPacketHandler<Device> {
 }
 
 impl<Device: DeviceWrite> ClientPacketHandler<Device> {
-    pub fn new(context: Arc<SdlContext>, device: Device) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: Device) -> Self {
         let (exit_node_dns_tx, exit_node_dns_rx) = sync_channel(EXIT_NODE_DNS_QUEUE_CAPACITY);
         let exit_node_dns_rx = Arc::new(Mutex::new(exit_node_dns_rx));
         for worker_index in 0..EXIT_NODE_DNS_WORKER_COUNT {
@@ -136,7 +136,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             );
             return Ok(false);
         }
-        let Some(peer_identity) = self.context.peer_identity_for_vip(peer_ip) else {
+        let Some(peer_identity) = self.context.peers.identity_for_vip(peer_ip) else {
             log_sampled_drop(
                 &INVALID_CIPHER_DROP_COUNT,
                 &INVALID_CIPHER_DROP_LOG_LIMITER,
@@ -188,14 +188,14 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
             return Ok(false);
         }
         let dns_server_ip = ipv4.destination_ip();
-        if !self.context.is_dns_service_ip(dns_server_ip) {
+        if !self.context.dns.is_service_ip(dns_server_ip) {
             return Ok(false);
         }
         let udp = UdpPacket::new(ipv4.source_ip(), dns_server_ip, ipv4.payload())?;
         if udp.destination_port() != 53 || udp.payload().is_empty() {
             return Ok(false);
         }
-        if !self.context.exit_node_local_ready() {
+        if !self.context.exit_node.local_ready() {
             return Ok(false);
         }
 
@@ -236,7 +236,8 @@ fn encrypt_by_route<B: AsRef<[u8]> + AsMut<[u8]>>(
     net_packet: &mut NetPacket<B>,
 ) -> anyhow::Result<()> {
     let peer_identity = context
-        .peer_identity_for_vip(peer_ip)
+        .peers
+        .identity_for_vip(peer_ip)
         .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", peer_ip))?;
     context
         .peers
@@ -266,7 +267,7 @@ fn send_reply_by_route<B: AsRef<[u8]>>(
     } else {
         return Err(anyhow!("unsupported reply route {:?}", route_key));
     }
-    let gateway_vip = context.virtual_gateway();
+    let gateway_vip = context.current_device.load().virtual_gateway;
     if destination != gateway_vip {
         context
             .data_plane_stats
@@ -319,7 +320,7 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
         let source = net_packet.source();
-        if requires_peer_decrypt(source, current_device) && !self.context.has_peer(&source) {
+        if requires_peer_decrypt(source, current_device) && !self.context.peers.contains(&source) {
             log_sampled_drop(
                 &UNKNOWN_PEER_DROP_COUNT,
                 &UNKNOWN_PEER_DROP_LOG_LIMITER,
@@ -358,10 +359,10 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
         }
         if self
             .context
-            .route_manager()
+            .route_manager
             .has_direct_path(&source, &route_key)
         {
-            self.context.route_manager().touch_path(&source, &route_key);
+            self.context.route_manager.touch_path(&source, &route_key);
         }
         //处理扩展
         let net_packet = if net_packet.is_extension() {
@@ -395,10 +396,10 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
 
 impl<Device> ClientPacketHandler<Device> {
     fn activate_peer_for_payload(&self, peer_ip: Ipv4Addr) {
-        if self.context.is_gateway_vip(&peer_ip) {
+        if self.context.current_device.load().is_gateway_vip(&peer_ip) {
             return;
         }
-        let route_manager = self.context.route_manager();
+        let route_manager = self.context.route_manager.clone();
         route_manager.activate_peer(&peer_ip);
         let (_, has_direct_route) = route_manager.payload_route_read(&peer_ip);
         if !route_manager.use_channel_type().is_only_relay()
@@ -607,7 +608,7 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     .probe_tracker
                     .ping_loss_rate(source, route_key);
                 let route = Route::from(route_key, metric, rt).with_loss_rate(loss_rate);
-                self.context.route_manager().add_path(source, route);
+                self.context.route_manager.add_path(source, route);
             }
             ControlPacket::PunchRequest => {
                 log::info!("PunchRequest={:?},source={}", route_key, source);
@@ -665,10 +666,8 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                     return Ok(());
                 }
                 let route = Route::from_default_rt(route_key, metric);
-                self.context
-                    .route_manager()
-                    .add_path_if_absent(source, route);
-                if let Err(err) = self.context.route_manager().send_immediate_heartbeat(
+                self.context.route_manager.add_path_if_absent(source, route);
+                if let Err(err) = self.context.route_manager.send_immediate_heartbeat(
                     *current_device,
                     source,
                     route_key,

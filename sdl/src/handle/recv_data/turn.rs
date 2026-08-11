@@ -13,7 +13,7 @@ pub struct TurnPacketHandler {
 }
 
 impl TurnPacketHandler {
-    pub fn new(context: Arc<SdlContext>) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>) -> Self {
         Self { context }
     }
 }
@@ -34,7 +34,7 @@ impl PacketHandler for TurnPacketHandler {
                 return Ok(());
             }
             let destination = net_packet.destination();
-            if let Some(route) = self.context.route_manager().best_route(&destination) {
+            if let Some(route) = self.context.route_manager.best_route(&destination) {
                 if route.addr == route_key.addr {
                     //防止环路
                     log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());

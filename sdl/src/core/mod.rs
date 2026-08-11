@@ -8,17 +8,15 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
-pub use context::{
-    AuthRequestConfig, ExitNodeLocalState, PendingDnsQuery, RenameRequestOutcome, SdlContext,
-    SdlContextConfig,
-};
+pub(crate) use context::SdlContext;
+pub use context::{ExitNodeLocalState, RenameRequestOutcome};
 pub(crate) use exit_node_route::ExitNodeRoute;
 pub use identity::PeerIdentity;
 pub use peer::{PeerInfo, PeerStatus, PeerTable};
 use std::net::{Ipv4Addr, SocketAddr};
 
 mod bootstrap;
-mod context;
+pub(crate) mod context;
 mod exit_node_route;
 mod identity;
 mod peer;

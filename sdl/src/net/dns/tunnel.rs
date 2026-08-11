@@ -5,7 +5,7 @@ use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::ip::ipv4::protocol::Protocol as IpProtocol;
 use sdl_packet::udp::udp::UdpPacket;
 
-use crate::core::PendingDnsQuery;
+use crate::core::context::PendingDnsQuery;
 use crate::proto::message::DnsQueryRequest;
 
 pub(crate) fn build_dns_query_payload(request_id: u64, query: &[u8]) -> io::Result<Vec<u8>> {
@@ -63,7 +63,7 @@ mod tests {
     use sdl_packet::ip::ipv4::packet::IpV4Packet;
     use sdl_packet::udp::udp::UdpPacket;
 
-    use crate::core::PendingDnsQuery;
+    use crate::core::context::PendingDnsQuery;
 
     use super::build_dns_response_packet;
 
