@@ -34,7 +34,7 @@ impl PacketHandler for TurnPacketHandler {
                 return Ok(());
             }
             let destination = net_packet.destination();
-            if let Some(route) = self.context.route_manager.best_route(&destination) {
+            if let Some(route) = self.context.routes().best_route(&destination) {
                 if route.addr == route_key.addr {
                     //防止环路
                     log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());
@@ -43,6 +43,7 @@ impl PacketHandler for TurnPacketHandler {
                 if route.metric <= ttl {
                     return self
                         .context
+                        .services
                         .udp_channel
                         .send_by_key(net_packet.buffer(), route.route_key())
                         .context("转发失败");

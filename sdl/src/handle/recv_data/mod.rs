@@ -53,14 +53,20 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
         //判断stun响应包
         if route_key.protocol().is_udp() {
-            if let Ok(rs) = self.context.nat_test.recv_data(route_key.addr, buf) {
+            if let Ok(rs) = self
+                .context
+                .services
+                .nat_test
+                .recv_data(route_key.addr, buf)
+            {
                 if rs {
                     if self
                         .context
+                        .services
                         .control_session
                         .supports_udp_endpoint_report_v1()
                     {
-                        self.context.control_session.report_client_status();
+                        self.context.services.control_session.report_client_status();
                     }
                     return;
                 }
@@ -101,7 +107,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
             log_sampled_stale_drop(net_packet.head(), route_key.addr);
             return Ok(());
         }
-        let current_device = self.context.current_device.load();
+        let current_device = self.context.state.current_device.load();
         let dest = net_packet.destination();
         if dest == current_device.virtual_ip
             || dest.is_broadcast()

@@ -368,12 +368,11 @@ pub(crate) struct TunSubsystem {
     pub(crate) device_helper: TunDeviceHelper,
 }
 
-// `SdlContext` is intentionally shallow-cloneable: subsystem fields either wrap
-// `Arc` state or local handles whose `Clone` implementations share inner state.
-// Keep new fields on that model; this type is cloned into callbacks and workers.
+// State owned by the local node.  These components primarily hold observable
+// runtime state; their APIs may update that state but do not own background
+// transport lifecycle.
 #[derive(Clone)]
-pub(crate) struct SdlContext {
-    pub(crate) config: SdlContextConfig,
+pub(crate) struct SdlNodeState {
     pub(crate) auth_request: Arc<RwLock<AuthRequestConfig>>,
     pub(crate) peers: PeerSubsystem,
     pub(crate) gateway: GatewaySubsystem,
@@ -385,28 +384,65 @@ pub(crate) struct SdlContext {
     pub(crate) auth_pending_block_applied: Arc<AtomicBool>,
     pub(crate) pending_rename_requests: Arc<PendingRequestTable<PendingRenameRequest>>,
     pub(crate) current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    pub(crate) debug_watch: DebugWatch,
-    pub(crate) nat_test: NatTest,
-    pub(crate) control_session: ControlSession,
-    pub(crate) route_manager: RouteManager,
     pub(crate) data_plane_stats: DataPlaneStats,
-    pub(crate) udp_channel: UdpChannel,
-    pub(crate) punch_coordinator: PunchCoordinator,
+    pub(crate) debug_watch: DebugWatch,
     #[cfg(feature = "integrated_tun")]
     pub(crate) tun: TunSubsystem,
 }
 
+// Active runtime components that own transport, path-maintenance, or probing
+// behavior.  Keeping them separate from `SdlNodeState` makes message-sending
+// and lifecycle work explicit at call sites.
+#[derive(Clone)]
+pub(crate) struct SdlServices {
+    pub(crate) nat_test: NatTest,
+    pub(crate) control_session: ControlSession,
+    pub(crate) route_manager: RouteManager,
+    pub(crate) udp_channel: UdpChannel,
+    pub(crate) punch_coordinator: PunchCoordinator,
+}
+
+// `SdlContext` is intentionally shallow-cloneable: state and services either
+// wrap `Arc` state or local handles whose `Clone` implementations share inner
+// state. Keep new fields on that model; this type is cloned into callbacks and
+// workers.
+#[derive(Clone)]
+pub(crate) struct SdlContext {
+    pub(crate) config: SdlContextConfig,
+    pub(crate) state: SdlNodeState,
+    pub(crate) services: SdlServices,
+}
+
 impl SdlContext {
-    pub fn block_data_plane_for_auth_pending(&self) {
-        if self.auth_pending_block_applied.swap(true, Ordering::AcqRel) {
+    // These expose subsystem boundaries without restoring the old facade of
+    // one forwarding method per subsystem operation.  Callers that use a
+    // subsystem repeatedly should bind the returned reference locally.
+    pub(crate) fn peers(&self) -> &PeerSubsystem {
+        &self.state.peers
+    }
+
+    pub(crate) fn routes(&self) -> &RouteManager {
+        &self.services.route_manager
+    }
+
+    pub(crate) fn control_session(&self) -> &ControlSession {
+        &self.services.control_session
+    }
+
+    pub(crate) fn block_data_plane_for_auth_pending(&self) {
+        if self
+            .state
+            .auth_pending_block_applied
+            .swap(true, Ordering::AcqRel)
+        {
             return;
         }
-        self.peers.reset_for_auth_pending();
-        self.route_manager.clear_all_paths();
-        self.gateway.reset_for_auth_pending();
-        self.dns.reset_for_auth_pending();
-        self.pending_rename_requests.clear();
-        self.exit_node.reset_for_auth_pending();
+        self.state.peers.reset_for_auth_pending();
+        self.services.route_manager.clear_all_paths();
+        self.state.gateway.reset_for_auth_pending();
+        self.state.dns.reset_for_auth_pending();
+        self.state.pending_rename_requests.clear();
+        self.state.exit_node.reset_for_auth_pending();
     }
 
     // The caller must hold ServerPacketHandler::device_list_update_lock and
@@ -414,28 +450,36 @@ impl SdlContext {
     // A long auth-pending retry loop can otherwise move the local epoch ahead
     // of a restarted control server's epoch.
     pub(crate) fn reset_peer_epoch_for_auth_pending_recovery(&self) -> bool {
-        if !self.auth_pending_block_applied.load(Ordering::Acquire) {
+        if !self
+            .state
+            .auth_pending_block_applied
+            .load(Ordering::Acquire)
+        {
             return false;
         }
-        self.peers.reset_epoch();
+        self.state.peers.reset_epoch();
         true
     }
 
     // Clear only after a successful RegistrationResponse has committed its
     // authoritative snapshot.  A later auth failure must tear down once too.
     pub(crate) fn finish_auth_pending_recovery(&self) {
-        self.auth_pending_block_applied
+        self.state
+            .auth_pending_block_applied
             .store(false, Ordering::Release);
     }
 
     pub(crate) fn apply_selected_exit_node_route(&self) {
-        let state = self.exit_node.state.read().clone();
+        let state = self.state.exit_node.state.read().clone();
         let Some(selected_identity) = state.selected_identity else {
-            self.exit_node.route.set_default_next_hop(None);
+            self.state.exit_node.route.set_default_next_hop(None);
             return;
         };
-        let selected_peer_ip = self.peers.usable_exit_node_vip(&selected_identity);
-        self.exit_node.route.set_default_next_hop(selected_peer_ip);
+        let selected_peer_ip = self.state.peers.usable_exit_node_vip(&selected_identity);
+        self.state
+            .exit_node
+            .route
+            .set_default_next_hop(selected_peer_ip);
         if selected_peer_ip.is_none() {
             log::warn!(
                 "selected exit node is not currently usable: {}",
@@ -444,52 +488,53 @@ impl SdlContext {
         }
     }
 
-    pub fn set_exit_node_state(&self, state: ExitNodeLocalState) -> bool {
-        let Some(should_report_status) = self.exit_node.replace_state(state) else {
+    pub(crate) fn set_exit_node_state(&self, state: ExitNodeLocalState) -> bool {
+        let Some(should_report_status) = self.state.exit_node.replace_state(state) else {
             return false;
         };
         self.apply_selected_exit_node_route();
         should_report_status
     }
 
-    pub fn is_known_udp_source(&self, addr: std::net::SocketAddr) -> bool {
-        self.control_session.is_control_addr(addr)
-            || self.gateway.sessions.is_gateway_addr(addr)
-            || self.nat_test.has_pending_stun_server_addr(addr)
+    pub(crate) fn is_known_udp_source(&self, addr: std::net::SocketAddr) -> bool {
+        self.services.control_session.is_control_addr(addr)
+            || self.state.gateway.sessions.is_gateway_addr(addr)
+            || self.services.nat_test.has_pending_stun_server_addr(addr)
             || self
+                .services
                 .route_manager
                 .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
     }
 
     #[cfg(feature = "integrated_tun")]
-    pub fn is_suspended(&self) -> bool {
-        self.tun.suspended.load()
+    pub(crate) fn is_suspended(&self) -> bool {
+        self.state.tun.suspended.load()
     }
 
     #[cfg(feature = "integrated_tun")]
-    pub fn suspend(&self) {
-        let _guard = self.tun.lifecycle.lock();
-        self.tun.suspended.store(true);
+    pub(crate) fn suspend(&self) {
+        let _guard = self.state.tun.lifecycle.lock();
+        self.state.tun.suspended.store(true);
         self.clear_applied_dns_profile();
-        self.tun.device_helper.stop();
+        self.state.tun.device_helper.stop();
     }
 
     #[cfg(feature = "integrated_tun")]
-    pub fn resume<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
-        let _guard = self.tun.lifecycle.lock();
-        self.tun.suspended.store(false);
+    pub(crate) fn resume<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
+        let _guard = self.state.tun.lifecycle.lock();
+        self.state.tun.suspended.store(false);
         self.rebuild_tun_locked(callback)
     }
 
     #[cfg(feature = "integrated_tun")]
-    pub fn sync_tun_with_current_device<Call: SdlCallback>(
+    pub(crate) fn sync_tun_with_current_device<Call: SdlCallback>(
         &self,
         callback: &Call,
     ) -> anyhow::Result<()> {
-        let _guard = self.tun.lifecycle.lock();
-        if self.tun.suspended.load() {
+        let _guard = self.state.tun.lifecycle.lock();
+        if self.state.tun.suspended.load() {
             self.clear_applied_dns_profile();
-            self.tun.device_helper.stop();
+            self.state.tun.device_helper.stop();
             return Ok(());
         }
         self.rebuild_tun_locked(callback)
@@ -497,7 +542,7 @@ impl SdlContext {
 
     #[cfg(feature = "integrated_tun")]
     fn rebuild_tun_locked<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
-        let current_device = self.current_device.load();
+        let current_device = self.state.current_device.load();
         if current_device.virtual_ip.is_unspecified()
             || current_device.virtual_gateway.is_unspecified()
             || current_device.virtual_netmask.is_unspecified()
@@ -505,7 +550,7 @@ impl SdlContext {
             return Ok(());
         }
         self.clear_applied_dns_profile();
-        self.tun.device_helper.stop();
+        self.state.tun.device_helper.stop();
         let device_config = DeviceConfig::new(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             self.config.device_name.clone(),
@@ -520,7 +565,7 @@ impl SdlContext {
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
-        self.tun.device_helper.start(device)?;
+        self.state.tun.device_helper.start(device)?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             let tun_info = crate::handle::callback::DeviceInfo::new(tun_name, "".into());
@@ -534,9 +579,9 @@ impl SdlContext {
         any(target_os = "windows", target_os = "linux", target_os = "macos")
     ))]
     fn clear_applied_dns_profile(&self) {
-        let _ = self.dns.last_interface.lock().take();
-        let interface_name = self.dns.applied_interface.lock().take();
-        let applied_profile = self.dns.applied_profile.lock().take();
+        let _ = self.state.dns.last_interface.lock().take();
+        let interface_name = self.state.dns.applied_interface.lock().take();
+        let applied_profile = self.state.dns.applied_profile.lock().take();
         if interface_name.is_none() && applied_profile.is_none() {
             return;
         }
@@ -564,23 +609,23 @@ impl SdlContext {
         any(target_os = "windows", target_os = "linux", target_os = "macos")
     ))]
     fn apply_dns_profile<Call: SdlCallback>(&self, interface_name: &str, callback: &Call) {
-        let profile = self.dns.profile.read().clone();
+        let profile = self.state.dns.profile.read().clone();
         let Some(profile) = profile else {
             return;
         };
         if profile.servers.is_empty() || profile.match_domains.is_empty() {
             return;
         }
-        *self.dns.last_interface.lock() = Some(interface_name.to_string());
-        let previous_profile = self.dns.applied_profile.lock().clone();
+        *self.state.dns.last_interface.lock() = Some(interface_name.to_string());
+        let previous_profile = self.state.dns.applied_profile.lock().clone();
         match crate::net::dns::platform::apply_split_dns(
             interface_name,
             previous_profile.as_ref(),
             &profile,
         ) {
             Ok(_) => {
-                *self.dns.applied_interface.lock() = Some(interface_name.to_string());
-                *self.dns.applied_profile.lock() = Some(profile);
+                *self.state.dns.applied_interface.lock() = Some(interface_name.to_string());
+                *self.state.dns.applied_profile.lock() = Some(profile);
             }
             Err(err) => {
                 log::warn!(
@@ -600,7 +645,7 @@ impl SdlContext {
         feature = "integrated_tun",
         any(target_os = "windows", target_os = "linux", target_os = "macos")
     ))]
-    pub fn revert_dns_on_shutdown(&self) {
+    pub(crate) fn revert_dns_on_shutdown(&self) {
         self.clear_applied_dns_profile();
     }
 
@@ -608,13 +653,14 @@ impl SdlContext {
         feature = "integrated_tun",
         any(target_os = "windows", target_os = "linux", target_os = "macos")
     ))]
-    pub fn force_apply_dns_profile<Call: SdlCallback>(&self, callback: &Call) {
+    pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, callback: &Call) {
         let interface_name = self
+            .state
             .dns
             .applied_interface
             .lock()
             .clone()
-            .or_else(|| self.dns.last_interface.lock().clone());
+            .or_else(|| self.state.dns.last_interface.lock().clone());
         if let Some(interface_name) = interface_name {
             self.apply_dns_profile(&interface_name, callback);
         }
@@ -624,9 +670,9 @@ impl SdlContext {
         feature = "integrated_tun",
         not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
     ))]
-    pub fn force_apply_dns_profile<Call: SdlCallback>(&self, _callback: &Call) {}
+    pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, _callback: &Call) {}
 
-    pub fn debug_snapshot_json(&self, sections: &[String]) -> anyhow::Result<String> {
+    pub(crate) fn debug_snapshot_json(&self, sections: &[String]) -> anyhow::Result<String> {
         let include_all = sections.is_empty() || sections.iter().any(|section| section == "all");
         let wants = |name: &str| include_all || sections.iter().any(|section| section == name);
         let mut root = Map::new();
@@ -662,7 +708,7 @@ impl SdlContext {
         if wants("routes") {
             root.insert(
                 "routes".into(),
-                self.snapshot_routes(self.current_device.load()),
+                self.snapshot_routes(self.state.current_device.load()),
             );
         }
 
@@ -674,9 +720,9 @@ impl SdlContext {
     }
 
     fn snapshot_runtime(&self) -> Value {
-        let current_device = self.current_device.load();
-        let dns_profile = self.dns.profile.read().clone();
-        let auth_request = self.auth_request.read().clone();
+        let current_device = self.state.current_device.load();
+        let dns_profile = self.state.dns.profile.read().clone();
+        let auth_request = self.state.auth_request.read().clone();
         json!({
             "name": self.config.name,
             "device_id": self.config.device_id,
@@ -688,9 +734,9 @@ impl SdlContext {
             "virtual_netmask": current_device.virtual_netmask.to_string(),
             "virtual_network": current_device.virtual_network.to_string(),
             "broadcast_ip": current_device.broadcast_ip.to_string(),
-            "control_server": self.control_session.server_addr().to_string(),
+            "control_server": self.services.control_session.server_addr().to_string(),
             "connect_status": format!("{:?}", current_device.status),
-            "use_channel_type": format!("{:?}", self.route_manager.use_channel_type()),
+            "use_channel_type": format!("{:?}", self.services.route_manager.use_channel_type()),
             "dns_profile": dns_profile.as_ref().map(|profile| json!({
                 "servers": profile.servers,
                 "match_domains": profile.match_domains,
@@ -706,8 +752,8 @@ impl SdlContext {
     }
 
     fn snapshot_gateway(&self) -> Value {
-        let summary = self.gateway.sessions.session_summary();
-        let grant = self.gateway.sessions.current_grant_snapshot();
+        let summary = self.state.gateway.sessions.session_summary();
+        let grant = self.state.gateway.sessions.current_grant_snapshot();
         json!({
             "configured": summary.configured,
             "authenticated": summary.authenticated,
@@ -728,7 +774,7 @@ impl SdlContext {
     }
 
     fn snapshot_nat(&self) -> Value {
-        let nat_info = self.nat_test.nat_info();
+        let nat_info = self.services.nat_test.nat_info();
         json!({
             "nat_type": format!("{:?}", nat_info.nat_type),
             "punch_model": format!("{:?}", nat_info.punch_model),
@@ -745,7 +791,7 @@ impl SdlContext {
 
     fn snapshot_peers(&self) -> Value {
         let (peer_epoch, mut peer_items) = {
-            let peer_table = self.peers.table.read();
+            let peer_table = self.state.peers.table.read();
             let peers = peer_table
                 .values()
                 .map(|peer| {
@@ -763,7 +809,7 @@ impl SdlContext {
         };
         peer_items.sort_by(|a, b| a["virtual_ip"].as_str().cmp(&b["virtual_ip"].as_str()));
 
-        let mut peer_nat_items = self
+        let mut peer_nat_items = self.state
             .peers.nat_info_map
             .read()
             .iter()
@@ -779,7 +825,7 @@ impl SdlContext {
         peer_nat_items.sort_by(|a, b| a["peer_ip"].as_str().cmp(&b["peer_ip"].as_str()));
 
         let (current_cipher_count, previous_cipher_count, grace_active) =
-            self.peers.crypto.debug_counts();
+            self.state.peers.crypto.debug_counts();
         json!({
             "epoch": peer_epoch,
             "peer_count": peer_items.len(),
@@ -794,6 +840,7 @@ impl SdlContext {
 
     fn snapshot_routes(&self, current_device: CurrentDeviceInfo) -> Value {
         let mut route_items = self
+            .services
             .route_manager
             .snapshot_route_states(current_device.virtual_gateway)
             .into_iter()
@@ -823,10 +870,10 @@ impl SdlContext {
 
     fn snapshot_traffic(&self) -> Value {
         json!({
-            "up_total": self.data_plane_stats.up_traffic_total(),
-            "up_channels": self.data_plane_stats.up_traffic_all().map(|(_, channels)| channels),
-            "down_total": self.data_plane_stats.down_traffic_total(),
-            "down_channels": self.data_plane_stats.down_traffic_all().map(|(_, channels)| channels),
+            "up_total": self.state.data_plane_stats.up_traffic_total(),
+            "up_channels": self.state.data_plane_stats.up_traffic_all().map(|(_, channels)| channels),
+            "down_total": self.state.data_plane_stats.down_traffic_total(),
+            "down_channels": self.state.data_plane_stats.down_traffic_all().map(|(_, channels)| channels),
         })
     }
 }

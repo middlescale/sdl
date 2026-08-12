@@ -202,7 +202,7 @@ pub(crate) fn handle(
                 let dns_client_port = udp_packet.source_port();
                 let dns_payload = udp_packet.payload().to_vec();
                 if let Ok(context) = data_channel.context() {
-                    let profile = context.dns.profile.read().clone();
+                    let profile = context.state.dns.profile.read().clone();
                     let decision = {
                         let guard = peer_table.read();
                         crate::net::dns::local::resolve_local_query(
