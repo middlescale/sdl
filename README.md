@@ -37,13 +37,42 @@ Install as a system service:
 sudo ./install.sh --source-dir ./target/release --user "$USER"
 ```
 
-On Windows, run from an elevated PowerShell in an unpacked release directory:
+### Windows installation and upgrade
+
+Download `sdl-x86_64-pc-windows-msvc-<version>.zip` from the
+[GitHub Releases](https://github.com/middlescale/sdl/releases) page and extract
+it. Open **PowerShell as Administrator**, change into the extracted directory,
+then install (or upgrade) with:
 
 ```powershell
-.\install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -PreserveConfig
 ```
 
-The installer:
+`-PreserveConfig` is the default, but specifying it for upgrades makes the
+intent clear: the installer keeps `C:\Program Files\SDL\env\config.json`,
+`device-id`, and `device.key`. This preserves both the device identity and its
+existing control-plane configuration.
+
+Windows commonly blocks unsigned local scripts with an error such as
+"running scripts is disabled on this system." The command above uses
+`-ExecutionPolicy Bypass` only for that installer process; it does not change
+the machine-wide or user-wide execution-policy setting. Do not use a permanent
+`Set-ExecutionPolicy` change just to install SDL.
+
+After installation, verify the service and version:
+
+```powershell
+Get-Service sdl-service
+& 'C:\Program Files\SDL\sdl.exe' version
+& 'C:\Program Files\SDL\sdl.exe' status --json
+```
+
+The Windows installer installs `sdl.exe`, `sdl-service.exe`, and `wintun.dll`
+under `C:\Program Files\SDL`, registers the automatic `sdl-service` Windows
+service, and starts it unless `-NoStart` is supplied. Service logs are stored
+at `C:\Program Files\SDL\log\sdl-service.log`.
+
+On Linux and macOS, the installer:
 
 - installs `sdl` and `sdl-service` under `/opt/sdl`
 - links commands into `/usr/local/bin`
