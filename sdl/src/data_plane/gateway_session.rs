@@ -15,12 +15,15 @@ use protobuf::Message;
 use rand::RngCore;
 
 use crate::core::PeerIdentity;
+use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::{now_time, CurrentDeviceInfo};
 use crate::proto::message::{
     GatewayAccessGrant, GatewayChannelKind, GatewayConnectAck, GatewayConnectHello,
 };
+use crate::protocol::body::ENCRYPTION_RESERVED;
+use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{service_packet, NetPacket, Protocol, MAX_TTL};
 use crate::transport::gateway_udp_channel::GatewayUdpChannel;
 use crate::transport::http2_channel::Http2Channel;
@@ -36,6 +39,9 @@ const UDP_GATEWAY_HELLOS_BEFORE_REBUILD: u32 = 3;
 const UDP_GATEWAY_REBUILD_BASE_DELAY_MS: i64 = 5_000;
 const UDP_GATEWAY_REBUILD_MAX_DELAY_MS: i64 = 60_000;
 const PEER_INGRESS_GATEWAY_TTL: Duration = Duration::from_secs(60);
+const GATEWAY_PROBE_INTERVAL_MS: i64 = 10_000;
+const GATEWAY_PROBE_UNREACHABLE_AFTER: u32 = 3;
+const PEER_RELAY_PROBE_INTERVAL_MS: i64 = 30_000;
 static GATEWAY_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,6 +71,26 @@ pub enum GatewayGrantState {
     Active,
     #[default]
     NeedsRefresh,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GatewayRelayHealth {
+    #[default]
+    Unknown,
+    Healthy,
+    Degraded,
+    Unreachable,
+}
+
+impl GatewayRelayHealth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Unreachable => "unreachable",
+        }
+    }
 }
 
 impl GatewayGrantState {
@@ -99,6 +125,15 @@ struct GatewaySessionState {
     consecutive_send_failures: u32,
     unanswered_hello_count: u32,
     udp_rebuild_requested: bool,
+    gateway_virtual_ip: Option<Ipv4Addr>,
+    last_probe_sent_unix_ms: i64,
+    last_probe_reply_unix_ms: i64,
+    last_probe_rtt_ms: Option<i64>,
+    probe_epoch: u16,
+    consecutive_probe_failures: u32,
+    // Stream gateway authentication is bound to one transport connection on
+    // the gateway. Never reuse an ACK after that connection has been replaced.
+    authenticated_transport_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -509,8 +544,11 @@ impl GatewaySession {
                     .map(|channel_meta| channel_meta.server_name.clone())
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| self.endpoint.ip().to_string());
-                channel.update_server_name(server_name);
-                channel.update_server_addr(self.endpoint);
+                let transport_changed = channel.update_server_name(server_name)
+                    | channel.update_server_addr(self.endpoint);
+                if transport_changed {
+                    self.invalidate_stream_authentication();
+                }
             }
             GatewayTransport::Https(channel) => {
                 let selected_channel = grant.gateway_channel.as_ref().filter(|channel_meta| {
@@ -534,10 +572,13 @@ impl GatewaySession {
                 let request_uri = parsed_target
                     .map(|target| target.request_uri)
                     .unwrap_or_else(|| format!("https://{}/gateway", self.endpoint));
-                channel.update_server_addr(self.endpoint);
-                channel.update_server_name(server_name);
-                channel.update_request_uri(request_uri);
+                let transport_changed = channel.update_server_addr(self.endpoint)
+                    | channel.update_server_name(server_name)
+                    | channel.update_request_uri(request_uri);
                 channel.update_idle_timeout(http2_idle_timeout);
+                if transport_changed {
+                    self.invalidate_stream_authentication();
+                }
             }
             GatewayTransport::Udp(channel) => {
                 let channel_meta = grant
@@ -572,6 +613,7 @@ impl GatewaySession {
     }
 
     fn summary(&self) -> GatewaySessionSummary {
+        self.reconcile_stream_authentication();
         let guard = self.state.lock();
         let now_ms = now_time() as i64;
         let grant_phase = Self::grant_phase(&guard, now_ms);
@@ -591,13 +633,32 @@ impl GatewaySession {
             active: false,
             grant_phase,
             consecutive_send_failures: guard.consecutive_send_failures,
+            relay_health: Self::relay_health(&guard, now_ms),
+            last_probe_unix_ms: guard.last_probe_reply_unix_ms,
+            last_probe_rtt_ms: guard.last_probe_rtt_ms,
+            consecutive_probe_failures: guard.consecutive_probe_failures,
+            relay_send_failures_total: self.stats.gateway_send_failures_total(),
         }
+    }
+
+    fn relay_health(guard: &GatewaySessionState, now_ms: i64) -> GatewayRelayHealth {
+        if !Self::is_available(guard, now_ms) {
+            return GatewayRelayHealth::Unknown;
+        }
+        if guard.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
+            return GatewayRelayHealth::Unreachable;
+        }
+        if guard.last_probe_reply_unix_ms <= 0 {
+            return GatewayRelayHealth::Degraded;
+        }
+        GatewayRelayHealth::Healthy
     }
 
     fn is_relay_available(&self) -> bool {
         if !self.active.load() {
             return false;
         }
+        self.reconcile_stream_authentication();
         let guard = self.state.lock();
         Self::is_available(&guard, now_time() as i64)
     }
@@ -607,44 +668,52 @@ impl GatewaySession {
     }
 
     fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<GatewayTickOutcome> {
+        self.reconcile_stream_authentication();
         if self.take_udp_rebuild_request() {
             return Ok(GatewayTickOutcome::RebuildUdp);
         }
         if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
             return Ok(GatewayTickOutcome::Idle);
         }
-        let Some(packet) = self.maybe_build_connect_hello(current_device)? else {
-            return Ok(GatewayTickOutcome::Idle);
-        };
-        log::debug!(
-            "sending gateway connect hello endpoint={}, source={}, gateway={}",
-            self.endpoint,
-            current_device.virtual_ip,
-            current_device.virtual_gateway
-        );
-        self.debug_watch.emit(
-            "gateway",
-            "connect_hello",
-            serde_json::json!({
-                "endpoint": self.endpoint.to_string(),
-                "source": current_device.virtual_ip.to_string(),
-                "gateway": current_device.virtual_gateway.to_string(),
-            }),
-        );
-        if let Err(e) = self.send_packet(&packet) {
-            if self.record_send_failure(e.kind()) {
+        if let Some(packet) = self.maybe_build_connect_hello(current_device)? {
+            log::debug!(
+                "sending gateway connect hello endpoint={}, source={}, gateway={}",
+                self.endpoint,
+                current_device.virtual_ip,
+                current_device.virtual_gateway
+            );
+            self.debug_watch.emit(
+                "gateway",
+                "connect_hello",
+                serde_json::json!({
+                    "endpoint": self.endpoint.to_string(),
+                    "source": current_device.virtual_ip.to_string(),
+                    "gateway": current_device.virtual_gateway.to_string(),
+                }),
+            );
+            if let Err(e) = self.send_packet(&packet) {
+                if self.record_send_failure(e.kind()) {
+                    return Ok(GatewayTickOutcome::RebuildUdp);
+                }
+                return Err(e.into());
+            }
+            self.record_send_success();
+            if self.record_unanswered_hello() {
                 return Ok(GatewayTickOutcome::RebuildUdp);
             }
-            return Err(e.into());
         }
-        self.record_send_success();
-        if self.record_unanswered_hello() {
-            return Ok(GatewayTickOutcome::RebuildUdp);
+        if let Some(packet) = self.maybe_build_gateway_probe(current_device)? {
+            if let Err(err) = self.send_packet(&packet) {
+                self.record_send_failure(err.kind());
+                return Err(err.into());
+            }
+            self.record_send_success();
         }
         Ok(GatewayTickOutcome::Idle)
     }
 
     fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
+        self.reconcile_stream_authentication();
         {
             let guard = self.state.lock();
             let now_ms = now_time() as i64;
@@ -668,6 +737,7 @@ impl GatewaySession {
             }
         }
         if let Err(e) = self.send_packet(packet) {
+            self.stats.record_gateway_send_failure();
             self.record_send_failure(e.kind());
             return Err(e);
         }
@@ -767,6 +837,11 @@ impl GatewaySession {
             return;
         }
         guard.authenticated = ack.ok;
+        guard.authenticated_transport_generation = match &self.channel {
+            GatewayTransport::Https(channel) if ack.ok => channel.connection_generation(),
+            GatewayTransport::Quic(channel) if ack.ok => channel.connection_generation(),
+            _ => 0,
+        };
         guard.consecutive_send_failures = 0;
         guard.unanswered_hello_count = 0;
         guard.udp_rebuild_requested = false;
@@ -838,6 +913,80 @@ impl GatewaySession {
                 }),
             );
         }
+    }
+
+    fn invalidate_stream_authentication(&self) {
+        let mut guard = self.state.lock();
+        guard.authenticated = false;
+        guard.authenticated_transport_generation = 0;
+        guard.last_hello_unix_ms = 0;
+        guard.last_rtt_ms = None;
+        guard.consecutive_send_failures = 0;
+        guard.unanswered_hello_count = 0;
+    }
+
+    fn reconcile_stream_authentication(&self) {
+        let generation = match &self.channel {
+            GatewayTransport::Https(channel) => channel.connection_generation(),
+            GatewayTransport::Quic(channel) => channel.connection_generation(),
+            GatewayTransport::Udp(_) => return,
+        };
+        let mut guard = self.state.lock();
+        if guard.authenticated
+            && (generation == 0 || generation != guard.authenticated_transport_generation)
+        {
+            guard.authenticated = false;
+            guard.authenticated_transport_generation = 0;
+            guard.last_hello_unix_ms = 0;
+            guard.last_rtt_ms = None;
+            guard.consecutive_send_failures = 0;
+            guard.unanswered_hello_count = 0;
+        }
+    }
+
+    fn maybe_build_gateway_probe(
+        &self,
+        current_device: &CurrentDeviceInfo,
+    ) -> anyhow::Result<Option<NetPacket<Vec<u8>>>> {
+        let mut guard = self.state.lock();
+        let now_ms = now_time() as i64;
+        if !Self::is_available(&guard, now_ms)
+            || now_ms - guard.last_probe_sent_unix_ms < GATEWAY_PROBE_INTERVAL_MS
+        {
+            return Ok(None);
+        }
+        if guard.last_probe_sent_unix_ms > guard.last_probe_reply_unix_ms {
+            guard.consecutive_probe_failures = guard.consecutive_probe_failures.saturating_add(1);
+        }
+        guard.last_probe_sent_unix_ms = now_ms;
+        guard.gateway_virtual_ip = Some(current_device.virtual_gateway);
+        guard.probe_epoch = guard.probe_epoch.wrapping_add(1).max(1);
+        let mut packet = NetPacket::new(vec![0u8; 12 + 4])?;
+        packet.set_default_version();
+        packet.set_protocol(Protocol::Control);
+        packet.set_transport_protocol(crate::protocol::control_packet::Protocol::Ping.into());
+        packet.set_initial_ttl(MAX_TTL);
+        packet.set_source(current_device.virtual_ip);
+        packet.set_destination(current_device.virtual_gateway);
+        let mut ping = PingPacket::new(packet.payload_mut())?;
+        ping.set_time(now_time() as u16);
+        ping.set_epoch(guard.probe_epoch);
+        Ok(Some(packet))
+    }
+
+    fn handle_gateway_probe_pong(&self, source: Ipv4Addr, route_key: RouteKey, epoch: u16) -> bool {
+        if !self.matches_addr(route_key.addr) {
+            return false;
+        }
+        let mut guard = self.state.lock();
+        if Some(source) != guard.gateway_virtual_ip || epoch != guard.probe_epoch {
+            return false;
+        }
+        let now_ms = now_time() as i64;
+        guard.last_probe_reply_unix_ms = now_ms;
+        guard.last_probe_rtt_ms = Some((now_ms - guard.last_probe_sent_unix_ms).max(1));
+        guard.consecutive_probe_failures = 0;
+        true
     }
 
     fn maybe_build_connect_hello(
@@ -929,6 +1078,11 @@ pub struct GatewaySessionSummary {
     pub active: bool,
     pub grant_phase: GatewayGrantPhase,
     pub consecutive_send_failures: u32,
+    pub relay_health: GatewayRelayHealth,
+    pub last_probe_unix_ms: i64,
+    pub last_probe_rtt_ms: Option<i64>,
+    pub consecutive_probe_failures: u32,
+    pub relay_send_failures_total: u64,
 }
 
 #[derive(Default)]
@@ -944,6 +1098,21 @@ struct PeerIngressGateway {
     expires_at: Instant,
 }
 
+#[derive(Clone, Copy, Default)]
+struct PeerRelayProbe {
+    epoch: u16,
+    last_sent_unix_ms: i64,
+    last_reply_unix_ms: i64,
+    consecutive_failures: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PeerRelayHealthSummary {
+    pub last_relay_receive_unix_ms: i64,
+    pub last_probe_unix_ms: i64,
+    pub consecutive_probe_failures: u32,
+}
+
 #[derive(Clone)]
 pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -952,6 +1121,8 @@ pub struct GatewaySessions {
     dormant_stream_sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
     selection: Arc<Mutex<GatewaySelectionState>>,
     peer_ingress_gateways: Arc<Mutex<HashMap<PeerIdentity, PeerIngressGateway>>>,
+    peer_relay_probes: Arc<Mutex<HashMap<Ipv4Addr, PeerRelayProbe>>>,
+    peer_relay_receives: Arc<Mutex<HashMap<Ipv4Addr, i64>>>,
     udp_rebuild_backoff: Arc<Mutex<HashMap<SocketAddr, UdpGatewayRebuildBackoff>>>,
     refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
@@ -972,6 +1143,8 @@ impl GatewaySessions {
             dormant_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
             selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
             peer_ingress_gateways: Arc::new(Mutex::new(HashMap::new())),
+            peer_relay_probes: Arc::new(Mutex::new(HashMap::new())),
+            peer_relay_receives: Arc::new(Mutex::new(HashMap::new())),
             udp_rebuild_backoff: Arc::new(Mutex::new(HashMap::new())),
             refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
@@ -1600,6 +1773,130 @@ impl GatewaySessions {
         }
     }
 
+    pub fn handle_gateway_probe_pong(
+        &self,
+        source: Ipv4Addr,
+        route_key: RouteKey,
+        epoch: u16,
+    ) -> bool {
+        self.sessions
+            .lock()
+            .get(&route_key.addr)
+            .map(|session| session.handle_gateway_probe_pong(source, route_key, epoch))
+            .unwrap_or(false)
+    }
+
+    pub fn maybe_send_peer_relay_probe(
+        &self,
+        peer_ip: Ipv4Addr,
+        peer_identity: Option<&PeerIdentity>,
+        peer_crypto: &PeerCryptoManager,
+    ) {
+        let Some(peer_identity) = peer_identity else {
+            return;
+        };
+        let now_ms = now_time() as i64;
+        let epoch = {
+            let mut probes = self.peer_relay_probes.lock();
+            let probe = probes.entry(peer_ip).or_default();
+            if now_ms - probe.last_sent_unix_ms < PEER_RELAY_PROBE_INTERVAL_MS {
+                return;
+            }
+            if probe.last_sent_unix_ms > probe.last_reply_unix_ms {
+                probe.consecutive_failures = probe.consecutive_failures.saturating_add(1);
+            }
+            probe.last_sent_unix_ms = now_ms;
+            probe.epoch = probe.epoch.wrapping_add(1).max(1);
+            probe.epoch
+        };
+        let Some(cipher) = peer_crypto.current_cipher(peer_identity).ok() else {
+            return;
+        };
+        let current = self.current_device.load();
+        let mut packet = match NetPacket::new_encrypt(vec![0u8; 12 + 4 + ENCRYPTION_RESERVED]) {
+            Ok(packet) => packet,
+            Err(err) => {
+                log::debug!(
+                    "failed to create relay peer probe for {}: {:?}",
+                    peer_ip,
+                    err
+                );
+                return;
+            }
+        };
+        packet.set_default_version();
+        packet.set_protocol(Protocol::Control);
+        packet.set_transport_protocol(crate::protocol::control_packet::Protocol::Ping.into());
+        packet.set_initial_ttl(MAX_TTL);
+        packet.set_source(current.virtual_ip);
+        packet.set_destination(peer_ip);
+        if let Ok(mut ping) = PingPacket::new(packet.payload_mut()) {
+            ping.set_time(now_time() as u16);
+            ping.set_epoch(epoch);
+        } else {
+            return;
+        }
+        if let Err(err) = cipher.encrypt_ipv4(&mut packet) {
+            log::debug!(
+                "failed to encrypt relay peer probe for {}: {:?}",
+                peer_ip,
+                err
+            );
+            return;
+        }
+        if let Err(err) = self.send_relay_for_peer(Some(peer_identity), &packet) {
+            log::debug!("failed to send relay peer probe for {}: {:?}", peer_ip, err);
+        }
+    }
+
+    pub fn handle_peer_relay_probe_pong(
+        &self,
+        peer_ip: Ipv4Addr,
+        route_key: RouteKey,
+        epoch: u16,
+    ) -> bool {
+        if !self.is_gateway_addr(route_key.addr) {
+            return false;
+        }
+        let mut probes = self.peer_relay_probes.lock();
+        let Some(probe) = probes.get_mut(&peer_ip) else {
+            return false;
+        };
+        if probe.epoch != epoch {
+            return false;
+        }
+        probe.last_reply_unix_ms = now_time() as i64;
+        probe.consecutive_failures = 0;
+        true
+    }
+
+    pub fn observe_peer_relay_receive(&self, peer_ip: Ipv4Addr, route_key: RouteKey) {
+        if self.is_gateway_addr(route_key.addr) {
+            self.peer_relay_receives
+                .lock()
+                .insert(peer_ip, now_time() as i64);
+        }
+    }
+
+    pub fn peer_relay_health_summary(&self, peer_ip: Ipv4Addr) -> PeerRelayHealthSummary {
+        let probe = self
+            .peer_relay_probes
+            .lock()
+            .get(&peer_ip)
+            .copied()
+            .unwrap_or_default();
+        PeerRelayHealthSummary {
+            last_relay_receive_unix_ms: self
+                .peer_relay_receives
+                .lock()
+                .get(&peer_ip)
+                .copied()
+                .unwrap_or_default(),
+            last_probe_unix_ms: probe.last_reply_unix_ms,
+            consecutive_probe_failures: probe.consecutive_failures,
+        }
+    }
+
     fn reset_selection_if_missing(&self, sessions: &HashMap<SocketAddr, GatewaySession>) {
         let mut selection = self.selection.lock();
         if selection
@@ -1999,6 +2296,33 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_gateway_probe_health_becomes_unreachable_after_threshold() {
+        let mut state = GatewaySessionState {
+            authenticated: true,
+            ticket: vec![1],
+            ticket_expire_unix_ms: i64::MAX,
+            lease_expire_unix_ms: i64::MAX,
+            grace_expire_unix_ms: i64::MAX,
+            ..Default::default()
+        };
+        assert_eq!(
+            GatewaySession::relay_health(&state, 1),
+            super::GatewayRelayHealth::Degraded
+        );
+        state.consecutive_probe_failures = super::GATEWAY_PROBE_UNREACHABLE_AFTER;
+        assert_eq!(
+            GatewaySession::relay_health(&state, 1),
+            super::GatewayRelayHealth::Unreachable
+        );
+        state.last_probe_reply_unix_ms = 1;
+        state.consecutive_probe_failures = 0;
+        assert_eq!(
+            GatewaySession::relay_health(&state, 1),
+            super::GatewayRelayHealth::Healthy
+        );
+    }
+
+    #[test]
     fn fallback_soft_refresh_after_clamps_invalid_early_expiry() {
         assert_eq!(GatewaySession::default_soft_refresh_after_unix_ms(0), 0);
         assert_eq!(
@@ -2159,7 +2483,9 @@ mod tests {
         grant.ticket_expire_unix_ms = 20_000;
         grant.lease_secs = 45;
         grant.grace_secs = 90;
-        sessions.set_gateway_grants(&[grant], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
+        session
+            .update_grant(&grant, "device-1".into())
+            .expect("update unchanged gateway grant");
 
         let state = session.state.lock();
         assert!(state.authenticated);
@@ -2174,6 +2500,25 @@ mod tests {
         assert_eq!(state.ticket_expire_unix_ms, 20_000);
         assert_eq!(state.lease_secs_hint, 45);
         assert_eq!(state.grace_secs_hint, 90);
+    }
+
+    #[test]
+    fn stale_quic_authentication_is_not_relay_routable() {
+        let session = GatewaySession::new_quic(
+            "127.0.0.1:29900".parse().unwrap(),
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        session.active.store(true);
+        {
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.authenticated_transport_generation = 1;
+            state.hard_expire_unix_ms = now_time() as i64 + 60_000;
+        }
+
+        assert!(!session.is_relay_available());
+        assert!(!session.state.lock().authenticated);
     }
 
     #[test]
@@ -2931,16 +3276,33 @@ mod tests {
         let peer = PeerIdentity::from_device_public_key(b"peer-one");
         let ingress_endpoint = "127.0.0.1:29931".parse().unwrap();
         let active_endpoint = "127.0.0.1:29932".parse().unwrap();
-        let ingress = GatewaySession::new_quic(
+        let grant = GatewayAccessGrant {
+            session_id: 7,
+            ..Default::default()
+        };
+        let channel_meta = GatewayChannel {
+            kind: EnumOrUnknown::new(GatewayChannelKind::GATEWAY_CHANNEL_UDP),
+            addr: "udp://127.0.0.1:29931".into(),
+            udp_public_key: [7; 32].to_vec(),
+            udp_key_id: "key-1".into(),
+            ..Default::default()
+        };
+        let ingress = GatewaySession::new_udp(
             ingress_endpoint,
+            &grant,
+            &channel_meta,
             super::DebugWatch::default(),
             DataPlaneStats::new(true),
-        );
-        let active = GatewaySession::new_quic(
+        )
+        .expect("create ingress UDP session");
+        let active = GatewaySession::new_udp(
             active_endpoint,
+            &grant,
+            &channel_meta,
             super::DebugWatch::default(),
             DataPlaneStats::new(true),
-        );
+        )
+        .expect("create active UDP session");
         for session in [&ingress, &active] {
             session.active.store(true);
             let mut state = session.state.lock();

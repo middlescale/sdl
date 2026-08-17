@@ -499,6 +499,17 @@ impl Sdl {
     ) -> Vec<crate::data_plane::gateway_session::GatewaySessionSummary> {
         self.context.state.gateway.sessions.session_summaries()
     }
+
+    pub fn peer_relay_health_summary(
+        &self,
+        ip: Ipv4Addr,
+    ) -> crate::data_plane::gateway_session::PeerRelayHealthSummary {
+        self.context
+            .state
+            .gateway
+            .sessions
+            .peer_relay_health_summary(ip)
+    }
     pub fn set_gateway_selection(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
         self.context
             .state

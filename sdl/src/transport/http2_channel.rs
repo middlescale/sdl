@@ -38,7 +38,9 @@ const GATEWAY_HTTP2_TRANSPORT_PING: &[u8] = b"SDLH2PNG";
 struct ActiveConnection {
     addr: SocketAddr,
     config_rev: u64,
+    generation: u64,
     healthy: Arc<AtomicBool>,
+    active_generation: Arc<AtomicU64>,
     uplink_send: SendStream<Bytes>,
     connection_task: JoinHandle<()>,
     read_task: JoinHandle<()>,
@@ -47,6 +49,12 @@ struct ActiveConnection {
 impl ActiveConnection {
     fn close(self) {
         self.healthy.store(false, Ordering::Relaxed);
+        let _ = self.active_generation.compare_exchange(
+            self.generation,
+            0,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
         self.connection_task.abort();
         self.read_task.abort();
     }
@@ -59,6 +67,8 @@ pub struct Http2Channel {
     request_uri: Arc<Mutex<String>>,
     idle_timeout_ms: Arc<AtomicU64>,
     config_rev: Arc<AtomicU64>,
+    next_generation: Arc<AtomicU64>,
+    active_generation: Arc<AtomicU64>,
     sender: Sender<Http2Command>,
     receiver: Arc<Mutex<Option<Receiver<Http2Command>>>>,
 }
@@ -72,6 +82,8 @@ impl Http2Channel {
             request_uri: Arc::new(Mutex::new(request_uri)),
             idle_timeout_ms: Arc::new(AtomicU64::new(10_000)),
             config_rev: Arc::new(AtomicU64::new(0)),
+            next_generation: Arc::new(AtomicU64::new(1)),
+            active_generation: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
         }
@@ -102,6 +114,8 @@ impl Http2Channel {
         let request_uri = self.request_uri.clone();
         let idle_timeout_ms = self.idle_timeout_ms.clone();
         let config_rev = self.config_rev.clone();
+        let next_generation = self.next_generation.clone();
+        let active_generation = self.active_generation.clone();
         let worker_name = worker_name.to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
         let worker = stop_manager.add_listener(worker_name.clone(), move || {
@@ -123,6 +137,8 @@ impl Http2Channel {
                         request_uri,
                         idle_timeout_ms,
                         config_rev,
+                        next_generation,
+                        active_generation,
                         callback,
                     )
                     .await;
@@ -144,19 +160,33 @@ impl Http2Channel {
         Ok(())
     }
 
-    pub fn update_server_addr(&self, server_addr: SocketAddr) {
+    pub fn update_server_addr(&self, server_addr: SocketAddr) -> bool {
+        if self.server_addr.load() == server_addr {
+            return false;
+        }
         self.server_addr.store(server_addr);
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
-    pub fn update_server_name(&self, server_name: String) {
-        *self.server_name.lock() = server_name;
+    pub fn update_server_name(&self, server_name: String) -> bool {
+        let mut current = self.server_name.lock();
+        if *current == server_name {
+            return false;
+        }
+        *current = server_name;
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
-    pub fn update_request_uri(&self, request_uri: String) {
-        *self.request_uri.lock() = request_uri;
+    pub fn update_request_uri(&self, request_uri: String) -> bool {
+        let mut current = self.request_uri.lock();
+        if *current == request_uri {
+            return false;
+        }
+        *current = request_uri;
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
     pub fn update_idle_timeout(&self, idle_timeout: Duration) {
@@ -178,6 +208,12 @@ impl Http2Channel {
                 }
             })
     }
+
+    /// Zero means no live HTTP/2 connection. A nonzero value identifies the
+    /// current connection and changes on every reconnect.
+    pub fn connection_generation(&self) -> u64 {
+        self.active_generation.load(Ordering::Relaxed)
+    }
 }
 
 async fn run_http2_worker(
@@ -187,6 +223,8 @@ async fn run_http2_worker(
     request_uri: Arc<Mutex<String>>,
     idle_timeout_ms: Arc<AtomicU64>,
     config_rev: Arc<AtomicU64>,
+    next_generation: Arc<AtomicU64>,
+    active_generation: Arc<AtomicU64>,
     on_packet: PacketCallback,
 ) {
     let mut active: Option<ActiveConnection> = None;
@@ -210,6 +248,8 @@ async fn run_http2_worker(
                                 &request_uri,
                                 &idle_timeout_ms,
                                 &config_rev,
+                                &next_generation,
+                                &active_generation,
                                 &on_packet,
                                 &mut maintain_connection,
                                 data,
@@ -259,6 +299,8 @@ async fn run_http2_worker(
                                     &request_uri,
                                 &idle_timeout_ms,
                                 &config_rev,
+                                &next_generation,
+                                &active_generation,
                                 &on_packet,
                                 &mut maintain_connection,
                                 data,
@@ -279,6 +321,8 @@ async fn run_http2_worker(
                             idle_timeout_ms.clone(),
                             on_packet.clone(),
                             current_rev,
+                            next_generation.clone(),
+                            active_generation.clone(),
                         ).await {
                             Ok(connection) => {
                                 active = Some(connection);
@@ -302,6 +346,8 @@ async fn run_http2_worker(
                             &request_uri,
                             &idle_timeout_ms,
                             &config_rev,
+                            &next_generation,
+                            &active_generation,
                             &on_packet,
                             &mut maintain_connection,
                             data,
@@ -322,6 +368,8 @@ async fn handle_send_command(
     request_uri: &Arc<Mutex<String>>,
     idle_timeout_ms: &Arc<AtomicU64>,
     config_rev: &Arc<AtomicU64>,
+    next_generation: &Arc<AtomicU64>,
+    active_generation: &Arc<AtomicU64>,
     on_packet: &PacketCallback,
     maintain_connection: &mut bool,
     data: Bytes,
@@ -352,6 +400,8 @@ async fn handle_send_command(
             idle_timeout_ms.clone(),
             on_packet.clone(),
             current_rev,
+            next_generation.clone(),
+            active_generation.clone(),
         )
         .await
         {
@@ -383,6 +433,8 @@ async fn handle_send_command(
             idle_timeout_ms.clone(),
             on_packet.clone(),
             current_rev,
+            next_generation.clone(),
+            active_generation.clone(),
         )
         .await
         {
@@ -415,6 +467,8 @@ async fn connect(
     server_name: &str,
     request_uri: &str,
     idle_timeout_ms: Arc<AtomicU64>,
+    active_generation: Arc<AtomicU64>,
+    generation: u64,
     on_packet: PacketCallback,
 ) -> anyhow::Result<Http2ClientConnection> {
     let stream =
@@ -433,11 +487,18 @@ async fn connect(
             .await??;
     let healthy = Arc::new(AtomicBool::new(true));
     let connection_health = healthy.clone();
+    let connection_generation = active_generation.clone();
     let connection_task = tokio::spawn(async move {
         if let Err(e) = connection.await {
             log::debug!("gateway http2 connection closed: {:?}", e);
         }
         connection_health.store(false, Ordering::Relaxed);
+        let _ = connection_generation.compare_exchange(
+            generation,
+            0,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
     });
     let request = http::Request::builder()
         .method(http::Method::POST)
@@ -471,6 +532,7 @@ async fn connect(
     let callback = on_packet.clone();
     let route_key = RouteKey::new(ConnectProtocol::TCP, addr);
     let read_health = healthy.clone();
+    let read_generation = active_generation.clone();
     let read_task = tokio::spawn(async move {
         if let Err(e) = read_h2_packets(recv, idle_timeout_ms, route_key, callback).await {
             log::warn!("gateway http2 read failed {:?}: {:?}", route_key.addr, e);
@@ -478,6 +540,8 @@ async fn connect(
             log::debug!("gateway http2 downlink closed {:?}", route_key.addr);
         }
         read_health.store(false, Ordering::Relaxed);
+        let _ =
+            read_generation.compare_exchange(generation, 0, Ordering::Relaxed, Ordering::Relaxed);
     });
     let uplink_request = http::Request::builder()
         .method(http::Method::POST)
@@ -531,12 +595,27 @@ async fn connect_active_connection(
     idle_timeout_ms: Arc<AtomicU64>,
     on_packet: PacketCallback,
     config_rev: u64,
+    next_generation: Arc<AtomicU64>,
+    active_generation: Arc<AtomicU64>,
 ) -> anyhow::Result<ActiveConnection> {
-    let connection = connect(addr, server_name, request_uri, idle_timeout_ms, on_packet).await?;
+    let generation = next_generation.fetch_add(1, Ordering::Relaxed);
+    let connection = connect(
+        addr,
+        server_name,
+        request_uri,
+        idle_timeout_ms,
+        active_generation.clone(),
+        generation,
+        on_packet,
+    )
+    .await?;
+    active_generation.store(generation, Ordering::Relaxed);
     Ok(ActiveConnection {
         addr: connection.addr,
         config_rev,
+        generation,
         healthy: connection.healthy,
+        active_generation,
         uplink_send: connection.uplink_send,
         connection_task: connection.connection_task,
         read_task: connection.read_task,
@@ -665,7 +744,7 @@ async fn read_h2_packets(
 
 #[cfg(test)]
 mod tests {
-    use super::{active_connection_matches, transport_ping_interval};
+    use super::{active_connection_matches, transport_ping_interval, Http2Channel};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
 
@@ -698,6 +777,33 @@ mod tests {
             addr(443),
             8
         ));
+    }
+
+    #[test]
+    fn unchanged_gateway_config_does_not_bump_connection_revision() {
+        let channel = Http2Channel::new(
+            addr(443),
+            "https://gateway.example/gateway".into(),
+            "gateway.example".into(),
+        );
+
+        assert!(!channel.update_server_addr(addr(443)));
+        assert!(!channel.update_server_name("gateway.example".into()));
+        assert!(!channel.update_request_uri("https://gateway.example/gateway".into()));
+        assert_eq!(
+            channel
+                .config_rev
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+
+        assert!(channel.update_server_name("other.example".into()));
+        assert_eq!(
+            channel
+                .config_rev
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]

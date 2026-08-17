@@ -763,6 +763,10 @@ impl SdlContext {
             "lease_expire_unix_ms": summary.lease_expire_unix_ms,
             "grace_expire_unix_ms": summary.grace_expire_unix_ms,
             "reauth_required": summary.reauth_required,
+            "relay_health": summary.relay_health.as_str(),
+            "last_probe_unix_ms": summary.last_probe_unix_ms,
+            "last_probe_rtt_ms": summary.last_probe_rtt_ms,
+            "consecutive_probe_failures": summary.consecutive_probe_failures,
             "grant": grant.as_ref().map(|grant| json!({
                 "session_id": grant.session_id,
                 "policy_rev": grant.policy_rev,
@@ -795,6 +799,11 @@ impl SdlContext {
             let peers = peer_table
                 .values()
                 .map(|peer| {
+                    let relay_health = self
+                        .state
+                        .gateway
+                        .sessions
+                        .peer_relay_health_summary(peer.virtual_ip);
                     json!({
                         "virtual_ip": peer.virtual_ip.to_string(),
                         "name": peer.name,
@@ -802,6 +811,9 @@ impl SdlContext {
                         "device_id": peer.device_id,
                         "device_pub_key_len": peer.device_pub_key.len(),
                         "online_kx_pub_len": peer.online_kx_pub.len(),
+                        "last_relay_receive_unix_ms": relay_health.last_relay_receive_unix_ms,
+                        "last_relay_probe_unix_ms": relay_health.last_probe_unix_ms,
+                        "relay_probe_failures": relay_health.consecutive_probe_failures,
                     })
                 })
                 .collect::<Vec<_>>();

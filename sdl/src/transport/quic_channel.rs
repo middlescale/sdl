@@ -49,6 +49,10 @@ pub struct QuicChannel {
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
     config_rev: Arc<AtomicU64>,
+    // The currently usable QUIC connection. Gateway authentication is scoped to
+    // this connection on the server, so callers must discard an ACK when this
+    // value changes or becomes zero.
+    active_generation: Arc<AtomicU64>,
     sender: Sender<QuicCommand>,
     receiver: Arc<Mutex<Option<Receiver<QuicCommand>>>>,
 }
@@ -60,6 +64,7 @@ impl QuicChannel {
             server_addr: Arc::new(AtomicCell::new(server_addr)),
             server_name: Arc::new(Mutex::new(server_name)),
             config_rev: Arc::new(AtomicU64::new(0)),
+            active_generation: Arc::new(AtomicU64::new(0)),
             sender,
             receiver: Arc::new(Mutex::new(Some(receiver))),
         }
@@ -121,6 +126,7 @@ impl QuicChannel {
         let server_addr = self.server_addr.clone();
         let server_name = self.server_name.clone();
         let config_rev = self.config_rev.clone();
+        let active_generation = self.active_generation.clone();
         let worker_name = worker_name.to_string();
         let (stop_sender, stop_receiver) = tokio::sync::oneshot::channel::<()>();
         let worker = stop_manager.add_listener(worker_name.clone(), move || {
@@ -140,6 +146,7 @@ impl QuicChannel {
                         server_addr,
                         server_name,
                         config_rev,
+                        active_generation,
                         callback,
                         on_transport_error,
                     )
@@ -162,18 +169,31 @@ impl QuicChannel {
         Ok(())
     }
 
-    pub fn update_server_addr(&self, server_addr: SocketAddr) {
+    pub fn update_server_addr(&self, server_addr: SocketAddr) -> bool {
+        if self.server_addr.load() == server_addr {
+            return false;
+        }
         self.server_addr.store(server_addr);
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+        true
     }
 
     pub fn server_addr(&self) -> SocketAddr {
         self.server_addr.load()
     }
 
-    pub fn update_server_name(&self, server_name: String) {
-        *self.server_name.lock() = server_name;
+    pub fn update_server_name(&self, server_name: String) -> bool {
+        let mut current = self.server_name.lock();
+        if *current == server_name {
+            return false;
+        }
+        *current = server_name;
         self.config_rev.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+
+    pub fn connection_generation(&self) -> u64 {
+        self.active_generation.load(Ordering::Acquire)
     }
 
     pub fn send_packet<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -195,6 +215,7 @@ async fn run_quic_worker(
     server_addr: Arc<AtomicCell<SocketAddr>>,
     server_name: Arc<Mutex<String>>,
     config_rev: Arc<AtomicU64>,
+    active_generation: Arc<AtomicU64>,
     on_packet: PacketCallback,
     on_transport_error: TransportErrorCallback,
 ) {
@@ -207,7 +228,7 @@ async fn run_quic_worker(
                 let Some(event) = maybe_event else {
                     continue;
                 };
-                handle_read_event(&mut active, event, &on_transport_error);
+                handle_read_event(&mut active, event, &active_generation, &on_transport_error);
             }
             maybe_command = receiver.recv() => {
                 let Some(command) = maybe_command else {
@@ -219,6 +240,7 @@ async fn run_quic_worker(
                         let current_rev = config_rev.load(Ordering::Relaxed);
                         if active.as_ref().map(|v| (v.addr, v.config_rev)) != Some((addr, current_rev)) {
                             if let Some(connection) = active.take() {
+                                clear_active_generation(&active_generation, connection.connection_id);
                                 connection.close();
                             }
                         }
@@ -226,13 +248,15 @@ async fn run_quic_worker(
                             let name = server_name.lock().clone();
                             match connect(addr, &name, b"sdl-control").await {
                                 Ok(connection) => {
-                                    active = Some(register_active_connection(
+                                    let connection = register_active_connection(
                                         connection,
                                         current_rev,
                                         &mut next_connection_id,
                                         on_packet.clone(),
                                         read_event_sender.clone(),
-                                    ));
+                                        active_generation.clone(),
+                                    );
+                                    active = Some(connection);
                                 }
                                 Err(e) => {
                                     log::warn!("control quic connect failed {}: {:?}", addr, e);
@@ -252,6 +276,7 @@ async fn run_quic_worker(
                         if let Err(e) = send_result {
                             log::warn!("control quic send failed {}: {:?}", addr, e);
                             if let Some(connection) = active.take() {
+                                clear_active_generation(&active_generation, connection.connection_id);
                                 connection.close();
                             }
                             let name = server_name.lock().clone();
@@ -267,12 +292,14 @@ async fn run_quic_worker(
                                         mut send,
                                         recv,
                                     } = connection;
+                                    active_generation.store(connection_id, Ordering::Release);
                                     spawn_quic_reader(
                                         connection_id,
                                         recv,
                                         route_key,
                                         on_packet.clone(),
                                         read_event_sender.clone(),
+                                        active_generation.clone(),
                                     );
                                     if let Err(e) = send.write_all(&frame_packet(&data)).await {
                                         log::warn!("control quic resend failed {}: {:?}", addr, e);
@@ -280,6 +307,10 @@ async fn run_quic_worker(
                                             "control quic resend failed {}: {:?}",
                                             addr, e
                                         ));
+                                        clear_active_generation(
+                                            &active_generation,
+                                            connection_id,
+                                        );
                                         endpoint.close(0u32.into(), &[]);
                                     } else {
                                         active = Some(ActiveConnection {
@@ -306,6 +337,7 @@ async fn run_quic_worker(
         }
     }
     if let Some(connection) = active {
+        clear_active_generation(&active_generation, connection.connection_id);
         connection.close();
     }
 }
@@ -316,6 +348,7 @@ fn register_active_connection(
     next_connection_id: &mut u64,
     on_packet: PacketCallback,
     read_event_sender: Sender<QuicReadEvent>,
+    active_generation: Arc<AtomicU64>,
 ) -> ActiveConnection {
     let connection_id = *next_connection_id;
     *next_connection_id = next_connection_id.wrapping_add(1);
@@ -326,7 +359,15 @@ fn register_active_connection(
         send,
         recv,
     } = connection;
-    spawn_quic_reader(connection_id, recv, route_key, on_packet, read_event_sender);
+    active_generation.store(connection_id, Ordering::Release);
+    spawn_quic_reader(
+        connection_id,
+        recv,
+        route_key,
+        on_packet,
+        read_event_sender,
+        active_generation,
+    );
     ActiveConnection {
         connection_id,
         addr,
@@ -342,6 +383,7 @@ fn spawn_quic_reader(
     route_key: RouteKey,
     on_packet: PacketCallback,
     read_event_sender: Sender<QuicReadEvent>,
+    active_generation: Arc<AtomicU64>,
 ) {
     tokio::spawn(async move {
         let reason = match read_framed_packets(&mut recv, route_key, on_packet).await {
@@ -351,6 +393,7 @@ fn spawn_quic_reader(
             ),
             Err(e) => format!("control quic read failed {}: {:?}", route_key.addr, e),
         };
+        clear_active_generation(&active_generation, connection_id);
         let _ = read_event_sender
             .send(QuicReadEvent::Closed {
                 connection_id,
@@ -363,6 +406,7 @@ fn spawn_quic_reader(
 fn handle_read_event(
     active: &mut Option<ActiveConnection>,
     event: QuicReadEvent,
+    active_generation: &Arc<AtomicU64>,
     on_transport_error: &TransportErrorCallback,
 ) {
     match event {
@@ -374,11 +418,16 @@ fn handle_read_event(
                 return;
             }
             if let Some(connection) = active.take() {
+                clear_active_generation(active_generation, connection.connection_id);
                 connection.close();
             }
             on_transport_error(reason);
         }
     }
+}
+
+fn clear_active_generation(active_generation: &AtomicU64, generation: u64) {
+    let _ = active_generation.compare_exchange(generation, 0, Ordering::AcqRel, Ordering::Acquire);
 }
 
 pub(crate) struct QuicClientConnection {
@@ -524,7 +573,32 @@ pub(crate) fn frame_packet(data: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{consume_pending_frames, frame_packet};
+    use super::{consume_pending_frames, frame_packet, QuicChannel};
+    use std::net::SocketAddr;
+
+    #[test]
+    fn unchanged_gateway_config_does_not_bump_connection_revision() {
+        let address: SocketAddr = "127.0.0.1:4433".parse().unwrap();
+        let channel = QuicChannel::new(address, "gateway.example".into());
+
+        assert!(!channel.update_server_addr(address));
+        assert!(!channel.update_server_name("gateway.example".into()));
+        assert_eq!(
+            channel
+                .config_rev
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+
+        assert!(channel.update_server_addr("127.0.0.1:4434".parse().unwrap()));
+        assert!(channel.update_server_name("other.example".into()));
+        assert_eq!(
+            channel
+                .config_rev
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
 
     #[test]
     fn frame_packet_prefixes_big_endian_length() {

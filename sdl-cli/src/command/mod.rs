@@ -255,6 +255,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         let last_path = route_path_label(route.as_ref(), next_hop_is_gateway).unwrap_or_default();
         let (nat_traversal_type, rt) = device_path_label(route, next_hop_is_gateway, peer_active);
         let status = format!("{:?}", peer.status());
+        let relay_health = sdl.peer_relay_health_summary(peer_virtual_ip);
         let item = DeviceItem {
             name,
             virtual_ip,
@@ -278,6 +279,9 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
                 .get(&peer_virtual_ip)
                 .copied()
                 .unwrap_or_default(),
+            last_relay_receive_unix_ms: relay_health.last_relay_receive_unix_ms,
+            last_relay_probe_unix_ms: relay_health.last_probe_unix_ms,
+            relay_probe_failures: relay_health.consecutive_probe_failures,
             status,
         };
         list.push(item);
@@ -347,7 +351,13 @@ pub fn command_info(sdl: &Sdl) -> Info {
     let gateway_grant_state = gateway_grant_state_label(&gateway_summary);
     let connect_status = format!("{:?}", sdl.connection_status());
     let data_plane_status = if gateway_summary.authenticated {
-        "gateway-available".to_string()
+        if gateway_summary.relay_health
+            == sdl::data_plane::gateway_session::GatewayRelayHealth::Unreachable
+        {
+            "gateway-unreachable".to_string()
+        } else {
+            "gateway-available".to_string()
+        }
     } else if sdl
         .route_states()
         .into_iter()
@@ -396,6 +406,10 @@ pub fn command_info(sdl: &Sdl) -> Info {
         gateway_grant_state,
         gateway_endpoint,
         gateway_channel,
+        gateway_relay_health: gateway_summary.relay_health.as_str().to_string(),
+        gateway_last_probe_rtt_ms: gateway_summary.last_probe_rtt_ms,
+        gateway_probe_failures: gateway_summary.consecutive_probe_failures,
+        gateway_relay_send_failures: gateway_summary.relay_send_failures_total,
         connect_status,
         data_plane_status,
         auth_pending: service_state.auth_pending,
@@ -536,6 +550,10 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
                 channel: summary.channel_name,
                 status,
                 grant_state,
+                relay_health: summary.relay_health.as_str().to_string(),
+                last_probe_rtt_ms: summary.last_probe_rtt_ms,
+                probe_failures: summary.consecutive_probe_failures,
+                relay_send_failures: summary.relay_send_failures_total,
                 rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
                 up_rate,
                 down_rate,

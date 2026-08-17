@@ -19,6 +19,7 @@ pub struct DataPlaneStats {
     logical_down_total: Option<Arc<AtomicU64>>,
     gateway_up_total: Option<Arc<AtomicU64>>,
     gateway_down_total: Option<Arc<AtomicU64>>,
+    gateway_send_failures_total: Arc<AtomicU64>,
     gateway_up_meter: Option<ConcurrentTrafficMeter>,
     gateway_down_meter: Option<ConcurrentTrafficMeter>,
 }
@@ -36,6 +37,7 @@ impl DataPlaneStats {
             logical_down_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
             gateway_up_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
             gateway_down_total: enable_traffic.then(|| Arc::new(AtomicU64::new(0))),
+            gateway_send_failures_total: Arc::new(AtomicU64::new(0)),
             gateway_up_meter: enable_traffic.then(|| ConcurrentTrafficMeter::new(100)),
             gateway_down_meter: enable_traffic.then(|| ConcurrentTrafficMeter::new(100)),
         }
@@ -105,6 +107,16 @@ impl DataPlaneStats {
         if let Some(gateway_down_meter) = &self.gateway_down_meter {
             gateway_down_meter.add_traffic(len);
         }
+    }
+
+    /// Socket-level relay failures, separate from end-to-end probe health.
+    pub fn record_gateway_send_failure(&self) {
+        self.gateway_send_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn gateway_send_failures_total(&self) -> u64 {
+        self.gateway_send_failures_total.load(Ordering::Relaxed)
     }
 
     pub fn up_traffic_total(&self) -> u64 {

@@ -100,6 +100,11 @@ impl DataChannel {
                             err
                         );
                             let peer_identity = context.state.peers.identity_for_vip(vip);
+                            context.state.gateway.sessions.maybe_send_peer_relay_probe(
+                                *vip,
+                                peer_identity.as_ref(),
+                                context.state.peers.crypto.as_ref(),
+                            );
                             context
                                 .state
                                 .gateway
@@ -120,6 +125,11 @@ impl DataChannel {
             }
             Some(DataPath::GatewayRelay) => {
                 let peer_identity = context.state.peers.identity_for_vip(vip);
+                context.state.gateway.sessions.maybe_send_peer_relay_probe(
+                    *vip,
+                    peer_identity.as_ref(),
+                    context.state.peers.crypto.as_ref(),
+                );
                 context
                     .state
                     .gateway

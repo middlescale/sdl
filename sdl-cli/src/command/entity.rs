@@ -15,6 +15,10 @@ pub struct Info {
     pub gateway_grant_state: String,
     pub gateway_endpoint: String,
     pub gateway_channel: String,
+    pub gateway_relay_health: String,
+    pub gateway_last_probe_rtt_ms: Option<i64>,
+    pub gateway_probe_failures: u32,
+    pub gateway_relay_send_failures: u64,
     pub connect_status: String,
     pub data_plane_status: String,
     pub auth_pending: bool,
@@ -37,6 +41,10 @@ pub struct GatewayItem {
     pub channel: String,
     pub status: String,
     pub grant_state: String,
+    pub relay_health: String,
+    pub last_probe_rtt_ms: Option<i64>,
+    pub probe_failures: u32,
+    pub relay_send_failures: u64,
     pub rt_ms: String,
     #[serde(default)]
     pub up_rate: u64,
@@ -106,6 +114,12 @@ pub struct DeviceItem {
     pub up_connection_speed: u64,
     #[serde(default)]
     pub down_connection_speed: u64,
+    #[serde(default)]
+    pub last_relay_receive_unix_ms: i64,
+    #[serde(default)]
+    pub last_relay_probe_unix_ms: i64,
+    #[serde(default)]
+    pub relay_probe_failures: u32,
     pub status: String,
 }
 

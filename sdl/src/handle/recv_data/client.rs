@@ -368,6 +368,13 @@ impl<Device: DeviceWrite> PacketHandler for ClientPacketHandler<Device> {
                 .state
                 .data_plane_stats
                 .record_gateway_down(packet_len);
+            if source != current_device.virtual_gateway {
+                self.context
+                    .state
+                    .gateway
+                    .sessions
+                    .observe_peer_relay_receive(source, route_key);
+            }
         }
         if self
             .context
@@ -613,6 +620,24 @@ impl<Device: DeviceWrite> ClientPacketHandler<Device> {
                 send_reply_by_route(self.context.as_ref(), &net_packet, route_key)?;
             }
             ControlPacket::PongPacket(pong_packet) => {
+                if self
+                    .context
+                    .state
+                    .gateway
+                    .sessions
+                    .handle_gateway_probe_pong(source, route_key, pong_packet.epoch())
+                {
+                    return Ok(());
+                }
+                if self
+                    .context
+                    .state
+                    .gateway
+                    .sessions
+                    .handle_peer_relay_probe_pong(source, route_key, pong_packet.epoch())
+                {
+                    return Ok(());
+                }
                 let current_time = crate::handle::now_time() as u16;
                 if current_time < pong_packet.time() {
                     return Ok(());
