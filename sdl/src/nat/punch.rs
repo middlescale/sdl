@@ -17,6 +17,11 @@ use crate::proto::message::{PunchNatModel, PunchNatType};
 use crate::transport::udp_channel::UdpChannel;
 use crate::util::PeerProbeTracker;
 
+// A peer can advertise STUN mappings created through a different path from its
+// SDL listener. Keep the fan-out bounded while also probing the peer's known
+// public IP on its listener port.
+const MAX_PUBLIC_LISTENER_ENDPOINTS: usize = 8;
+
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum PunchModel {
     All,
@@ -323,8 +328,7 @@ impl Punch {
         if !self.punch_model.use_udp() || !nat_info.punch_model.use_udp() {
             return Ok(false);
         }
-        for addr in
-            ordered_explicit_probe_endpoints(&nat_info, self.punch_model, nat_info.punch_model)
+        for addr in ordered_punch_probe_endpoints(&nat_info, self.punch_model, nat_info.punch_model)
         {
             if self.nat_test.is_local_address(false, addr) {
                 continue;
@@ -335,27 +339,8 @@ impl Punch {
             log::info!("发送到打洞地址:{:?},rs={:?} {}", addr, rs, id);
             thread::sleep(Duration::from_millis(3));
         }
-        let has_explicit_public_endpoints = !nat_info.public_udp_endpoints.is_empty();
         if !self.punch_model.use_ipv4() || !nat_info.punch_model.use_ipv4() {
             return Ok(sent);
-        }
-        if !has_explicit_public_endpoints {
-            // 可能是开放了端口的，需要打洞
-            for port in &nat_info.local_udp_ports {
-                if *port == 0 {
-                    continue;
-                }
-                for ip in &nat_info.public_ips {
-                    if ip.is_unspecified() {
-                        continue;
-                    }
-                    let addr = SocketAddrV4::new(*ip, *port);
-                    self.peer_probe_tracker.record_punch_probe(id, addr.into());
-                    sent = true;
-                    let _ = self.udp_channel.send_to(buf, addr.into());
-                    thread::sleep(Duration::from_millis(3));
-                }
-            }
         }
 
         match nat_info.nat_type {
@@ -475,7 +460,7 @@ impl Punch {
     }
 }
 
-fn ordered_explicit_probe_endpoints(
+fn ordered_punch_probe_endpoints(
     nat_info: &NatInfo,
     local_punch_model: PunchModel,
     peer_punch_model: PunchModel,
@@ -502,12 +487,38 @@ fn ordered_explicit_probe_endpoints(
             endpoints.push(*addr);
         }
     }
+    // STUN mappings are normally the best candidates, but a cloud NAT can map
+    // them differently from the SDL listener. In that case the peer may still
+    // be reachable at its advertised public IP and listener port. Try those
+    // compatibility candidates after explicit mappings, without allowing a
+    // large IP/port cartesian product.
+    if local_punch_model.use_ipv4() && peer_punch_model.use_ipv4() {
+        let mut listener_candidates = 0;
+        for ip in &nat_info.public_ips {
+            if !is_ipv4_global(ip) {
+                continue;
+            }
+            for port in &nat_info.local_udp_ports {
+                if *port == 0 {
+                    continue;
+                }
+                let addr = SocketAddr::V4(SocketAddrV4::new(*ip, *port));
+                if !endpoints.contains(&addr) {
+                    endpoints.push(addr);
+                    listener_candidates += 1;
+                    if listener_candidates >= MAX_PUBLIC_LISTENER_ENDPOINTS {
+                        return endpoints;
+                    }
+                }
+            }
+        }
+    }
     endpoints
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ordered_explicit_probe_endpoints, NatInfo, NatType, PunchModel};
+    use super::{ordered_punch_probe_endpoints, NatInfo, NatType, PunchModel};
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
     #[test]
@@ -530,8 +541,7 @@ mod tests {
             PunchModel::All,
         );
 
-        let endpoints =
-            ordered_explicit_probe_endpoints(&nat_info, PunchModel::All, PunchModel::All);
+        let endpoints = ordered_punch_probe_endpoints(&nat_info, PunchModel::All, PunchModel::All);
 
         assert_eq!(
             endpoints.first().copied(),
@@ -543,6 +553,38 @@ mod tests {
         assert_eq!(
             endpoints.get(1).copied(),
             Some(SocketAddr::V6(SocketAddrV6::new(shared_ipv6, 51425, 0, 0)))
+        );
+    }
+
+    #[test]
+    fn probe_endpoints_include_public_listener_port_after_stun_mappings() {
+        let public_ip = Ipv4Addr::new(129, 204, 44, 203);
+        let nat_info = NatInfo::new(
+            vec![public_ip],
+            vec![53209, 53208],
+            vec![
+                SocketAddr::V4(SocketAddrV4::new(public_ip, 53209)),
+                SocketAddr::V4(SocketAddrV4::new(public_ip, 53208)),
+            ],
+            0,
+            Some(Ipv4Addr::new(10, 1, 0, 10)),
+            None,
+            vec![29873],
+            NatType::Cone,
+            PunchModel::IPv4Udp,
+        );
+
+        let endpoints =
+            ordered_punch_probe_endpoints(&nat_info, PunchModel::IPv4Udp, PunchModel::IPv4Udp);
+
+        assert_eq!(
+            endpoints,
+            vec![
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 1, 0, 10), 29873)),
+                SocketAddr::V4(SocketAddrV4::new(public_ip, 53209)),
+                SocketAddr::V4(SocketAddrV4::new(public_ip, 53208)),
+                SocketAddr::V4(SocketAddrV4::new(public_ip, 29873)),
+            ]
         );
     }
 }
