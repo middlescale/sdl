@@ -1,5 +1,5 @@
 use sdl::core::Sdl;
-use sdl::data_plane::gateway_session::GatewaySessionSummary;
+use sdl::data_plane::gateway_session::{GatewayErrorKind, GatewaySessionSummary};
 use sdl::data_plane::route::Route;
 use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
@@ -29,6 +29,11 @@ fn gateway_status_label(summary: &GatewaySessionSummary) -> &'static str {
     if !summary.configured {
         return "not-configured";
     }
+    if !summary.authenticated
+        && summary.last_gateway_error_kind == Some(GatewayErrorKind::AuthRejected)
+    {
+        return "auth-rejected";
+    }
     if summary.reauth_required {
         return "reauth-required";
     }
@@ -42,6 +47,46 @@ fn gateway_status_label(summary: &GatewaySessionSummary) -> &'static str {
         return "reconnecting";
     }
     "connecting"
+}
+
+fn gateway_auth_rejection_summary(
+    summaries: &[GatewaySessionSummary],
+) -> (u32, u32, Option<String>) {
+    let configured_gateway_count = summaries
+        .iter()
+        .filter(|summary| summary.configured)
+        .count() as u32;
+    let rejected_gateways: Vec<&GatewaySessionSummary> = summaries
+        .iter()
+        .filter(|summary| {
+            !summary.authenticated
+                && summary.last_gateway_error_kind == Some(GatewayErrorKind::AuthRejected)
+        })
+        .collect();
+    let gateway_auth_rejected_count = rejected_gateways.len() as u32;
+    let detail = if gateway_auth_rejected_count == 0 {
+        None
+    } else {
+        let reasons: BTreeSet<&str> = rejected_gateways
+            .iter()
+            .filter_map(|summary| summary.last_gateway_error.as_deref())
+            .collect();
+        let reasons = reasons.into_iter().collect::<Vec<_>>().join(", ");
+        if gateway_auth_rejected_count == configured_gateway_count {
+            Some(format!(
+                "all {configured_gateway_count} configured gateways rejected authentication: {reasons}; run `sdl gateway` for details"
+            ))
+        } else {
+            Some(format!(
+                "{gateway_auth_rejected_count} of {configured_gateway_count} configured gateways rejected authentication: {reasons}; run `sdl gateway` for details"
+            ))
+        }
+    };
+    (
+        configured_gateway_count,
+        gateway_auth_rejected_count,
+        detail,
+    )
 }
 
 const CONTROL_DESTINATION: &str = "CONTROL";
@@ -331,6 +376,9 @@ pub fn command_info(sdl: &Sdl) -> Info {
     let config = sdl.config();
     let current_device = sdl.current_device();
     let gateway_summary = sdl.gateway_session_summary();
+    let gateway_summaries = sdl.gateway_session_summaries();
+    let (configured_gateway_count, gateway_auth_rejected_count, gateway_auth_status_detail) =
+        gateway_auth_rejection_summary(&gateway_summaries);
     let nat_info = sdl.nat_info();
     let name = config.name.clone();
     let runtime_name = sdl.name().to_string();
@@ -338,7 +386,13 @@ pub fn command_info(sdl: &Sdl) -> Info {
     let virtual_ip = current_device.virtual_ip().to_string();
     let virtual_gateway = current_device.virtual_gateway().to_string();
     let virtual_netmask = current_device.virtual_netmask.to_string();
-    let gateway_session_status = gateway_status_label(&gateway_summary).to_string();
+    let gateway_session_status = if gateway_auth_rejected_count > 0
+        && gateway_auth_rejected_count == configured_gateway_count
+    {
+        "auth-rejected".to_string()
+    } else {
+        gateway_status_label(&gateway_summary).to_string()
+    };
     let gateway_endpoint = gateway_summary
         .endpoint
         .map(|endpoint| endpoint.to_string())
@@ -410,6 +464,16 @@ pub fn command_info(sdl: &Sdl) -> Info {
         gateway_last_probe_rtt_ms: gateway_summary.last_probe_rtt_ms,
         gateway_probe_failures: gateway_summary.consecutive_probe_failures,
         gateway_relay_send_failures: gateway_summary.relay_send_failures_total,
+        gateway_last_error: gateway_summary.last_gateway_error.clone(),
+        gateway_last_error_kind: gateway_summary
+            .last_gateway_error_kind
+            .map(GatewayErrorKind::as_str)
+            .map(str::to_string),
+        gateway_last_error_at_unix_ms: gateway_summary.last_gateway_error_unix_ms,
+        gateway_error_count: gateway_summary.consecutive_gateway_errors,
+        gateway_auth_rejected_count,
+        gateway_configured_count: configured_gateway_count,
+        gateway_auth_status_detail,
         connect_status,
         data_plane_status,
         auth_pending: service_state.auth_pending,
@@ -554,6 +618,13 @@ pub fn command_gateway(sdl: &Sdl) -> Vec<GatewayItem> {
                 last_probe_rtt_ms: summary.last_probe_rtt_ms,
                 probe_failures: summary.consecutive_probe_failures,
                 relay_send_failures: summary.relay_send_failures_total,
+                last_error: summary.last_gateway_error,
+                last_error_kind: summary
+                    .last_gateway_error_kind
+                    .map(GatewayErrorKind::as_str)
+                    .map(str::to_string),
+                last_error_at_unix_ms: summary.last_gateway_error_unix_ms,
+                error_count: summary.consecutive_gateway_errors,
                 rt_ms: summary.rt_ms.map(|rt| rt.to_string()).unwrap_or_default(),
                 up_rate,
                 down_rate,
@@ -684,8 +755,9 @@ pub fn command_traffic(sdl: &Sdl) -> TrafficSummary {
 #[cfg(test)]
 mod tests {
     use super::{
-        control_route_metric_rt, device_path_label, display_destination, route_name,
-        route_path_label, RouteItem, CONTROL_DESTINATION,
+        control_route_metric_rt, device_path_label, display_destination,
+        gateway_auth_rejection_summary, gateway_status_label, route_name, route_path_label,
+        GatewayErrorKind, GatewaySessionSummary, RouteItem, CONTROL_DESTINATION,
     };
     use sdl::data_plane::route::Route;
     use sdl::transport::connect_protocol::ConnectProtocol;
@@ -701,6 +773,37 @@ mod tests {
         assert_eq!(
             display_destination(Ipv4Addr::new(10, 26, 0, 1)),
             "10.26.0.1"
+        );
+    }
+
+    #[test]
+    fn gateway_status_reports_auth_rejection_before_reconnect_state() {
+        let summary = GatewaySessionSummary {
+            configured: true,
+            last_gateway_error: Some("ticket_client_clock_skew".to_string()),
+            last_gateway_error_kind: Some(GatewayErrorKind::AuthRejected),
+            consecutive_send_failures: 2,
+            ..Default::default()
+        };
+        assert_eq!(gateway_status_label(&summary), "auth-rejected");
+    }
+
+    #[test]
+    fn gateway_status_summarizes_all_authentication_rejections() {
+        let rejected = GatewaySessionSummary {
+            configured: true,
+            last_gateway_error: Some("ticket_client_clock_skew".to_string()),
+            last_gateway_error_kind: Some(GatewayErrorKind::AuthRejected),
+            ..Default::default()
+        };
+        let (configured, rejected_count, detail) =
+            gateway_auth_rejection_summary(&[rejected.clone(), rejected]);
+        assert_eq!((configured, rejected_count), (2, 2));
+        assert_eq!(
+            detail.as_deref(),
+            Some(
+                "all 2 configured gateways rejected authentication: ticket_client_clock_skew; run `sdl gateway` for details"
+            )
         );
     }
 

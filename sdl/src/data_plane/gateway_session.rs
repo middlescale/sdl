@@ -93,6 +93,23 @@ impl GatewayRelayHealth {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatewayErrorKind {
+    AuthRejected,
+    SendFailed,
+    ProbeUnreachable,
+}
+
+impl GatewayErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthRejected => "auth-rejected",
+            Self::SendFailed => "send-failed",
+            Self::ProbeUnreachable => "probe-unreachable",
+        }
+    }
+}
+
 impl GatewayGrantState {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -121,6 +138,10 @@ struct GatewaySessionState {
     lease_secs_hint: u32,
     grace_secs_hint: u32,
     reauth_required: bool,
+    last_gateway_error: Option<String>,
+    last_gateway_error_kind: Option<GatewayErrorKind>,
+    last_gateway_error_unix_ms: i64,
+    consecutive_gateway_errors: u32,
     last_rtt_ms: Option<i64>,
     consecutive_send_failures: u32,
     unanswered_hello_count: u32,
@@ -522,6 +543,7 @@ impl GatewaySession {
             guard.lease_expire_unix_ms = 0;
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = false;
+            Self::clear_gateway_error(&mut guard);
             guard.last_rtt_ms = None;
             guard.consecutive_send_failures = 0;
             guard.unanswered_hello_count = 0;
@@ -629,6 +651,10 @@ impl GatewaySession {
             lease_expire_unix_ms: guard.lease_expire_unix_ms,
             grace_expire_unix_ms: guard.grace_expire_unix_ms,
             reauth_required: guard.reauth_required,
+            last_gateway_error: guard.last_gateway_error.clone(),
+            last_gateway_error_kind: guard.last_gateway_error_kind,
+            last_gateway_error_unix_ms: guard.last_gateway_error_unix_ms,
+            consecutive_gateway_errors: guard.consecutive_gateway_errors,
             rt_ms: guard.last_rtt_ms,
             active: false,
             grant_phase,
@@ -749,6 +775,12 @@ impl GatewaySession {
 
     fn record_send_failure(&self, kind: io::ErrorKind) -> bool {
         let mut guard = self.state.lock();
+        Self::record_gateway_error(
+            &mut guard,
+            GatewayErrorKind::SendFailed,
+            format!("send_failed:{}", gateway_send_error_code(kind)),
+            now_time() as i64,
+        );
         guard.consecutive_send_failures += 1;
         let udp_transport_error = self.is_udp()
             && matches!(
@@ -769,6 +801,34 @@ impl GatewaySession {
     fn record_send_success(&self) {
         let mut guard = self.state.lock();
         guard.consecutive_send_failures = 0;
+        if guard.last_gateway_error_kind == Some(GatewayErrorKind::SendFailed) {
+            Self::clear_gateway_error(&mut guard);
+        }
+    }
+
+    fn record_gateway_error(
+        guard: &mut GatewaySessionState,
+        kind: GatewayErrorKind,
+        error: String,
+        now_ms: i64,
+    ) {
+        if guard.last_gateway_error_kind == Some(kind)
+            && guard.last_gateway_error.as_deref() == Some(error.as_str())
+        {
+            guard.consecutive_gateway_errors = guard.consecutive_gateway_errors.saturating_add(1);
+        } else {
+            guard.consecutive_gateway_errors = 1;
+        }
+        guard.last_gateway_error = Some(error);
+        guard.last_gateway_error_kind = Some(kind);
+        guard.last_gateway_error_unix_ms = now_ms;
+    }
+
+    fn clear_gateway_error(guard: &mut GatewaySessionState) {
+        guard.last_gateway_error = None;
+        guard.last_gateway_error_kind = None;
+        guard.last_gateway_error_unix_ms = 0;
+        guard.consecutive_gateway_errors = 0;
     }
 
     fn record_unanswered_hello(&self) -> bool {
@@ -846,6 +906,7 @@ impl GatewaySession {
         guard.unanswered_hello_count = 0;
         guard.udp_rebuild_requested = false;
         if ack.ok {
+            Self::clear_gateway_error(&mut guard);
             let now_ms = now_time() as i64;
             if guard.last_hello_unix_ms > 0 && now_ms >= guard.last_hello_unix_ms {
                 guard.last_rtt_ms = Some((now_ms - guard.last_hello_unix_ms).max(1));
@@ -887,10 +948,17 @@ impl GatewaySession {
                 }),
             );
         } else {
+            let now_ms = now_time() as i64;
             guard.keepalive_secs = 0;
             guard.lease_expire_unix_ms = 0;
             guard.grace_expire_unix_ms = 0;
             guard.reauth_required = ack.reauth_required;
+            let error = if ack.reason.is_empty() {
+                "gateway_rejected".to_string()
+            } else {
+                ack.reason.clone()
+            };
+            Self::record_gateway_error(&mut guard, GatewayErrorKind::AuthRejected, error, now_ms);
             guard.last_rtt_ms = None;
             if let GatewayTransport::Https(channel) = &self.channel {
                 channel.update_idle_timeout(gateway_http2_idle_timeout(0));
@@ -957,6 +1025,14 @@ impl GatewaySession {
         }
         if guard.last_probe_sent_unix_ms > guard.last_probe_reply_unix_ms {
             guard.consecutive_probe_failures = guard.consecutive_probe_failures.saturating_add(1);
+            if guard.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
+                Self::record_gateway_error(
+                    &mut guard,
+                    GatewayErrorKind::ProbeUnreachable,
+                    "probe_unreachable".to_string(),
+                    now_ms,
+                );
+            }
         }
         guard.last_probe_sent_unix_ms = now_ms;
         guard.gateway_virtual_ip = Some(current_device.virtual_gateway);
@@ -986,6 +1062,9 @@ impl GatewaySession {
         guard.last_probe_reply_unix_ms = now_ms;
         guard.last_probe_rtt_ms = Some((now_ms - guard.last_probe_sent_unix_ms).max(1));
         guard.consecutive_probe_failures = 0;
+        if guard.last_gateway_error_kind == Some(GatewayErrorKind::ProbeUnreachable) {
+            Self::clear_gateway_error(&mut guard);
+        }
         true
     }
 
@@ -1074,6 +1153,10 @@ pub struct GatewaySessionSummary {
     pub lease_expire_unix_ms: i64,
     pub grace_expire_unix_ms: i64,
     pub reauth_required: bool,
+    pub last_gateway_error: Option<String>,
+    pub last_gateway_error_kind: Option<GatewayErrorKind>,
+    pub last_gateway_error_unix_ms: i64,
+    pub consecutive_gateway_errors: u32,
     pub rt_ms: Option<i64>,
     pub active: bool,
     pub grant_phase: GatewayGrantPhase,
@@ -2145,6 +2228,20 @@ fn gateway_grant_phase_rank(phase: GatewayGrantPhase) -> u8 {
     }
 }
 
+fn gateway_send_error_code(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::AddrNotAvailable => "addr_not_available",
+        io::ErrorKind::ConnectionRefused => "connection_refused",
+        io::ErrorKind::ConnectionReset => "connection_reset",
+        io::ErrorKind::HostUnreachable => "host_unreachable",
+        io::ErrorKind::NetworkUnreachable => "network_unreachable",
+        io::ErrorKind::NotConnected => "not_connected",
+        io::ErrorKind::TimedOut => "timed_out",
+        io::ErrorKind::WouldBlock => "would_block",
+        _ => "io_error",
+    }
+}
+
 fn gateway_http2_idle_timeout(keepalive_secs: u32) -> Duration {
     let keepalive_secs = u64::from(keepalive_secs.max(3));
     Duration::from_secs((keepalive_secs * 2).max(GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS))
@@ -2723,6 +2820,72 @@ mod tests {
         );
 
         assert!(!sessions.udp_rebuild_backoff.lock().contains_key(&endpoint));
+    }
+
+    #[test]
+    fn rejected_gateway_ack_records_error_until_a_successful_ack() {
+        let session = GatewaySession::new_quic(
+            "127.0.0.1:29900".parse().unwrap(),
+            Default::default(),
+            DataPlaneStats::new(true),
+        );
+        session.state.lock().session_id = 7;
+
+        session.handle_connect_ack(&GatewayConnectAck {
+            session_id: 7,
+            ok: false,
+            reason: "ticket_client_clock_skew".to_string(),
+            ..Default::default()
+        });
+        {
+            let state = session.state.lock();
+            assert_eq!(
+                state.last_gateway_error.as_deref(),
+                Some("ticket_client_clock_skew")
+            );
+            assert_eq!(
+                state.last_gateway_error_kind,
+                Some(super::GatewayErrorKind::AuthRejected)
+            );
+            assert!(state.last_gateway_error_unix_ms > 0);
+            assert_eq!(state.consecutive_gateway_errors, 1);
+        }
+
+        session.handle_connect_ack(&GatewayConnectAck {
+            session_id: 7,
+            ok: true,
+            ..Default::default()
+        });
+        let state = session.state.lock();
+        assert!(state.last_gateway_error.is_none());
+        assert_eq!(state.last_gateway_error_kind, None);
+        assert_eq!(state.last_gateway_error_unix_ms, 0);
+        assert_eq!(state.consecutive_gateway_errors, 0);
+    }
+
+    #[test]
+    fn gateway_send_failure_is_exposed_as_a_gateway_error() {
+        let session = GatewaySession::new_quic(
+            "127.0.0.1:29900".parse().unwrap(),
+            Default::default(),
+            DataPlaneStats::new(true),
+        );
+
+        session.record_send_failure(io::ErrorKind::NetworkUnreachable);
+        {
+            let state = session.state.lock();
+            assert_eq!(
+                state.last_gateway_error.as_deref(),
+                Some("send_failed:network_unreachable")
+            );
+            assert_eq!(
+                state.last_gateway_error_kind,
+                Some(super::GatewayErrorKind::SendFailed)
+            );
+        }
+
+        session.record_send_success();
+        assert!(session.state.lock().last_gateway_error.is_none());
     }
 
     #[test]

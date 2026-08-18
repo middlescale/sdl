@@ -60,6 +60,11 @@ pub fn console_info(status: Info) {
             style(status.gateway_session_status).red()
         );
     }
+    if let Some(detail) = &status.gateway_auth_status_detail {
+        println!("Gateway error: {}", style(detail).red());
+    } else if let Some(error) = &status.gateway_last_error {
+        println!("Gateway error: {}", style(error).red());
+    }
     if !status.gateway_endpoint.is_empty() {
         println!(
             "Gateway endpoint: {}",
@@ -232,6 +237,7 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
         ("Channel".to_string(), Style::new()),
         ("Status".to_string(), Style::new()),
         ("Grant".to_string(), Style::new()),
+        ("Error".to_string(), Style::new()),
         ("Rt(ms)".to_string(), Style::new()),
         ("Speed".to_string(), Style::new()),
         ("Active".to_string(), Style::new()),
@@ -250,6 +256,18 @@ pub fn console_gateway(mut list: Vec<GatewayItem>) {
             (item.channel, style.clone()),
             (item.status, style.clone()),
             (item.grant_state, style.clone()),
+            (
+                item.last_error
+                    .map(|error| {
+                        if item.error_count > 1 {
+                            format!("{error} ({})", item.error_count)
+                        } else {
+                            error
+                        }
+                    })
+                    .unwrap_or_else(|| "-".to_string()),
+                style.clone(),
+            ),
             (
                 if item.rt_ms.is_empty() {
                     "-".to_string()
