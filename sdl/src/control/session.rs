@@ -350,6 +350,7 @@ impl ControlSession {
             .unwrap_or_else(Instant::now);
         let mut public_addr_delay = Duration::from_secs(3);
         let mut last_relay_repunch_at = Instant::now();
+        let mut last_periodic_repunch_target = None;
         loop {
             if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
                 break;
@@ -430,14 +431,20 @@ impl ControlSession {
                 && last_relay_repunch_at.elapsed() >= RELAY_REPUNCH_INTERVAL
             {
                 let peers_missing_direct_route = self.peers_missing_direct_route();
-                if !peers_missing_direct_route.is_empty() {
+                if let Some(target) = next_periodic_repunch_target(
+                    &peers_missing_direct_route,
+                    last_periodic_repunch_target,
+                ) {
                     log::info!(
-                        "periodic repunch requested for peers without direct route: {:?}",
-                        peers_missing_direct_route
+                        "periodic repunch requested for peer without direct route: {} ({} candidates)",
+                        target,
+                        peers_missing_direct_route.len()
                     );
-                    self.request_punch_status_report_with_nat_ready(
-                        PunchTriggerReason::PunchTriggerManualRequest,
-                    );
+                    // A target-less ManualRequest fan-outs to every online peer in control.
+                    // Periodic recovery must stay bounded; payload-triggered recovery remains
+                    // immediate and targeted for the peer that needs it.
+                    self.request_direct_recovery_for(target);
+                    last_periodic_repunch_target = Some(target);
                 }
                 last_relay_repunch_at = Instant::now();
             }
@@ -912,6 +919,17 @@ fn handshake_request_packet() -> io::Result<NetPacket<Vec<u8>>> {
     Ok(net_packet)
 }
 
+fn next_periodic_repunch_target(
+    peers: &[std::net::Ipv4Addr],
+    last_target: Option<std::net::Ipv4Addr>,
+) -> Option<std::net::Ipv4Addr> {
+    let mut peers = peers.to_vec();
+    peers.sort_unstable();
+    last_target
+        .and_then(|last| peers.iter().copied().find(|peer| *peer > last))
+        .or_else(|| peers.first().copied())
+}
+
 fn try_refresh_gateway_grant(control_session: &ControlSession, gateway_sessions: &GatewaySessions) {
     let current_device = control_session.current_device();
     if !current_device.status.online() {
@@ -997,8 +1015,38 @@ fn control_reconnect_delay(
 
 #[cfg(test)]
 mod tests {
-    use super::{control_reconnect_delay, gateway_grant_refresh_mode, retry_cooldown_elapsed};
+    use super::{
+        control_reconnect_delay, gateway_grant_refresh_mode, next_periodic_repunch_target,
+        retry_cooldown_elapsed,
+    };
+    use std::net::Ipv4Addr;
     use std::time::Duration;
+
+    #[test]
+    fn periodic_repunch_rotates_one_target_at_a_time() {
+        let peers = [
+            Ipv4Addr::new(10, 26, 0, 10),
+            Ipv4Addr::new(10, 26, 0, 2),
+            Ipv4Addr::new(10, 26, 0, 7),
+        ];
+
+        assert_eq!(
+            next_periodic_repunch_target(&peers, None),
+            Some(Ipv4Addr::new(10, 26, 0, 2))
+        );
+        assert_eq!(
+            next_periodic_repunch_target(&peers, Some(Ipv4Addr::new(10, 26, 0, 2))),
+            Some(Ipv4Addr::new(10, 26, 0, 7))
+        );
+        assert_eq!(
+            next_periodic_repunch_target(&peers, Some(Ipv4Addr::new(10, 26, 0, 7))),
+            Some(Ipv4Addr::new(10, 26, 0, 10))
+        );
+        assert_eq!(
+            next_periodic_repunch_target(&peers, Some(Ipv4Addr::new(10, 26, 0, 10))),
+            Some(Ipv4Addr::new(10, 26, 0, 2))
+        );
+    }
 
     #[test]
     fn retry_cooldown_elapsed_allows_first_attempt() {
