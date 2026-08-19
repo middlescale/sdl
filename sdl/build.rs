@@ -1,6 +1,8 @@
 use cfg_aliases::cfg_aliases;
+use rand::Rng;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 fn write_if_changed(src: &Path, dst: &Path) {
     let src_bytes = fs::read(src).expect("read generated proto failed");
@@ -18,6 +20,23 @@ fn write_if_changed(src: &Path, dst: &Path) {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=proto/message.proto");
+    emit_git_rerun_hints();
+
+    let now_time = chrono::Local::now();
+    let serial_number = format!(
+        "{}-{}",
+        now_time.format("%y%m%d%H%M"),
+        rand::thread_rng().gen_range(100..1000)
+    );
+    println!("cargo:rustc-env=SDL_BUILD_SERIAL={serial_number}");
+    println!(
+        "cargo:rustc-env=SDL_BUILD_GIT_TAG={}",
+        git_output(&["describe", "--tags", "--exact-match"]).unwrap_or_default()
+    );
+    println!(
+        "cargo:rustc-env=SDL_BUILD_GIT_COMMIT={}",
+        git_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_default()
+    );
 
     cfg_aliases! {
         cipher: {
@@ -48,4 +67,36 @@ fn main() {
     let generated = generated_dir.join("message.rs");
     let target = Path::new("src/proto/message.rs");
     write_if_changed(&generated, target);
+}
+
+fn git_output(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn emit_git_rerun_hints() {
+    let Some(head_path) = git_output(&["rev-parse", "--git-path", "HEAD"]) else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={head_path}");
+
+    // A checkout normally updates the branch ref rather than HEAD itself. Track
+    // that ref too, as well as packed refs and tag refs used by `git describe`.
+    if let Ok(head) = fs::read_to_string(&head_path) {
+        if let Some(reference) = head.strip_prefix("ref: ").map(str::trim) {
+            if let Some(reference_path) = git_output(&["rev-parse", "--git-path", reference]) {
+                println!("cargo:rerun-if-changed={reference_path}");
+            }
+        }
+    }
+    for path in ["packed-refs", "refs/tags"] {
+        if let Some(path) = git_output(&["rev-parse", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
 }

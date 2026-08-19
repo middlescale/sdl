@@ -726,7 +726,7 @@ impl SdlContext {
         json!({
             "name": self.config.name,
             "device_id": self.config.device_id,
-            "sdl_version": crate::SDL_VERSION,
+            "sdl_version": crate::build_version_string(),
             "server_addr": self.config.server_addr,
             "mtu": self.config.mtu,
             "virtual_ip": current_device.virtual_ip.to_string(),
@@ -905,9 +905,14 @@ fn debug_system_info_json() -> Value {
 }
 
 fn debug_build_info_json() -> Value {
+    let build = crate::BUILD_INFO;
     json!({
-        "package_name": env!("CARGO_PKG_NAME"),
-        "package_version": env!("CARGO_PKG_VERSION"),
+        "display_version": crate::build_version_string(),
+        "package_name": build.package_name,
+        "package_version": build.package_version,
+        "git_tag": build.git_tag,
+        "git_commit": build.git_commit,
+        "serial": build.serial,
         "debug_assertions": cfg!(debug_assertions),
         "features": {
             "integrated_tun": cfg!(feature = "integrated_tun"),

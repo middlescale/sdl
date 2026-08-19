@@ -31,7 +31,7 @@ pub fn registration_request_packet(
     }
     request.allow_ip_change = allow_ip_change;
     request.is_fast = is_fast;
-    request.version = crate::SDL_VERSION.to_string();
+    request.version = crate::build_version_string();
     let bytes = request
         .write_to_bytes()
         .map_err(|e| anyhow!("RegistrationRequest {:?}", e))?;

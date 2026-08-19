@@ -2031,6 +2031,7 @@ dependencies = [
  "cfg_aliases",
  "chacha20",
  "chacha20poly1305",
+ "chrono",
  "crossbeam-epoch",
  "crossbeam-queue",
  "crossbeam-utils",
@@ -2080,7 +2081,6 @@ name = "sdl-cli"
 version = "2.0.0"
 dependencies = [
  "anyhow",
- "chrono",
  "console",
  "env_logger",
  "fs2",
@@ -2090,7 +2090,6 @@ dependencies = [
  "libc",
  "log",
  "log4rs",
- "rand 0.8.5",
  "sdl",
  "serde",
  "serde_json",

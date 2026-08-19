@@ -894,7 +894,7 @@ fn append_len_prefixed(buf: &mut Vec<u8>, data: &[u8]) {
 
 fn handshake_request_packet() -> io::Result<NetPacket<Vec<u8>>> {
     let mut request = HandshakeRequest::new();
-    request.version = crate::SDL_VERSION.to_string();
+    request.version = crate::build_version_string();
     request
         .capabilities
         .push(CAPABILITY_UDP_ENDPOINT_REPORT_V1.to_string());

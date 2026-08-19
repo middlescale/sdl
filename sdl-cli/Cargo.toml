@@ -58,7 +58,3 @@ path = "src/bin/sdl.rs"
 [[bin]]
 name = "sdl-service"
 path = "src/bin/sdl-service.rs"
-
-[build-dependencies]
-rand = "0.8.5"
-chrono = "0.4.23"
