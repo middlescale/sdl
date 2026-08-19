@@ -2264,12 +2264,14 @@ mod tests {
     use protobuf::EnumOrUnknown;
 
     use crate::core::PeerIdentity;
+    use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::handle::CurrentDeviceInfo;
     use crate::proto::message::{
         GatewayAccessGrant, GatewayChannel, GatewayChannelKind, GatewayConnectAck,
     };
     use crate::protocol::NetPacket;
+    use crate::transport::connect_protocol::ConnectProtocol;
     use crate::util::StopManager;
 
     #[test]
@@ -2417,6 +2419,33 @@ mod tests {
             GatewaySession::relay_health(&state, 1),
             super::GatewayRelayHealth::Healthy
         );
+    }
+
+    #[test]
+    fn matching_gateway_probe_pong_marks_the_session_healthy() {
+        let endpoint = "127.0.0.1:29900".parse().unwrap();
+        let session = GatewaySession::new_quic(
+            endpoint,
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        {
+            let mut state = session.state.lock();
+            state.gateway_virtual_ip = Some(Ipv4Addr::new(10, 26, 0, 1));
+            state.probe_epoch = 42;
+            state.last_probe_sent_unix_ms = now_time() as i64;
+            state.consecutive_probe_failures = super::GATEWAY_PROBE_UNREACHABLE_AFTER;
+        }
+
+        assert!(session.handle_gateway_probe_pong(
+            Ipv4Addr::new(10, 26, 0, 1),
+            RouteKey::new(ConnectProtocol::QUIC, endpoint),
+            42,
+        ));
+        let state = session.state.lock();
+        assert!(state.last_probe_reply_unix_ms > 0);
+        assert!(state.last_probe_rtt_ms.is_some());
+        assert_eq!(state.consecutive_probe_failures, 0);
     }
 
     #[test]

@@ -1640,6 +1640,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
     ) -> anyhow::Result<()> {
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PongPacket(pong_packet) => {
+                // Gateway probes use the virtual gateway as their source, so receive
+                // dispatch routes them to ServerPacketHandler rather than the normal
+                // peer-side ClientPacketHandler. Consume a matching probe reply here
+                // before treating it as a generic route-measurement Pong.
+                if self
+                    .context
+                    .state
+                    .gateway
+                    .sessions
+                    .handle_gateway_probe_pong(net_packet.source(), route_key, pong_packet.epoch())
+                {
+                    return Ok(());
+                }
                 let current_time = crate::handle::now_time() as u16;
                 if current_time < pong_packet.time() {
                     return Ok(());
