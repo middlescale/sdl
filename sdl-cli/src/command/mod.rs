@@ -34,6 +34,11 @@ fn gateway_status_label(summary: &GatewaySessionSummary) -> &'static str {
     {
         return "auth-rejected";
     }
+    if !summary.authenticated
+        && summary.last_gateway_error_kind == Some(GatewayErrorKind::ConnectTimeout)
+    {
+        return "unreachable";
+    }
     if summary.reauth_required {
         return "reauth-required";
     }
@@ -87,6 +92,36 @@ fn gateway_auth_rejection_summary(
         gateway_auth_rejected_count,
         detail,
     )
+}
+
+fn data_plane_status(
+    gateway_summary: &GatewaySessionSummary,
+    configured_gateway_count: u32,
+    gateway_auth_rejected_count: u32,
+    has_p2p_route: bool,
+) -> &'static str {
+    // A direct route cannot provide the initial recovery path: it must first
+    // fall back to a gateway while its P2P liveness is re-established.  Do not
+    // let a stale P2P route hide the fact that every configured gateway has
+    // rejected this client.
+    if configured_gateway_count > 0 && gateway_auth_rejected_count == configured_gateway_count {
+        return "gateway-auth-rejected";
+    }
+    if gateway_summary.authenticated {
+        if gateway_summary.relay_health
+            == sdl::data_plane::gateway_session::GatewayRelayHealth::Unreachable
+        {
+            return "gateway-unreachable";
+        }
+        return "gateway-available";
+    }
+    if gateway_summary.configured && gateway_summary.last_gateway_error_kind.is_some() {
+        return "gateway-unavailable";
+    }
+    if has_p2p_route {
+        return "p2p-available";
+    }
+    "limited"
 }
 
 const CONTROL_DESTINATION: &str = "CONTROL";
@@ -404,23 +439,17 @@ pub fn command_info(sdl: &Sdl) -> Info {
     };
     let gateway_grant_state = gateway_grant_state_label(&gateway_summary);
     let connect_status = format!("{:?}", sdl.connection_status());
-    let data_plane_status = if gateway_summary.authenticated {
-        if gateway_summary.relay_health
-            == sdl::data_plane::gateway_session::GatewayRelayHealth::Unreachable
-        {
-            "gateway-unreachable".to_string()
-        } else {
-            "gateway-available".to_string()
-        }
-    } else if sdl
+    let has_p2p_route = sdl
         .route_states()
         .into_iter()
-        .any(|(_, routes)| routes.into_iter().any(|route| route.kind == RouteKind::P2p))
-    {
-        "p2p-available".to_string()
-    } else {
-        "limited".to_string()
-    };
+        .any(|(_, routes)| routes.into_iter().any(|route| route.kind == RouteKind::P2p));
+    let data_plane_status = data_plane_status(
+        &gateway_summary,
+        configured_gateway_count,
+        gateway_auth_rejected_count,
+        has_p2p_route,
+    )
+    .to_string();
     let channel_policy = match sdl.use_channel_type() {
         UseChannelType::Relay => "relay".to_string(),
         UseChannelType::P2p => "p2p".to_string(),
@@ -755,7 +784,7 @@ pub fn command_traffic(sdl: &Sdl) -> TrafficSummary {
 #[cfg(test)]
 mod tests {
     use super::{
-        control_route_metric_rt, device_path_label, display_destination,
+        control_route_metric_rt, data_plane_status, device_path_label, display_destination,
         gateway_auth_rejection_summary, gateway_status_label, route_name, route_path_label,
         GatewayErrorKind, GatewaySessionSummary, RouteItem, CONTROL_DESTINATION,
     };
@@ -789,6 +818,16 @@ mod tests {
     }
 
     #[test]
+    fn gateway_status_reports_unanswered_connection_timeout() {
+        let summary = GatewaySessionSummary {
+            configured: true,
+            last_gateway_error_kind: Some(GatewayErrorKind::ConnectTimeout),
+            ..Default::default()
+        };
+        assert_eq!(gateway_status_label(&summary), "unreachable");
+    }
+
+    #[test]
     fn gateway_status_summarizes_all_authentication_rejections() {
         let rejected = GatewaySessionSummary {
             configured: true,
@@ -804,6 +843,32 @@ mod tests {
             Some(
                 "all 2 configured gateways rejected authentication: ticket_client_clock_skew; run `sdl gateway` for details"
             )
+        );
+    }
+
+    #[test]
+    fn all_gateway_auth_rejections_override_a_stale_p2p_route() {
+        let summary = GatewaySessionSummary {
+            configured: true,
+            last_gateway_error_kind: Some(GatewayErrorKind::AuthRejected),
+            ..Default::default()
+        };
+        assert_eq!(
+            data_plane_status(&summary, 2, 2, true),
+            "gateway-auth-rejected"
+        );
+    }
+
+    #[test]
+    fn gateway_connection_failure_overrides_a_stale_p2p_route() {
+        let summary = GatewaySessionSummary {
+            configured: true,
+            last_gateway_error_kind: Some(GatewayErrorKind::ConnectTimeout),
+            ..Default::default()
+        };
+        assert_eq!(
+            data_plane_status(&summary, 1, 0, true),
+            "gateway-unavailable"
         );
     }
 

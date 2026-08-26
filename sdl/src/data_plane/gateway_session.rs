@@ -35,7 +35,7 @@ const GATEWAY_SWITCH_COOLDOWN_MS: i64 = 10_000;
 const GATEWAY_HTTP2_IDLE_TIMEOUT_MIN_SECS: u64 = 10;
 const GATEWAY_GRANT_SOFT_REFRESH_LEAD_MS: i64 = 120_000;
 const GATEWAY_UDP_STOP_TIMEOUT: Duration = Duration::from_secs(1);
-const UDP_GATEWAY_HELLOS_BEFORE_REBUILD: u32 = 3;
+const GATEWAY_HELLOS_BEFORE_TIMEOUT: u32 = 3;
 const UDP_GATEWAY_REBUILD_BASE_DELAY_MS: i64 = 5_000;
 const UDP_GATEWAY_REBUILD_MAX_DELAY_MS: i64 = 60_000;
 const PEER_INGRESS_GATEWAY_TTL: Duration = Duration::from_secs(60);
@@ -96,6 +96,7 @@ impl GatewayRelayHealth {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatewayErrorKind {
     AuthRejected,
+    ConnectTimeout,
     SendFailed,
     ProbeUnreachable,
 }
@@ -104,6 +105,7 @@ impl GatewayErrorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AuthRejected => "auth-rejected",
+            Self::ConnectTimeout => "connect-timeout",
             Self::SendFailed => "send-failed",
             Self::ProbeUnreachable => "probe-unreachable",
         }
@@ -832,17 +834,22 @@ impl GatewaySession {
     }
 
     fn record_unanswered_hello(&self) -> bool {
-        if !self.is_udp() {
-            return false;
-        }
         let mut guard = self.state.lock();
         if guard.authenticated {
             guard.unanswered_hello_count = 0;
             return false;
         }
         guard.unanswered_hello_count += 1;
-        if guard.unanswered_hello_count >= UDP_GATEWAY_HELLOS_BEFORE_REBUILD {
-            guard.udp_rebuild_requested = true;
+        if guard.unanswered_hello_count >= GATEWAY_HELLOS_BEFORE_TIMEOUT {
+            Self::record_gateway_error(
+                &mut guard,
+                GatewayErrorKind::ConnectTimeout,
+                "connect_timeout".to_string(),
+                now_time() as i64,
+            );
+            if self.is_udp() {
+                guard.udp_rebuild_requested = true;
+            }
         }
         guard.udp_rebuild_requested
     }
@@ -2253,7 +2260,7 @@ mod tests {
         gateway_http2_idle_timeout, gateway_session_order_key, now_time,
         parse_https_transport_target, parse_transport_endpoint, resolve_gateway_channel,
         GatewayGrantPhase, GatewayGrantState, GatewaySession, GatewaySessionState, GatewaySessions,
-        GatewayTransport, UdpStopHandle, UDP_GATEWAY_HELLOS_BEFORE_REBUILD,
+        GatewayTransport, UdpStopHandle, GATEWAY_HELLOS_BEFORE_TIMEOUT,
     };
     use std::io;
     use std::net::{IpAddr, Ipv4Addr};
@@ -2785,7 +2792,7 @@ mod tests {
     }
 
     #[test]
-    fn unanswered_udp_hellos_request_session_rebuild() {
+    fn unanswered_gateway_hellos_record_timeout_and_rebuild_udp() {
         let session = GatewaySession::new_udp(
             "127.0.0.1:29901".parse().unwrap(),
             &GatewayAccessGrant {
@@ -2802,11 +2809,17 @@ mod tests {
         )
         .unwrap();
 
-        for _ in 0..UDP_GATEWAY_HELLOS_BEFORE_REBUILD - 1 {
+        for _ in 0..GATEWAY_HELLOS_BEFORE_TIMEOUT - 1 {
             assert!(!session.record_unanswered_hello());
         }
         assert!(session.record_unanswered_hello());
         assert!(session.take_udp_rebuild_request());
+        let state = session.state.lock();
+        assert_eq!(state.last_gateway_error.as_deref(), Some("connect_timeout"));
+        assert_eq!(
+            state.last_gateway_error_kind,
+            Some(super::GatewayErrorKind::ConnectTimeout)
+        );
     }
 
     #[test]
