@@ -633,6 +633,8 @@ pub struct DnsProfile {
     pub servers: ::std::vec::Vec<::std::string::String>,
     // @@protoc_insertion_point(field:DnsProfile.match_domains)
     pub match_domains: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsProfile.peer_name_domain)
+    pub peer_name_domain: ::std::string::String,
     // special fields
     // @@protoc_insertion_point(special_field:DnsProfile.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -650,7 +652,7 @@ impl DnsProfile {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(2);
+        let mut fields = ::std::vec::Vec::with_capacity(3);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
             "servers",
@@ -661,6 +663,11 @@ impl DnsProfile {
             "match_domains",
             |m: &DnsProfile| { &m.match_domains },
             |m: &mut DnsProfile| { &mut m.match_domains },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_simpler_field_accessor::<_, _>(
+            "peer_name_domain",
+            |m: &DnsProfile| { &m.peer_name_domain },
+            |m: &mut DnsProfile| { &mut m.peer_name_domain },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<DnsProfile>(
             "DnsProfile",
@@ -686,6 +693,9 @@ impl ::protobuf::Message for DnsProfile {
                 18 => {
                     self.match_domains.push(is.read_string()?);
                 },
+                26 => {
+                    self.peer_name_domain = is.read_string()?;
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -704,6 +714,9 @@ impl ::protobuf::Message for DnsProfile {
         for value in &self.match_domains {
             my_size += ::protobuf::rt::string_size(2, &value);
         };
+        if !self.peer_name_domain.is_empty() {
+            my_size += ::protobuf::rt::string_size(3, &self.peer_name_domain);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -716,6 +729,9 @@ impl ::protobuf::Message for DnsProfile {
         for v in &self.match_domains {
             os.write_string(2, &v)?;
         };
+        if !self.peer_name_domain.is_empty() {
+            os.write_string(3, &self.peer_name_domain)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -735,6 +751,7 @@ impl ::protobuf::Message for DnsProfile {
     fn clear(&mut self) {
         self.servers.clear();
         self.match_domains.clear();
+        self.peer_name_domain.clear();
         self.special_fields.clear();
     }
 
@@ -742,6 +759,7 @@ impl ::protobuf::Message for DnsProfile {
         static instance: DnsProfile = DnsProfile {
             servers: ::std::vec::Vec::new(),
             match_domains: ::std::vec::Vec::new(),
+            peer_name_domain: ::std::string::String::new(),
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -9266,94 +9284,95 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     sion\x18\x05\x20\x01(\tR\x07version\x12\x1d\n\nvirtual_ip\x18\x06\x20\
     \x01(\x07R\tvirtualIp\x12&\n\x0fallow_ip_change\x18\x07\x20\x01(\x08R\ra\
     llowIpChange\x12$\n\x0edevice_pub_key\x18\n\x20\x01(\x0cR\x0cdevicePubKe\
-    y\x12\"\n\ronline_kx_pub\x18\x0b\x20\x01(\x0cR\x0bonlineKxPub\"K\n\nDnsP\
+    y\x12\"\n\ronline_kx_pub\x18\x0b\x20\x01(\x0cR\x0bonlineKxPub\"u\n\nDnsP\
     rofile\x12\x18\n\x07servers\x18\x01\x20\x03(\tR\x07servers\x12#\n\rmatch\
-    _domains\x18\x02\x20\x03(\tR\x0cmatchDomains\"F\n\x0fDnsQueryRequest\x12\
-    \x1d\n\nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x14\n\x05query\
-    \x18\x02\x20\x01(\x0cR\x05query\"c\n\x10DnsQueryResponse\x12\x1d\n\nrequ\
-    est_id\x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08response\x18\x02\
-    \x20\x01(\x0cR\x08response\x12\x14\n\x05error\x18\x03\x20\x01(\tR\x05err\
-    or\"\xa0\x05\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\
-    \x01(\x07R\tvirtualIp\x12'\n\x0fvirtual_gateway\x18\x02\x20\x01(\x07R\
-    \x0evirtualGateway\x12'\n\x0fvirtual_netmask\x18\x03\x20\x01(\x07R\x0evi\
-    rtualNetmask\x12\x14\n\x05epoch\x18\x04\x20\x01(\rR\x05epoch\x125\n\x10d\
-    evice_info_list\x18\x05\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\
-    \x12\x1b\n\tpublic_ip\x18\x06\x20\x01(\x07R\x08publicIp\x12\x1f\n\x0bpub\
-    lic_port\x18\x07\x20\x01(\rR\npublicPort\x12\x1f\n\x0bpublic_ipv6\x18\
-    \x08\x20\x01(\x0cR\npublicIpv6\x12E\n\x14gateway_access_grant\x18\t\x20\
-    \x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x1d\n\nerro\
-    r_code\x18\n\x20\x01(\rR\terrorCode\x12#\n\rerror_message\x18\x0b\x20\
-    \x01(\tR\x0cerrorMessage\x12,\n\x0bdns_profile\x18\x0c\x20\x01(\x0b2\x0b\
-    .DnsProfileR\ndnsProfile\x12G\n\x15gateway_access_grants\x18\r\x20\x03(\
-    \x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gateway_p\
-    olicy_rev\x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\x12;\n\x0cerror_reas\
-    on\x18\x0f\x20\x01(\x0e2\x18.RegistrationErrorReasonR\x0berrorReason\"\
-    \xb8\x01\n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.Ga\
-    tewayChannelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\
-    \x12\x1f\n\x0bserver_name\x18\x03\x20\x01(\tR\nserverName\x12$\n\x0eudp_\
-    public_key\x18\x05\x20\x01(\x0cR\x0cudpPublicKey\x12\x1c\n\nudp_key_id\
-    \x18\x06\x20\x01(\tR\x08udpKeyIdJ\x04\x08\x04\x10\x05\"\xeb\x04\n\x12Gat\
-    ewayAccessGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\
-    \n\x15ticket_expire_unix_ms\x18\x02\x20\x01(\x03R\x12ticketExpireUnixMs\
-    \x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x1d\n\npolic\
-    y_rev\x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14gateway_capabilities\
-    \x18\x05\x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\nlease_secs\x18\
-    \x06\x20\x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\x07\x20\x01(\rR\tg\
-    raceSecs\x12(\n\x10gateway_group_id\x18\x08\x20\x01(\tR\x0egatewayGroupI\
-    d\x128\n\x0fgateway_channel\x18\t\x20\x01(\x0b2\x0f.GatewayChannelR\x0eg\
-    atewayChannel\x12\x1d\n\ngateway_id\x18\r\x20\x01(\tR\tgatewayId\x12:\n\
-    \x1asoft_refresh_after_unix_ms\x18\x0e\x20\x01(\x03R\x16softRefreshAfter\
-    UnixMs\x12-\n\x13hard_expire_unix_ms\x18\x0f\x20\x01(\x03R\x10hardExpire\
-    UnixMsJ\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\x0c\x10\rR\x10ga\
-    teway_channelsR\x1dselected_gateway_channel_kindR\x16gateway_udp_public_\
-    keyR\x12gateway_udp_key_id\"\xcd\x01\n\x1aRefreshGatewayGrantRequest\x12\
-    \x1d\n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\x12\x1b\n\tdevice_id\
-    \x18\x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_session_id\x18\x03\x20\
-    \x01(\x04R\rlastSessionId\x12&\n\x0flast_policy_rev\x18\x04\x20\x01(\x04\
-    R\rlastPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\x01(\x08R\x0cforceRei\
-    ssue\"\xc6\x02\n\x1bRefreshGatewayGrantResponse\x12\x1d\n\nhas_update\
-    \x18\x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_access_grant\x18\x02\
-    \x20\x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x16\n\
-    \x06reason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15gateway_access_grants\
-    \x18\x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\
-    \x12,\n\x12gateway_policy_rev\x18\x05\x20\x01(\x04R\x10gatewayPolicyRev\
-    \x122\n\x06result\x18\x06\x20\x01(\x0e2\x1a.RefreshGatewayGrantResultR\
-    \x06result\"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticket_id\x18\
-    \x01\x20\x01(\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\
-    \x08deviceId\x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\
-    \x1d\n\nsession_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpolicy_rev\
-    ision\x18\x05\x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgateway_ids\
-    \x18\x06\x20\x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\x20\
-    \x01(\tR\x0egatewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\x01(\
-    \x03R\x0eissuedAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\x03R\
-    \x0fnotBeforeUnixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\x0cexpi\
-    reUnixMs\x12$\n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCapSecs\
-    \x12$\n\x0egrace_cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\x13Si\
-    gnedGatewayTicket\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\x15\n\
-    \x06key_id\x18\x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\x03\x20\
-    \x01(\x0cR\x06claims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignatu\
-    re\"\xa1\x01\n\x14GatewayReportRequest\x12\x1d\n\ngateway_id\x18\x01\x20\
-    \x01(\tR\tgatewayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\tR\x08endpoin\
-    t\x12\"\n\x0ccapabilities\x18\x04\x20\x03(\tR\x0ccapabilities\x12$\n\x0e\
-    report_unix_ms\x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\x08\x03\x10\
-    \x04\"\x7f\n\x10GatewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\
-    \x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\ngate\
-    way_id\x18\x03\x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_ms\x18\x04\
-    \x20\x01(\x03R\x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHello\x12\
-    \x1b\n\tdevice_id\x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\
-    \x18\x02\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\x20\x01(\
-    \x04R\tsessionId\x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06ticket\x12\
-    \x14\n\x05nonce\x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client_time_uni\
-    x_ms\x18\x06\x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06reauth\x18\n\
-    \x20\x01(\x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\x0e\n\x02o\
-    k\x18\x01\x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\
-    \x06reason\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12%\n\
-    \x0enegotiated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0ekeepaliv\
-    e_secs\x18\x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire_unix_ms\
-    \x18\x06\x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expire_unix_\
-    ms\x18\x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_required\
-    \x18\x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAuthReques\
-    t\x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\x05group\
+    _domains\x18\x02\x20\x03(\tR\x0cmatchDomains\x12(\n\x10peer_name_domain\
+    \x18\x03\x20\x01(\tR\x0epeerNameDomain\"F\n\x0fDnsQueryRequest\x12\x1d\n\
+    \nrequest_id\x18\x01\x20\x01(\x04R\trequestId\x12\x14\n\x05query\x18\x02\
+    \x20\x01(\x0cR\x05query\"c\n\x10DnsQueryResponse\x12\x1d\n\nrequest_id\
+    \x18\x01\x20\x01(\x04R\trequestId\x12\x1a\n\x08response\x18\x02\x20\x01(\
+    \x0cR\x08response\x12\x14\n\x05error\x18\x03\x20\x01(\tR\x05error\"\xa0\
+    \x05\n\x14RegistrationResponse\x12\x1d\n\nvirtual_ip\x18\x01\x20\x01(\
+    \x07R\tvirtualIp\x12'\n\x0fvirtual_gateway\x18\x02\x20\x01(\x07R\x0evirt\
+    ualGateway\x12'\n\x0fvirtual_netmask\x18\x03\x20\x01(\x07R\x0evirtualNet\
+    mask\x12\x14\n\x05epoch\x18\x04\x20\x01(\rR\x05epoch\x125\n\x10device_in\
+    fo_list\x18\x05\x20\x03(\x0b2\x0b.DeviceInfoR\x0edeviceInfoList\x12\x1b\
+    \n\tpublic_ip\x18\x06\x20\x01(\x07R\x08publicIp\x12\x1f\n\x0bpublic_port\
+    \x18\x07\x20\x01(\rR\npublicPort\x12\x1f\n\x0bpublic_ipv6\x18\x08\x20\
+    \x01(\x0cR\npublicIpv6\x12E\n\x14gateway_access_grant\x18\t\x20\x01(\x0b\
+    2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x1d\n\nerror_code\
+    \x18\n\x20\x01(\rR\terrorCode\x12#\n\rerror_message\x18\x0b\x20\x01(\tR\
+    \x0cerrorMessage\x12,\n\x0bdns_profile\x18\x0c\x20\x01(\x0b2\x0b.DnsProf\
+    ileR\ndnsProfile\x12G\n\x15gateway_access_grants\x18\r\x20\x03(\x0b2\x13\
+    .GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\x12gateway_policy_rev\
+    \x18\x0e\x20\x01(\x04R\x10gatewayPolicyRev\x12;\n\x0cerror_reason\x18\
+    \x0f\x20\x01(\x0e2\x18.RegistrationErrorReasonR\x0berrorReason\"\xb8\x01\
+    \n\x0eGatewayChannel\x12'\n\x04kind\x18\x01\x20\x01(\x0e2\x13.GatewayCha\
+    nnelKindR\x04kind\x12\x12\n\x04addr\x18\x02\x20\x01(\tR\x04addr\x12\x1f\
+    \n\x0bserver_name\x18\x03\x20\x01(\tR\nserverName\x12$\n\x0eudp_public_k\
+    ey\x18\x05\x20\x01(\x0cR\x0cudpPublicKey\x12\x1c\n\nudp_key_id\x18\x06\
+    \x20\x01(\tR\x08udpKeyIdJ\x04\x08\x04\x10\x05\"\xeb\x04\n\x12GatewayAcce\
+    ssGrant\x12\x16\n\x06ticket\x18\x01\x20\x01(\x0cR\x06ticket\x121\n\x15ti\
+    cket_expire_unix_ms\x18\x02\x20\x01(\x03R\x12ticketExpireUnixMs\x12\x1d\
+    \n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12\x1d\n\npolicy_rev\
+    \x18\x04\x20\x01(\x04R\tpolicyRev\x121\n\x14gateway_capabilities\x18\x05\
+    \x20\x03(\tR\x13gatewayCapabilities\x12\x1d\n\nlease_secs\x18\x06\x20\
+    \x01(\rR\tleaseSecs\x12\x1d\n\ngrace_secs\x18\x07\x20\x01(\rR\tgraceSecs\
+    \x12(\n\x10gateway_group_id\x18\x08\x20\x01(\tR\x0egatewayGroupId\x128\n\
+    \x0fgateway_channel\x18\t\x20\x01(\x0b2\x0f.GatewayChannelR\x0egatewayCh\
+    annel\x12\x1d\n\ngateway_id\x18\r\x20\x01(\tR\tgatewayId\x12:\n\x1asoft_\
+    refresh_after_unix_ms\x18\x0e\x20\x01(\x03R\x16softRefreshAfterUnixMs\
+    \x12-\n\x13hard_expire_unix_ms\x18\x0f\x20\x01(\x03R\x10hardExpireUnixMs\
+    J\x04\x08\n\x10\x0bJ\x04\x08\x0b\x10\x0cJ\x04\x08\x0c\x10\rR\x10gateway_\
+    channelsR\x1dselected_gateway_channel_kindR\x16gateway_udp_public_keyR\
+    \x12gateway_udp_key_id\"\xcd\x01\n\x1aRefreshGatewayGrantRequest\x12\x1d\
+    \n\nvirtual_ip\x18\x01\x20\x01(\x07R\tvirtualIp\x12\x1b\n\tdevice_id\x18\
+    \x02\x20\x01(\tR\x08deviceId\x12&\n\x0flast_session_id\x18\x03\x20\x01(\
+    \x04R\rlastSessionId\x12&\n\x0flast_policy_rev\x18\x04\x20\x01(\x04R\rla\
+    stPolicyRev\x12#\n\rforce_reissue\x18\x05\x20\x01(\x08R\x0cforceReissue\
+    \"\xc6\x02\n\x1bRefreshGatewayGrantResponse\x12\x1d\n\nhas_update\x18\
+    \x01\x20\x01(\x08R\thasUpdate\x12E\n\x14gateway_access_grant\x18\x02\x20\
+    \x01(\x0b2\x13.GatewayAccessGrantR\x12gatewayAccessGrant\x12\x16\n\x06re\
+    ason\x18\x03\x20\x01(\tR\x06reason\x12G\n\x15gateway_access_grants\x18\
+    \x04\x20\x03(\x0b2\x13.GatewayAccessGrantR\x13gatewayAccessGrants\x12,\n\
+    \x12gateway_policy_rev\x18\x05\x20\x01(\x04R\x10gatewayPolicyRev\x122\n\
+    \x06result\x18\x06\x20\x01(\x0e2\x1a.RefreshGatewayGrantResultR\x06resul\
+    t\"\xcb\x03\n\x13GatewayTicketClaims\x12\x1b\n\tticket_id\x18\x01\x20\
+    \x01(\tR\x08ticketId\x12\x1b\n\tdevice_id\x18\x02\x20\x01(\tR\x08deviceI\
+    d\x12\x1d\n\nvirtual_ip\x18\x03\x20\x01(\x07R\tvirtualIp\x12\x1d\n\nsess\
+    ion_id\x18\x04\x20\x01(\x04R\tsessionId\x12'\n\x0fpolicy_revision\x18\
+    \x05\x20\x01(\x04R\x0epolicyRevision\x12\x1f\n\x0bgateway_ids\x18\x06\
+    \x20\x03(\tR\ngatewayIds\x12(\n\x10gateway_group_id\x18\x07\x20\x01(\tR\
+    \x0egatewayGroupId\x12)\n\x11issued_at_unix_ms\x18\x08\x20\x01(\x03R\x0e\
+    issuedAtUnixMs\x12+\n\x12not_before_unix_ms\x18\t\x20\x01(\x03R\x0fnotBe\
+    foreUnixMs\x12$\n\x0eexpire_unix_ms\x18\n\x20\x01(\x03R\x0cexpireUnixMs\
+    \x12$\n\x0elease_cap_secs\x18\x0b\x20\x01(\rR\x0cleaseCapSecs\x12$\n\x0e\
+    grace_cap_secs\x18\x0c\x20\x01(\rR\x0cgraceCapSecs\"t\n\x13SignedGateway\
+    Ticket\x12\x10\n\x03alg\x18\x01\x20\x01(\tR\x03alg\x12\x15\n\x06key_id\
+    \x18\x02\x20\x01(\tR\x05keyId\x12\x16\n\x06claims\x18\x03\x20\x01(\x0cR\
+    \x06claims\x12\x1c\n\tsignature\x18\x04\x20\x01(\x0cR\tsignature\"\xa1\
+    \x01\n\x14GatewayReportRequest\x12\x1d\n\ngateway_id\x18\x01\x20\x01(\tR\
+    \tgatewayId\x12\x1a\n\x08endpoint\x18\x02\x20\x01(\tR\x08endpoint\x12\"\
+    \n\x0ccapabilities\x18\x04\x20\x03(\tR\x0ccapabilities\x12$\n\x0ereport_\
+    unix_ms\x18\x05\x20\x01(\x03R\x0creportUnixMsJ\x04\x08\x03\x10\x04\"\x7f\
+    \n\x10GatewayReportAck\x12\x0e\n\x02ok\x18\x01\x20\x01(\x08R\x02ok\x12\
+    \x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\x12\x1d\n\ngateway_id\x18\
+    \x03\x20\x01(\tR\tgatewayId\x12$\n\x0eexpire_unix_ms\x18\x04\x20\x01(\
+    \x03R\x0cexpireUnixMs\"\xe5\x01\n\x13GatewayConnectHello\x12\x1b\n\tdevi\
+    ce_id\x18\x01\x20\x01(\tR\x08deviceId\x12\x1d\n\nvirtual_ip\x18\x02\x20\
+    \x01(\x07R\tvirtualIp\x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessi\
+    onId\x12\x16\n\x06ticket\x18\x04\x20\x01(\x0cR\x06ticket\x12\x14\n\x05no\
+    nce\x18\x05\x20\x01(\x0cR\x05nonce\x12-\n\x13client_time_unix_ms\x18\x06\
+    \x20\x01(\x03R\x10clientTimeUnixMs\x12\x16\n\x06reauth\x18\n\x20\x01(\
+    \x08R\x06reauth\"\xb3\x02\n\x11GatewayConnectAck\x12\x0e\n\x02ok\x18\x01\
+    \x20\x01(\x08R\x02ok\x12\x16\n\x06reason\x18\x02\x20\x01(\tR\x06reason\
+    \x12\x1d\n\nsession_id\x18\x03\x20\x01(\x04R\tsessionId\x12%\n\x0enegoti\
+    ated_mtu\x18\x04\x20\x01(\rR\rnegotiatedMtu\x12%\n\x0ekeepalive_secs\x18\
+    \x05\x20\x01(\rR\rkeepaliveSecs\x12/\n\x14lease_expire_unix_ms\x18\x06\
+    \x20\x01(\x03R\x11leaseExpireUnixMs\x12/\n\x14grace_expire_unix_ms\x18\
+    \x07\x20\x01(\x03R\x11graceExpireUnixMs\x12'\n\x0freauth_required\x18\
+    \x08\x20\x01(\x08R\x0ereauthRequired\"\x9d\x01\n\x11DeviceAuthRequest\
+    \x12\x17\n\x07user_id\x18\x01\x20\x01(\tR\x06userId\x12\x14\n\x05group\
     \x18\x02\x20\x01(\tR\x05group\x12\x1b\n\tdevice_id\x18\x03\x20\x01(\tR\
     \x08deviceId\x12\x16\n\x06ticket\x18\x04\x20\x01(\tR\x06ticket\x12$\n\
     \x0edevice_pub_key\x18\x05\x20\x01(\x0cR\x0cdevicePubKey\"\xb5\x01\n\x13\

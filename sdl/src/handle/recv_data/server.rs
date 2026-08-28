@@ -829,6 +829,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let dns_profile = response.dns_profile.as_ref().map(|profile| DnsProfile {
                     servers: profile.servers.clone(),
                     match_domains: profile.match_domains.clone(),
+                    peer_name_domain: profile.peer_name_domain.clone(),
                 });
                 if self.callback.register(register_info) {
                     let route = Route::from_default_rt(route_key, 1);

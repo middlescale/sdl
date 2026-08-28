@@ -103,6 +103,9 @@ impl RegisterInfo {
 pub struct DnsProfile {
     pub servers: Vec<String>,
     pub match_domains: Vec<String>,
+    /// The sole canonical suffix for peer host names. Match domains only
+    /// control resolver routing and may intentionally be broader.
+    pub peer_name_domain: String,
 }
 
 #[derive(Debug)]

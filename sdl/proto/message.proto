@@ -26,6 +26,7 @@ message RegistrationRequest {
 message DnsProfile {
     repeated string servers = 1;
     repeated string match_domains = 2;
+    string peer_name_domain = 3;
 }
 
 message DnsQueryRequest {

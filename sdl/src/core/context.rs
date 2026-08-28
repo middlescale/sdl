@@ -740,6 +740,7 @@ impl SdlContext {
             "dns_profile": dns_profile.as_ref().map(|profile| json!({
                 "servers": profile.servers,
                 "match_domains": profile.match_domains,
+                "peer_name_domain": profile.peer_name_domain,
             })).unwrap_or(Value::Null),
             "system": debug_system_info_json(),
             "build": debug_build_info_json(),

@@ -181,6 +181,7 @@ mod tests {
         let profile = DnsProfile {
             servers: vec!["10.26.0.1".into(), "10.26.0.2".into()],
             match_domains: vec!["ms.net".into(), "~corp.ms.net".into()],
+            peer_name_domain: "corp.ms.net".into(),
         };
         let command = build_apply_command("sdl-tun", &profile);
         assert_eq!(
@@ -199,6 +200,7 @@ mod tests {
         let profile = DnsProfile {
             servers: vec!["10.26.0.1".into(), "10.26.0.1".into(), "10.26.0.2".into()],
             match_domains: vec!["ms.net".into()],
+            peer_name_domain: "ms.net".into(),
         };
         assert_eq!(
             dns_server_set(Some(&profile)).unwrap(),

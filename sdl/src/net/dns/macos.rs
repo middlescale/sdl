@@ -191,6 +191,7 @@ mod tests {
         let content = build_resolver_contents(&DnsProfile {
             servers: vec!["10.26.0.53".into(), "10.26.0.54".into()],
             match_domains: vec!["ms.net".into()],
+            peer_name_domain: "ms.net".into(),
         });
         assert_eq!(
             content,
@@ -204,6 +205,7 @@ mod tests {
         let profile = DnsProfile {
             servers: vec!["10.26.0.53".into()],
             match_domains: vec!["~ms.net".into(), "sales.ms.net".into()],
+            peer_name_domain: "sales.ms.net".into(),
         };
 
         let domains = apply_split_dns_in_dir(&resolver_dir, None, &profile).unwrap();
@@ -232,6 +234,7 @@ mod tests {
             &DnsProfile {
                 servers: vec!["10.26.0.53".into()],
                 match_domains: vec!["ms.net".into()],
+                peer_name_domain: "ms.net".into(),
             },
         )
         .unwrap_err();
@@ -248,10 +251,12 @@ mod tests {
         let previous_profile = DnsProfile {
             servers: vec!["10.26.0.53".into()],
             match_domains: vec!["ms.net".into()],
+            peer_name_domain: "ms.net".into(),
         };
         let next_profile = DnsProfile {
             servers: vec!["10.26.0.54".into()],
             match_domains: vec!["ms.net".into(), "sales.ms.net".into()],
+            peer_name_domain: "sales.ms.net".into(),
         };
 
         apply_split_dns_in_dir(&resolver_dir, None, &previous_profile).unwrap();

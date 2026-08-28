@@ -48,7 +48,8 @@ pub(crate) fn resolve_local_query(
     }
 }
 
-pub(crate) fn best_match_domain(name: &str, profile: &DnsProfile) -> Option<String> {
+#[cfg(test)]
+fn best_match_domain(name: &str, profile: &DnsProfile) -> Option<String> {
     let name = normalize_name(name)?;
     profile
         .match_domains
@@ -115,11 +116,14 @@ fn resolve_forward(
     devices: &HashMap<Ipv4Addr, PeerInfo>,
 ) -> Option<Ipv4Addr> {
     let name = normalize_name(name)?;
-    let matched_domain = best_match_domain(&name, profile)?;
-    if name == matched_domain {
+    // match_domains selects where a DNS query is routed. It must not create
+    // peer-name aliases: a broad route such as ms.net must not make
+    // node.ms.net resolve as node.default.ms.net.
+    let peer_name_domain = canonical_peer_name_domain(profile)?;
+    if name == peer_name_domain {
         return None;
     }
-    let host = name.strip_suffix(&matched_domain)?.strip_suffix('.')?;
+    let host = name.strip_suffix(&peer_name_domain)?.strip_suffix('.')?;
     devices
         .values()
         .find(|device| normalize_name(&device.name).as_deref() == Some(host))
@@ -139,11 +143,11 @@ fn resolve_reverse(
 }
 
 fn canonical_ptr_suffix(profile: &DnsProfile) -> Option<String> {
-    profile
-        .match_domains
-        .iter()
-        .filter_map(|domain| normalize_domain(domain))
-        .max_by_key(|domain| domain.len())
+    canonical_peer_name_domain(profile)
+}
+
+fn canonical_peer_name_domain(profile: &DnsProfile) -> Option<String> {
+    normalize_domain(&profile.peer_name_domain)
 }
 
 fn parse_ptr_name(name: &str) -> Option<Ipv4Addr> {
@@ -222,10 +226,11 @@ fn encode_dns_name(name: &str, out: &mut Vec<u8>) {
 mod tests {
     use super::*;
 
-    fn profile(domains: &[&str]) -> DnsProfile {
+    fn profile(peer_name_domain: &str, domains: &[&str]) -> DnsProfile {
         DnsProfile {
             servers: vec!["10.26.0.53".into()],
             match_domains: domains.iter().map(|item| item.to_string()).collect(),
+            peer_name_domain: peer_name_domain.into(),
         }
     }
 
@@ -258,7 +263,7 @@ mod tests {
 
     #[test]
     fn longest_suffix_wins() {
-        let profile = profile(&["ms.net", "sales.ms.net"]);
+        let profile = profile("sales.ms.net", &["ms.net", "sales.ms.net"]);
         assert_eq!(
             best_match_domain("node-a.sales.ms.net", &profile).as_deref(),
             Some("sales.ms.net")
@@ -273,7 +278,7 @@ mod tests {
         ]);
         match resolve_local_query(
             &query,
-            Some(&profile(&["ms.net", "sales.ms.net"])),
+            Some(&profile("sales.ms.net", &["ms.net", "sales.ms.net"])),
             &devices(),
         ) {
             LocalDnsResolution::Answered(resp) => {
@@ -287,7 +292,11 @@ mod tests {
     fn short_name_falls_back() {
         let query = a_query(&[6, b'n', b'o', b'd', b'e', b'-', b'a', 0]);
         assert!(matches!(
-            resolve_local_query(&query, Some(&profile(&["sales.ms.net"])), &devices()),
+            resolve_local_query(
+                &query,
+                Some(&profile("sales.ms.net", &["sales.ms.net"])),
+                &devices(),
+            ),
             LocalDnsResolution::Miss
         ));
     }
@@ -299,7 +308,11 @@ mod tests {
             b's', 3, b'n', b'e', b't', 0,
         ]);
         assert!(matches!(
-            resolve_local_query(&query, Some(&profile(&["sales.ms.net"])), &devices()),
+            resolve_local_query(
+                &query,
+                Some(&profile("sales.ms.net", &["sales.ms.net"])),
+                &devices(),
+            ),
             LocalDnsResolution::Miss
         ));
     }
@@ -314,7 +327,11 @@ mod tests {
         query[len - 4] = 0;
         query[len - 3] = 28;
         assert!(matches!(
-            resolve_local_query(&query, Some(&profile(&["sales.ms.net"])), &devices()),
+            resolve_local_query(
+                &query,
+                Some(&profile("sales.ms.net", &["sales.ms.net"])),
+                &devices(),
+            ),
             LocalDnsResolution::Unsupported
         ));
     }
@@ -330,7 +347,7 @@ mod tests {
         query[len - 3] = 12;
         match resolve_local_query(
             &query,
-            Some(&profile(&["ms.net", "sales.ms.net"])),
+            Some(&profile("sales.ms.net", &["ms.net", "sales.ms.net"])),
             &devices(),
         ) {
             LocalDnsResolution::Answered(resp) => {
@@ -341,5 +358,32 @@ mod tests {
             }
             _ => panic!("expected ptr answer"),
         }
+    }
+
+    #[test]
+    fn broad_match_domain_does_not_alias_peer_name() {
+        let query = a_query(&[
+            6, b'n', b'o', b'd', b'e', b'-', b'a', 2, b'm', b's', 3, b'n', b'e', b't', 0,
+        ]);
+        assert!(matches!(
+            resolve_local_query(
+                &query,
+                Some(&profile("sales.ms.net", &["ms.net", "sales.ms.net"])),
+                &devices(),
+            ),
+            LocalDnsResolution::Miss
+        ));
+    }
+
+    #[test]
+    fn legacy_profile_without_canonical_peer_domain_skips_local_answer() {
+        let query = a_query(&[
+            6, b'n', b'o', b'd', b'e', b'-', b'a', 5, b's', b'a', b'l', b'e', b's', 2, b'm', b's',
+            3, b'n', b'e', b't', 0,
+        ]);
+        assert!(matches!(
+            resolve_local_query(&query, Some(&profile("", &["sales.ms.net"])), &devices()),
+            LocalDnsResolution::Miss
+        ));
     }
 }
