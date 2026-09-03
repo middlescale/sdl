@@ -82,10 +82,13 @@ struct ActivePunchSession {
     deadline_unix_ms: i64,
 }
 
+type PunchEndpointFingerprint = Vec<(u32, Vec<u8>, u32, bool)>;
+
 #[derive(Clone)]
 struct ActivePunchState {
     active: ActivePunchSession,
     coalesced: Vec<ActivePunchSession>,
+    endpoint_fingerprint: PunchEndpointFingerprint,
 }
 
 struct DeviceListUpdate {
@@ -99,10 +102,11 @@ struct PeerIdentityPlan {
 }
 
 impl ActivePunchState {
-    fn new(active: ActivePunchSession) -> Self {
+    fn new(active: ActivePunchSession, endpoint_fingerprint: PunchEndpointFingerprint) -> Self {
         Self {
             active,
             coalesced: Vec::new(),
+            endpoint_fingerprint,
         }
     }
 
@@ -114,14 +118,24 @@ impl ActivePunchState {
                 .any(|session| session.session_id == session_id && session.attempt == attempt)
     }
 
-    fn coalesce(&mut self, session: ActivePunchSession) {
+    fn coalesce(
+        &mut self,
+        session: ActivePunchSession,
+        endpoint_fingerprint: &[(u32, Vec<u8>, u32, bool)],
+    ) -> bool {
+        let endpoints_changed = self.endpoint_fingerprint != endpoint_fingerprint;
         if self.contains(session.session_id, session.attempt) {
             self.active.deadline_unix_ms =
                 self.active.deadline_unix_ms.max(session.deadline_unix_ms);
-            return;
+            return endpoints_changed;
         }
         self.active.deadline_unix_ms = self.active.deadline_unix_ms.max(session.deadline_unix_ms);
         self.coalesced.push(session);
+        endpoints_changed
+    }
+
+    fn update_endpoint_fingerprint(&mut self, endpoint_fingerprint: PunchEndpointFingerprint) {
+        self.endpoint_fingerprint = endpoint_fingerprint;
     }
 
     fn sessions(&self) -> Vec<ActivePunchSession> {
@@ -1226,6 +1240,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 let punch_start = PunchStart::parse_from_bytes(net_packet.payload())
                     .map_err(|e| io::Error::other(format!("PunchStart {:?}", e)))?;
                 let (peer_ip, peer_nat_info) = build_peer_nat_info_from_punch_start(&punch_start);
+                let endpoint_fingerprint = punch_start_endpoint_fingerprint(&punch_start);
                 log::info!(
                     "PunchStart received peer={} session_id={} attempt={} endpoints={} public_ips={:?} public_ports={:?} local_ipv4={:?}",
                     peer_ip,
@@ -1287,6 +1302,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                                 == crate::proto::message::ChannelMode::CHANNEL_MODE_RELAY
                         });
                 let mut coalesced = false;
+                let mut endpoints_changed = false;
                 let (accepted, phase, reason) = if local_forced_relay {
                     (
                         false,
@@ -1304,16 +1320,19 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                         let mut sessions = self.punch_active_sessions.lock();
                         match sessions.get_mut(&peer_ip) {
                             Some(state) => {
-                                state.coalesce(session);
+                                endpoints_changed = state.coalesce(session, &endpoint_fingerprint);
                                 true
                             }
                             None => {
-                                sessions.insert(peer_ip, ActivePunchState::new(session));
+                                sessions.insert(
+                                    peer_ip,
+                                    ActivePunchState::new(session, endpoint_fingerprint.clone()),
+                                );
                                 false
                             }
                         }
                     };
-                    if coalesced {
+                    if coalesced && !endpoints_changed {
                         (
                             true,
                             PunchSessionPhase::PunchPhaseWaiting,
@@ -1325,14 +1344,35 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                             .services
                             .punch_coordinator
                             .submit_local(peer_ip, peer_nat_info);
+                        if accepted && coalesced {
+                            if let Some(state) = self.punch_active_sessions.lock().get_mut(&peer_ip)
+                            {
+                                state.update_endpoint_fingerprint(endpoint_fingerprint);
+                            }
+                        }
                         (
-                            accepted,
+                            // A coalesced session with newer endpoint candidates needs a
+                            // second probe. Keep the original watchdog so every coalesced
+                            // control session still receives its eventual result.
+                            accepted || coalesced,
                             if accepted {
                                 PunchSessionPhase::PunchPhaseSending
+                            } else if coalesced {
+                                PunchSessionPhase::PunchPhaseWaiting
                             } else {
                                 PunchSessionPhase::PunchPhaseFailed
                             },
-                            if accepted { "" } else { "punch queue busy" },
+                            if accepted {
+                                if coalesced {
+                                    "coalesced session refreshed with newer peer endpoints"
+                                } else {
+                                    ""
+                                }
+                            } else if coalesced {
+                                "coalesced onto active punch session; endpoint refresh queue busy"
+                            } else {
+                                "punch queue busy"
+                            },
                         )
                     }
                 };
@@ -1981,6 +2021,23 @@ fn build_peer_nat_info_from_punch_start(punch_start: &PunchStart) -> (Ipv4Addr, 
     )
 }
 
+fn punch_start_endpoint_fingerprint(punch_start: &PunchStart) -> PunchEndpointFingerprint {
+    let mut endpoints = punch_start
+        .peer_endpoints
+        .iter()
+        .map(|endpoint| {
+            (
+                endpoint.ip,
+                endpoint.ipv6.clone(),
+                endpoint.port,
+                endpoint.tcp,
+            )
+        })
+        .collect::<Vec<_>>();
+    endpoints.sort_unstable();
+    endpoints
+}
+
 fn observed_udp_port_from_registration(
     protocol: crate::transport::connect_protocol::ConnectProtocol,
     public_port: u16,
@@ -2143,13 +2200,13 @@ mod tests {
         device_auth_error_is_auth_pending, effective_gateway_policy_rev, format_punch_endpoint,
         is_gateway_peer_ipturn_source, is_stale_epoch, log_sampled_unauthorized_server_source_drop,
         observed_udp_port_from_registration, plan_peer_identity_update, punch_endpoint_from_route,
-        registration_error_is_auth_pending, rewrite_peer_echo_request_as_reply,
-        selected_endpoint_for_result, should_apply_gateway_policy_rev,
-        should_clear_gateway_grants_from_refresh_response,
+        punch_start_endpoint_fingerprint, registration_error_is_auth_pending,
+        rewrite_peer_echo_request_as_reply, selected_endpoint_for_result,
+        should_apply_gateway_policy_rev, should_clear_gateway_grants_from_refresh_response,
         should_refresh_gateway_grant_after_registration,
         should_retry_device_auth_after_challenge_expired,
         should_retry_registration_with_fresh_handshake, try_commit_device_list_state,
-        ActivePunchSession, ActivePunchState,
+        ActivePunchSession, ActivePunchState, PunchEndpointFingerprint,
     };
     use crate::core::PeerInfo;
     use crate::data_plane::route::Route;
@@ -2217,6 +2274,10 @@ mod tests {
         )
     }
 
+    fn endpoint_fingerprint(ip: Ipv4Addr, port: u32) -> PunchEndpointFingerprint {
+        vec![(u32::from(ip), Vec::new(), port, false)]
+    }
+
     #[test]
     fn peer_identity_plan_tracks_same_vip_public_key_change() {
         let vip = Ipv4Addr::new(10, 26, 0, 4);
@@ -2264,6 +2325,25 @@ mod tests {
         assert_eq!(nat_info.public_ports, vec![10001, 10002]);
         assert_eq!(nat_info.ipv6(), Some(ipv6));
         assert_eq!(nat_info.punch_model, PunchModel::All);
+    }
+
+    #[test]
+    fn punch_start_endpoint_fingerprint_ignores_endpoint_order() {
+        let mut first = PunchStart::new();
+        let mut second = PunchStart::new();
+        let mut ep1 = PunchEndpoint::new();
+        ep1.ip = u32::from(Ipv4Addr::new(1, 1, 1, 1));
+        ep1.port = 10001;
+        let mut ep2 = PunchEndpoint::new();
+        ep2.ip = u32::from(Ipv4Addr::new(2, 2, 2, 2));
+        ep2.port = 10002;
+        first.peer_endpoints.extend([ep1.clone(), ep2.clone()]);
+        second.peer_endpoints.extend([ep2, ep1]);
+
+        assert_eq!(
+            punch_start_endpoint_fingerprint(&first),
+            punch_start_endpoint_fingerprint(&second)
+        );
     }
 
     #[test]
@@ -2497,20 +2577,26 @@ mod tests {
 
     #[test]
     fn active_punch_state_coalesces_deadline_and_sessions() {
-        let mut state = ActivePunchState::new(ActivePunchSession {
-            session_id: 11,
-            source: 2,
-            target: 3,
-            attempt: 1,
-            deadline_unix_ms: 100,
-        });
-        state.coalesce(ActivePunchSession {
-            session_id: 12,
-            source: 2,
-            target: 3,
-            attempt: 2,
-            deadline_unix_ms: 250,
-        });
+        let mut state = ActivePunchState::new(
+            ActivePunchSession {
+                session_id: 11,
+                source: 2,
+                target: 3,
+                attempt: 1,
+                deadline_unix_ms: 100,
+            },
+            endpoint_fingerprint(Ipv4Addr::new(1, 1, 1, 1), 10001),
+        );
+        assert!(!state.coalesce(
+            ActivePunchSession {
+                session_id: 12,
+                source: 2,
+                target: 3,
+                attempt: 2,
+                deadline_unix_ms: 250,
+            },
+            &endpoint_fingerprint(Ipv4Addr::new(1, 1, 1, 1), 10001),
+        ));
 
         assert_eq!(state.deadline_unix_ms(), 250);
         let sessions = state.sessions();
@@ -2528,15 +2614,58 @@ mod tests {
             attempt: 1,
             deadline_unix_ms: 100,
         };
-        let mut state = ActivePunchState::new(active);
-        state.coalesce(ActivePunchSession {
-            deadline_unix_ms: 200,
-            ..active
-        });
+        let mut state = ActivePunchState::new(
+            active,
+            endpoint_fingerprint(Ipv4Addr::new(1, 1, 1, 1), 10001),
+        );
+        assert!(!state.coalesce(
+            ActivePunchSession {
+                deadline_unix_ms: 200,
+                ..active
+            },
+            &endpoint_fingerprint(Ipv4Addr::new(1, 1, 1, 1), 10001),
+        ));
 
         let sessions = state.sessions();
         assert_eq!(sessions.len(), 1);
         assert_eq!(state.deadline_unix_ms(), 200);
+    }
+
+    #[test]
+    fn active_punch_state_refreshes_when_peer_endpoints_change() {
+        let mut state = ActivePunchState::new(
+            ActivePunchSession {
+                session_id: 11,
+                source: 2,
+                target: 3,
+                attempt: 1,
+                deadline_unix_ms: 100,
+            },
+            endpoint_fingerprint(Ipv4Addr::new(1, 1, 1, 1), 10001),
+        );
+
+        assert!(state.coalesce(
+            ActivePunchSession {
+                session_id: 12,
+                source: 2,
+                target: 3,
+                attempt: 2,
+                deadline_unix_ms: 200,
+            },
+            &endpoint_fingerprint(Ipv4Addr::new(2, 2, 2, 2), 10002),
+        ));
+
+        state.update_endpoint_fingerprint(endpoint_fingerprint(Ipv4Addr::new(2, 2, 2, 2), 10002));
+        assert!(!state.coalesce(
+            ActivePunchSession {
+                session_id: 13,
+                source: 2,
+                target: 3,
+                attempt: 3,
+                deadline_unix_ms: 300,
+            },
+            &endpoint_fingerprint(Ipv4Addr::new(2, 2, 2, 2), 10002),
+        ));
     }
 
     #[test]
