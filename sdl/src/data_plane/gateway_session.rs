@@ -40,8 +40,13 @@ const UDP_GATEWAY_REBUILD_BASE_DELAY_MS: i64 = 5_000;
 const UDP_GATEWAY_REBUILD_MAX_DELAY_MS: i64 = 60_000;
 const PEER_INGRESS_GATEWAY_TTL: Duration = Duration::from_secs(60);
 const GATEWAY_PROBE_INTERVAL_MS: i64 = 10_000;
+// Standby sessions still send GatewayConnectHello at the gateway-provided
+// keepalive interval, so their lease and authentication recovery remain fast.
+// Only their independent health probe is less frequent.
+const STANDBY_GATEWAY_PROBE_INTERVAL_MS: i64 = 60_000;
 const GATEWAY_PROBE_UNREACHABLE_AFTER: u32 = 3;
 const PEER_RELAY_PROBE_INTERVAL_MS: i64 = 30_000;
+const NO_GATEWAY_MAINTENANCE_DELAY: Duration = Duration::from_secs(60);
 static GATEWAY_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,6 +168,12 @@ struct GatewaySessionState {
 enum GatewayTickOutcome {
     Idle,
     RebuildUdp,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GatewayWorkerSignal {
+    Stop,
+    Wake,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -695,7 +706,11 @@ impl GatewaySession {
         self.endpoint == addr
     }
 
-    fn tick(&self, current_device: &CurrentDeviceInfo) -> anyhow::Result<GatewayTickOutcome> {
+    fn tick(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        probe_interval_ms: i64,
+    ) -> anyhow::Result<GatewayTickOutcome> {
         self.reconcile_stream_authentication();
         if self.take_udp_rebuild_request() {
             return Ok(GatewayTickOutcome::RebuildUdp);
@@ -730,7 +745,7 @@ impl GatewaySession {
                 return Ok(GatewayTickOutcome::RebuildUdp);
             }
         }
-        if let Some(packet) = self.maybe_build_gateway_probe(current_device)? {
+        if let Some(packet) = self.maybe_build_gateway_probe(current_device, probe_interval_ms)? {
             if let Err(err) = self.send_packet(&packet) {
                 self.record_send_failure(err.kind());
                 return Err(err.into());
@@ -738,6 +753,46 @@ impl GatewaySession {
             self.record_send_success();
         }
         Ok(GatewayTickOutcome::Idle)
+    }
+
+    /// Returns when this session next needs maintenance. Authentication and
+    /// lease recovery use the Hello deadline; only the separate health probe
+    /// may use the longer standby interval.
+    fn next_maintenance_delay(
+        &self,
+        current_device: &CurrentDeviceInfo,
+        probe_interval_ms: i64,
+    ) -> Duration {
+        if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
+            return NO_GATEWAY_MAINTENANCE_DELAY;
+        }
+        let guard = self.state.lock();
+        if guard.udp_rebuild_requested {
+            return Duration::ZERO;
+        }
+        let now_ms = now_time() as i64;
+        let ticket_available = now_ms <= guard.ticket_expire_unix_ms && !guard.ticket.is_empty();
+        if !ticket_available && now_ms > guard.grace_expire_unix_ms {
+            return NO_GATEWAY_MAINTENANCE_DELAY;
+        }
+        if guard.authenticated
+            && guard.lease_expire_unix_ms > 0
+            && now_ms > guard.lease_expire_unix_ms
+        {
+            return Duration::ZERO;
+        }
+        let hello_interval_ms = if guard.authenticated {
+            i64::from(guard.keepalive_secs.max(3)) * 1_000
+        } else {
+            3_000
+        };
+        let hello_delay_ms = (guard.last_hello_unix_ms + hello_interval_ms - now_ms).max(0);
+        let probe_delay_ms = if Self::is_available(&guard, now_ms) {
+            (guard.last_probe_sent_unix_ms + probe_interval_ms - now_ms).max(0)
+        } else {
+            i64::MAX
+        };
+        Duration::from_millis(hello_delay_ms.min(probe_delay_ms) as u64)
     }
 
     fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
@@ -1022,11 +1077,12 @@ impl GatewaySession {
     fn maybe_build_gateway_probe(
         &self,
         current_device: &CurrentDeviceInfo,
+        probe_interval_ms: i64,
     ) -> anyhow::Result<Option<NetPacket<Vec<u8>>>> {
         let mut guard = self.state.lock();
         let now_ms = now_time() as i64;
         if !Self::is_available(&guard, now_ms)
-            || now_ms - guard.last_probe_sent_unix_ms < GATEWAY_PROBE_INTERVAL_MS
+            || now_ms - guard.last_probe_sent_unix_ms < probe_interval_ms
         {
             return Ok(None);
         }
@@ -1216,6 +1272,8 @@ pub struct GatewaySessions {
     udp_rebuild_backoff: Arc<Mutex<HashMap<SocketAddr, UdpGatewayRebuildBackoff>>>,
     refresh_requested_at_ms: Arc<AtomicCell<i64>>,
     worker_started: Arc<AtomicCell<bool>>,
+    worker_waker: Arc<Mutex<Option<mpsc::Sender<GatewayWorkerSignal>>>>,
+    maintenance_lock: Arc<Mutex<()>>,
     debug_watch: DebugWatch,
     stats: DataPlaneStats,
 }
@@ -1238,6 +1296,8 @@ impl GatewaySessions {
             udp_rebuild_backoff: Arc::new(Mutex::new(HashMap::new())),
             refresh_requested_at_ms: Arc::new(AtomicCell::new(0)),
             worker_started: Arc::new(AtomicCell::new(false)),
+            worker_waker: Arc::new(Mutex::new(None)),
+            maintenance_lock: Arc::new(Mutex::new(())),
             debug_watch,
             stats,
         }
@@ -1257,9 +1317,10 @@ impl GatewaySessions {
         if self.worker_started.swap(true) {
             return Ok(());
         }
-        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+        let (stop_sender, stop_receiver) = mpsc::channel::<GatewayWorkerSignal>();
+        *self.worker_waker.lock() = Some(stop_sender.clone());
         let worker = stop_manager.add_listener("gatewaySessions".into(), move || {
-            let _ = stop_sender.send(());
+            let _ = stop_sender.send(GatewayWorkerSignal::Stop);
         })?;
         let sessions = self.clone();
         thread::Builder::new()
@@ -1271,20 +1332,49 @@ impl GatewaySessions {
         Ok(())
     }
 
-    fn run(&self, stop_receiver: mpsc::Receiver<()>) {
+    fn run(&self, stop_receiver: mpsc::Receiver<GatewayWorkerSignal>) {
         loop {
-            if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
-                break;
-            }
             self.trigger_connect_now();
+            match stop_receiver.recv_timeout(self.next_maintenance_delay()) {
+                Ok(GatewayWorkerSignal::Stop) => break,
+                Ok(GatewayWorkerSignal::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        *self.worker_waker.lock() = None;
+    }
+
+    fn wake_maintenance(&self) {
+        if let Some(sender) = self.worker_waker.lock().as_ref() {
+            let _ = sender.send(GatewayWorkerSignal::Wake);
         }
     }
 
     pub fn trigger_connect_now(&self) {
+        let _maintenance = self.maintenance_lock.lock();
+        self.trigger_connect_now_locked();
+    }
+
+    fn trigger_connect_now_locked(&self) {
         let current_device = self.current_device.load();
-        let sessions: Vec<GatewaySession> = self.sessions.lock().values().cloned().collect();
-        for session in sessions {
-            match session.tick(&current_device) {
+        let (active_endpoint, sessions): (Option<SocketAddr>, Vec<_>) = {
+            let sessions = self.sessions.lock();
+            let active_endpoint = self.choose_active_endpoint_locked(&sessions);
+            (
+                active_endpoint,
+                sessions
+                    .iter()
+                    .map(|(endpoint, session)| (*endpoint, session.clone()))
+                    .collect(),
+            )
+        };
+        for (endpoint, session) in sessions {
+            let probe_interval_ms = if Some(endpoint) == active_endpoint {
+                GATEWAY_PROBE_INTERVAL_MS
+            } else {
+                STANDBY_GATEWAY_PROBE_INTERVAL_MS
+            };
+            match session.tick(&current_device, probe_interval_ms) {
                 Ok(GatewayTickOutcome::Idle) => {}
                 Ok(GatewayTickOutcome::RebuildUdp) => self.rebuild_udp_session(session.endpoint),
                 Err(e) => {
@@ -1296,6 +1386,24 @@ impl GatewaySessions {
                 }
             }
         }
+    }
+
+    fn next_maintenance_delay(&self) -> Duration {
+        let current_device = self.current_device.load();
+        let sessions = self.sessions.lock();
+        let active_endpoint = self.choose_active_endpoint_locked(&sessions);
+        sessions
+            .iter()
+            .map(|(endpoint, session)| {
+                let probe_interval_ms = if Some(*endpoint) == active_endpoint {
+                    GATEWAY_PROBE_INTERVAL_MS
+                } else {
+                    STANDBY_GATEWAY_PROBE_INTERVAL_MS
+                };
+                session.next_maintenance_delay(&current_device, probe_interval_ms)
+            })
+            .min()
+            .unwrap_or(NO_GATEWAY_MAINTENANCE_DELAY)
     }
 
     /// Recreates UDP gateway sockets after the local underlay changed. Stream
@@ -1313,6 +1421,7 @@ impl GatewaySessions {
             self.rebuild_udp_session(endpoint);
         }
         self.trigger_connect_now();
+        self.wake_maintenance();
     }
 
     fn rebuild_udp_session(&self, endpoint: SocketAddr) {
@@ -1603,6 +1712,7 @@ impl GatewaySessions {
             .lock()
             .retain(|_, ingress| desired.contains(&ingress.endpoint));
         self.trigger_connect_now();
+        self.wake_maintenance();
     }
 
     pub fn clear_gateway_grant(&self) {
@@ -1627,6 +1737,7 @@ impl GatewaySessions {
         *self.selection.lock() = GatewaySelectionState::default();
         self.peer_ingress_gateways.lock().clear();
         self.refresh_requested_at_ms.store(0);
+        self.wake_maintenance();
     }
 
     pub fn set_manual_endpoint(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
@@ -1640,6 +1751,10 @@ impl GatewaySessions {
         selection.manual_endpoint = endpoint;
         selection.selected_endpoint = endpoint;
         selection.last_switch_unix_ms = now_time() as i64;
+        drop(selection);
+        drop(sessions);
+        self.trigger_connect_now();
+        self.wake_maintenance();
         Ok(())
     }
 
@@ -2426,6 +2541,67 @@ mod tests {
             GatewaySession::relay_health(&state, 1),
             super::GatewayRelayHealth::Healthy
         );
+    }
+
+    #[test]
+    fn standby_gateway_probe_interval_is_longer_without_affecting_authentication() {
+        let endpoint = "127.0.0.1:29900".parse().unwrap();
+        let session = GatewaySession::new_quic(
+            endpoint,
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        let now_ms = now_time() as i64;
+        {
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.ticket = vec![1];
+            state.ticket_expire_unix_ms = i64::MAX;
+            state.lease_expire_unix_ms = i64::MAX;
+            state.grace_expire_unix_ms = i64::MAX;
+            state.last_probe_sent_unix_ms = now_ms - 15_000;
+        }
+        let device = CurrentDeviceInfo::new0();
+
+        assert!(session
+            .maybe_build_gateway_probe(&device, super::STANDBY_GATEWAY_PROBE_INTERVAL_MS)
+            .unwrap()
+            .is_none());
+        assert!(session
+            .maybe_build_gateway_probe(&device, super::GATEWAY_PROBE_INTERVAL_MS)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn connected_gateway_maintenance_waits_for_the_next_probe_not_one_second() {
+        let endpoint = "127.0.0.1:29900".parse().unwrap();
+        let session = GatewaySession::new_quic(
+            endpoint,
+            super::DebugWatch::default(),
+            DataPlaneStats::new(true),
+        );
+        let now_ms = now_time() as i64;
+        {
+            let mut state = session.state.lock();
+            state.authenticated = true;
+            state.ticket = vec![1];
+            state.ticket_expire_unix_ms = i64::MAX;
+            state.lease_expire_unix_ms = i64::MAX;
+            state.grace_expire_unix_ms = i64::MAX;
+            state.keepalive_secs = 30;
+            state.last_hello_unix_ms = now_ms;
+            state.last_probe_sent_unix_ms = now_ms;
+        }
+        let delay = session.next_maintenance_delay(
+            &CurrentDeviceInfo {
+                virtual_ip: Ipv4Addr::new(10, 26, 0, 3),
+                ..CurrentDeviceInfo::new0()
+            },
+            super::GATEWAY_PROBE_INTERVAL_MS,
+        );
+
+        assert!((Duration::from_secs(9)..=Duration::from_secs(10)).contains(&delay));
     }
 
     #[test]
