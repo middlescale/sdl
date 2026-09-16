@@ -43,6 +43,8 @@ const DEVICE_AUTH_CHALLENGE_EXPIRED_RETRY_COOLDOWN: Duration = Duration::from_se
 const GATEWAY_GRANT_REFRESH_RETRY_COOLDOWN: Duration = Duration::from_secs(5);
 const CONTROL_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(5);
 const CONTROL_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+const CONTROL_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const CONTROL_UNANSWERED_HEARTBEATS_BEFORE_RECONNECT: u32 = 5;
 
 /// Shared data-plane objects that are owned jointly by the control session and
 /// the packet-handling / routing layer.  Everything here is `Clone` via `Arc`.
@@ -341,7 +343,7 @@ impl ControlSession {
             .checked_sub(CONTROL_RECONNECT_INITIAL_DELAY)
             .unwrap_or_else(Instant::now);
         let mut last_heartbeat_at = Instant::now()
-            .checked_sub(Duration::from_secs(3))
+            .checked_sub(CONTROL_HEARTBEAT_INTERVAL)
             .unwrap_or_else(Instant::now);
         let mut last_status_report_at = Instant::now();
         let mut status_report_delay = Duration::from_secs(60);
@@ -352,54 +354,53 @@ impl ControlSession {
         let mut last_relay_repunch_at = Instant::now();
         let mut last_periodic_repunch_target = None;
         loop {
-            if stop_receiver.recv_timeout(Duration::from_secs(1)).is_ok() {
-                break;
-            }
             let current_device = self.current_device();
             if current_device.status.offline() {
                 let reconnect_delay = self.reconnect_delay();
-                if last_connect_at.elapsed() < reconnect_delay {
-                    continue;
+                if last_connect_at.elapsed() >= reconnect_delay {
+                    last_connect_at = Instant::now();
+                    if let Err(e) = self.maintain_connection(&call, &mut connect_count) {
+                        call.error(ErrorInfo::new_msg(
+                            ErrorType::Disconnect,
+                            format!("connect:{},error:{:?}", self.channel.server_addr(), e),
+                        ));
+                    }
                 }
-                last_connect_at = Instant::now();
-                if let Err(e) = self.maintain_connection(&call, &mut connect_count) {
-                    call.error(ErrorInfo::new_msg(
-                        ErrorType::Disconnect,
-                        format!("connect:{},error:{:?}", self.channel.server_addr(), e),
-                    ));
+                if stop_receiver
+                    .recv_timeout(remaining_interval(last_connect_at, reconnect_delay))
+                    .is_ok()
+                {
+                    break;
                 }
                 continue;
             }
             let unanswered = self.unanswered_heartbeats.load(Ordering::Relaxed);
-            if unanswered >= 15 {
+            if unanswered >= CONTROL_UNANSWERED_HEARTBEATS_BEFORE_RECONNECT {
                 self.mark_control_disconnected(
                     &call,
                     format!(
-                        "control session idle with {} unanswered heartbeats (45s), reconnecting",
-                        unanswered
+                        "control session idle with {} unanswered heartbeats ({}s), reconnecting",
+                        unanswered,
+                        u64::from(unanswered) * CONTROL_HEARTBEAT_INTERVAL.as_secs()
                     ),
                 );
                 continue;
             }
-            if last_heartbeat_at.elapsed() >= Duration::from_secs(3) {
+            if last_heartbeat_at.elapsed() >= CONTROL_HEARTBEAT_INTERVAL {
                 last_heartbeat_at = Instant::now();
                 let unanswered = self.unanswered_heartbeats.fetch_add(1, Ordering::Relaxed) + 1;
-                if unanswered == 5 || unanswered == 10 {
+                if unanswered == CONTROL_UNANSWERED_HEARTBEATS_BEFORE_RECONNECT - 1 {
                     log::warn!(
                         "control session idle: {} unanswered heartbeats ({}s), keeping session active",
                         unanswered,
-                        unanswered * 3
+                        u64::from(unanswered) * CONTROL_HEARTBEAT_INTERVAL.as_secs()
                     );
                 } else {
                     log::debug!("sending control heartbeat ping, unanswered={}", unanswered);
                 }
                 match self.send_server_heartbeat(self.data_plane.peer_epoch()) {
-                    Ok(_) => {
-                        self.reset_reconnect_backoff();
-                    }
-                    Err(e) => {
-                        log::warn!("heartbeat err={:?}", e);
-                    }
+                    Ok(_) => self.reset_reconnect_backoff(),
+                    Err(e) => log::warn!("heartbeat err={:?}", e),
                 }
                 try_refresh_gateway_grant(self, &self.data_plane.gateway_sessions);
             }
@@ -410,26 +411,19 @@ impl ControlSession {
                 last_status_report_at = Instant::now();
                 status_report_delay = Duration::from_secs(10 * 60);
             }
-            if !self
+            let direct_routes_enabled = !self
                 .data_plane
                 .route_manager
                 .use_channel_type()
-                .is_only_relay()
-                && last_public_addr_at.elapsed() >= public_addr_delay
-            {
+                .is_only_relay();
+            if direct_routes_enabled && last_public_addr_at.elapsed() >= public_addr_delay {
                 if let Err(e) = self.nat_test.request_public_addr() {
                     log::warn!("{:?}", e);
                 }
                 last_public_addr_at = Instant::now();
                 public_addr_delay = self.nat_test.public_addr_retry_delay();
             }
-            if !self
-                .data_plane
-                .route_manager
-                .use_channel_type()
-                .is_only_relay()
-                && last_relay_repunch_at.elapsed() >= RELAY_REPUNCH_INTERVAL
-            {
+            if direct_routes_enabled && last_relay_repunch_at.elapsed() >= RELAY_REPUNCH_INTERVAL {
                 let peers_missing_direct_route = self.peers_missing_direct_route();
                 if let Some(target) = next_periodic_repunch_target(
                     &peers_missing_direct_route,
@@ -447,6 +441,21 @@ impl ControlSession {
                     last_periodic_repunch_target = Some(target);
                 }
                 last_relay_repunch_at = Instant::now();
+            }
+            let mut next_delay =
+                remaining_interval(last_heartbeat_at, CONTROL_HEARTBEAT_INTERVAL).min(
+                    remaining_interval(last_status_report_at, status_report_delay),
+                );
+            if direct_routes_enabled {
+                next_delay = next_delay
+                    .min(remaining_interval(last_public_addr_at, public_addr_delay))
+                    .min(remaining_interval(
+                        last_relay_repunch_at,
+                        RELAY_REPUNCH_INTERVAL,
+                    ));
+            }
+            if stop_receiver.recv_timeout(next_delay).is_ok() {
+                break;
             }
         }
     }
@@ -1001,6 +1010,10 @@ fn retry_cooldown_elapsed(last_attempt_at_ms: u64, now_ms: u64, cooldown: Durati
         || now_ms.saturating_sub(last_attempt_at_ms) >= cooldown.as_millis() as u64
 }
 
+fn remaining_interval(last_run: Instant, interval: Duration) -> Duration {
+    interval.saturating_sub(last_run.elapsed())
+}
+
 fn control_reconnect_delay(
     failure_count: u32,
     initial_delay: Duration,
@@ -1017,10 +1030,18 @@ fn control_reconnect_delay(
 mod tests {
     use super::{
         control_reconnect_delay, gateway_grant_refresh_mode, next_periodic_repunch_target,
-        retry_cooldown_elapsed,
+        remaining_interval, retry_cooldown_elapsed,
     };
     use std::net::Ipv4Addr;
     use std::time::Duration;
+    use std::time::Instant;
+
+    #[test]
+    fn remaining_interval_sleeps_only_until_the_actual_deadline() {
+        let last_run = Instant::now().checked_sub(Duration::from_secs(4)).unwrap();
+        let remaining = remaining_interval(last_run, Duration::from_secs(10));
+        assert!((Duration::from_secs(5)..=Duration::from_secs(6)).contains(&remaining));
+    }
 
     #[test]
     fn periodic_repunch_rotates_one_target_at_a_time() {
