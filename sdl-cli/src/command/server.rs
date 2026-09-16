@@ -440,6 +440,7 @@ mod tests {
                     channel_policy: String::new(),
                     last_error: None,
                     nat_type: String::new(),
+                    public_udp_endpoints: Vec::new(),
                     public_ips: String::new(),
                     local_addr: String::new(),
                     ipv6_addr: String::new(),

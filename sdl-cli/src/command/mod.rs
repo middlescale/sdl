@@ -457,6 +457,13 @@ pub fn command_info(sdl: &Sdl) -> Info {
     };
     let (auth_status, auth_detail) = describe_auth_state(&service_state);
     let nat_type = format!("{:?}", nat_info.nat_type);
+    let mut public_udp_endpoints = Vec::new();
+    for endpoint in &nat_info.public_udp_endpoints {
+        let endpoint = endpoint.to_string();
+        if !public_udp_endpoints.contains(&endpoint) {
+            public_udp_endpoints.push(endpoint);
+        }
+    }
     let public_ips: Vec<String> = nat_info.public_ips.iter().map(|v| v.to_string()).collect();
     let public_ips = public_ips.join(",");
     let local_addr = nat_info
@@ -511,6 +518,7 @@ pub fn command_info(sdl: &Sdl) -> Info {
         channel_policy,
         last_error: service_state.last_error,
         nat_type,
+        public_udp_endpoints,
         public_ips,
         local_addr,
         ipv6_addr,

@@ -34,6 +34,10 @@ pub struct Info {
     pub channel_policy: String,
     pub last_error: Option<String>,
     pub nat_type: String,
+    /// STUN-observed public UDP mappings, including the externally visible
+    /// port used for P2P hole punching.
+    #[serde(default)]
+    pub public_udp_endpoints: Vec<String>,
     pub public_ips: String,
     pub local_addr: String,
     pub ipv6_addr: String,

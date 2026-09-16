@@ -470,6 +470,7 @@ impl ServiceManager {
             channel_policy,
             last_error: state.last_error,
             nat_type: String::new(),
+            public_udp_endpoints: vec![],
             public_ips: String::new(),
             local_addr: String::new(),
             ipv6_addr: String::new(),

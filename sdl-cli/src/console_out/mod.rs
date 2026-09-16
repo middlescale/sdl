@@ -117,10 +117,17 @@ pub fn console_info(status: Info) {
         println!("Last error: {}", style(last_error).red());
     }
     println!(
-        "Udp listen: {}",
+        "UDP listen (local): {}",
         style(status.udp_listen_addr.join(", ")).green()
     );
-    println!("Public ips: {}", style(status.public_ips).green());
+    if !status.public_udp_endpoints.is_empty() {
+        println!(
+            "Public UDP endpoints (STUN): {}",
+            style(status.public_udp_endpoints.join(", ")).green()
+        );
+    } else {
+        println!("Public ips: {}", style(status.public_ips).green());
+    }
     println!("Local addr: {}", style(status.local_addr).green());
     println!("IPv6: {}", style(status.ipv6_addr).green());
 
