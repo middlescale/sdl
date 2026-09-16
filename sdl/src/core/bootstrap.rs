@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -225,9 +226,7 @@ impl Sdl {
                         "peer_ip": peer_ip.to_string(),
                     }),
                 );
-                control_session.request_punch_status_report_with_nat_ready(
-                    crate::proto::message::PunchTriggerReason::PunchTriggerRouteTimeout,
-                );
+                control_session.request_direct_recovery_for(peer_ip);
             }));
         }
         {
@@ -353,13 +352,19 @@ impl Sdl {
             let control_session = control_session.clone();
             let gateway_sessions = gateway_sessions.clone();
             let udp_channel = udp_channel.clone();
+            let current_device = current_device.clone();
+            // Use one short grace period on every platform; power-source
+            // detection is not part of underlay recovery.
+            let revalidation_timeout = Duration::from_secs(3);
             crate::net::underlay_monitor::start_underlay_monitor(
                 stop_manager.clone(),
                 move || {
-                    // Direct endpoints can no longer be trusted after a
-                    // suspend/resume, so discard them before refreshing NAT.
-                    let removed = route_manager.clear_direct_paths();
+                    // A suspend/resume may preserve both Wi-Fi and the old NAT
+                    // mapping. Keep the direct endpoints, but require a fresh
+                    // Ping/Pong before any payload can select them again.
                     peer_probe_tracker.clear();
+                    let routes_to_probe =
+                        route_manager.begin_underlay_revalidation(revalidation_timeout);
                     match udp_channel.rebind() {
                         Ok(port) => log::info!("rebound main UDP socket on port {}", port),
                         Err(err) => {
@@ -367,10 +372,42 @@ impl Sdl {
                         }
                     }
                     gateway_sessions.rebuild_udp_sessions_after_underlay_change();
+                    let current = current_device.load();
+                    for (peer_ip, route) in &routes_to_probe {
+                        if let Err(err) = route_manager.send_immediate_heartbeat(
+                            current,
+                            *peer_ip,
+                            route.route_key(),
+                        ) {
+                            log::debug!(
+                                "underlay direct route revalidation heartbeat failed peer={} route={:?}: {:?}",
+                                peer_ip,
+                                route.route_key(),
+                                err
+                            );
+                        }
+                    }
                     log::info!(
-                        "underlay recovery invalidated {} direct P2P routes; refreshing NAT",
-                        removed
+                        "underlay recovery revalidating {} direct P2P routes for {:?}; refreshing NAT",
+                        routes_to_probe.len(),
+                        revalidation_timeout
                     );
+                    if !routes_to_probe.is_empty() {
+                        let route_manager = route_manager.clone();
+                        thread::Builder::new()
+                            .name("underlayRouteRevalidation".into())
+                            .spawn(move || {
+                                thread::sleep(revalidation_timeout);
+                                let expired = route_manager.expire_underlay_revalidations();
+                                if !expired.is_empty() {
+                                    log::info!(
+                                        "underlay revalidation expired direct routes for peers {:?}",
+                                        expired
+                                    );
+                                }
+                            })
+                            .expect("underlay route revalidation");
+                    }
                     // Refresh the control-plane NAT view without proactively
                     // coordinating peers. The next payload requests direct
                     // recovery on demand while relay remains available.

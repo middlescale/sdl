@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -33,6 +33,7 @@ pub struct RouteManager {
     direct_route_update_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
     heartbeat_interval: Duration,
     stale_direct_timeout: Duration,
+    underlay_revalidations: Arc<Mutex<HashMap<(Ipv4Addr, RouteKey), std::time::Instant>>>,
     pub(crate) peer_table: Option<Arc<RwLock<crate::core::PeerTable>>>,
 }
 
@@ -74,6 +75,7 @@ impl RouteManager {
             direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval,
             stale_direct_timeout,
+            underlay_revalidations: Arc::new(Mutex::new(HashMap::new())),
             peer_table: Some(peer_table),
         };
         manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
@@ -92,6 +94,7 @@ impl RouteManager {
             direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval: Duration::from_secs(10),
             stale_direct_timeout: Duration::from_secs(30),
+            underlay_revalidations: Arc::new(Mutex::new(HashMap::new())),
             peer_table: None,
         }
     }
@@ -295,6 +298,67 @@ impl RouteManager {
             self.notify_direct_route_update(*peer_ip);
         }
         affected_peers.len()
+    }
+
+    /// Preserves old direct endpoints across an underlay transition while
+    /// requiring a fresh heartbeat before payload selection can use them.
+    pub fn begin_underlay_revalidation(&self, timeout: Duration) -> Vec<(Ipv4Addr, Route)> {
+        let routes = self.route_table.invalidate_direct_routes_for_revalidation();
+        if routes.is_empty() {
+            return routes;
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        let mut pending = self.underlay_revalidations.lock();
+        let mut affected_peers = HashSet::new();
+        for (peer_ip, route) in &routes {
+            pending.insert((*peer_ip, route.route_key()), deadline);
+            affected_peers.insert(*peer_ip);
+        }
+        drop(pending);
+        for peer_ip in affected_peers {
+            self.notify_direct_route_update(peer_ip);
+        }
+        routes
+    }
+
+    /// Drops only routes which failed the post-resume heartbeat grace period.
+    /// Returns peers that lost their final direct route and have requested the
+    /// normal direct-route timeout recovery callback.
+    pub fn expire_underlay_revalidations(&self) -> Vec<Ipv4Addr> {
+        let now = std::time::Instant::now();
+        let expired: Vec<_> = {
+            let mut pending = self.underlay_revalidations.lock();
+            let expired = pending
+                .iter()
+                .filter_map(|(key, deadline)| (*deadline <= now).then_some(*key))
+                .collect();
+            pending.retain(|_, deadline| *deadline > now);
+            expired
+        };
+        if expired.is_empty() {
+            return Vec::new();
+        }
+
+        let mut changed_peers = HashSet::new();
+        for (peer_ip, route_key) in expired {
+            if self
+                .route_table
+                .remove_unmeasured_direct_route(&peer_ip, route_key)
+            {
+                changed_peers.insert(peer_ip);
+            }
+        }
+        let mut recovery_peers = Vec::new();
+        for peer_ip in changed_peers {
+            self.notify_direct_route_update(peer_ip);
+            if self.direct_path_count(&peer_ip) == 0 {
+                if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
+                    handler(peer_ip);
+                }
+                recovery_peers.push(peer_ip);
+            }
+        }
+        recovery_peers
     }
 
     pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
@@ -786,6 +850,44 @@ mod tests {
 
         assert!(table.get_routes(&peer).is_none());
         assert_eq!(*timeouts.lock(), vec![peer]);
+    }
+
+    #[test]
+    fn underlay_revalidation_expires_only_unconfirmed_routes_and_triggers_recovery() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 19);
+        let direct = route(1, 2019);
+        let timeouts = Arc::new(Mutex::new(Vec::new()));
+        {
+            let timeouts = timeouts.clone();
+            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
+                timeouts.lock().push(ip);
+            }));
+        }
+        table.add_route(peer, direct);
+
+        let routes_to_probe = manager.begin_underlay_revalidation(Duration::ZERO);
+        assert_eq!(routes_to_probe.len(), 1);
+        assert_eq!(routes_to_probe[0].0, peer);
+        assert_eq!(routes_to_probe[0].1.route_key(), direct.route_key());
+        assert_eq!(manager.expire_underlay_revalidations(), vec![peer]);
+        assert!(table.get_routes(&peer).is_none());
+        assert_eq!(*timeouts.lock(), vec![peer]);
+    }
+
+    #[test]
+    fn underlay_revalidation_preserves_route_when_a_pong_arrives_during_grace() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let manager = RouteManager::new_detached(table.clone());
+        let peer = Ipv4Addr::new(10, 0, 0, 21);
+        let direct = route(1, 2021);
+        table.add_route(peer, direct);
+        manager.begin_underlay_revalidation(Duration::ZERO);
+        manager.add_path(peer, Route::from(direct.route_key(), 1, 7));
+
+        assert!(manager.expire_underlay_revalidations().is_empty());
+        assert_eq!(manager.measured_direct_route(&peer).unwrap().rt, 7);
     }
 
     #[test]

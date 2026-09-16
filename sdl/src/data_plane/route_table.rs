@@ -371,6 +371,65 @@ impl RouteTable {
         }
     }
 
+    /// Keeps direct endpoints across a local suspend/resume, but makes them
+    /// ineligible for payload selection until a fresh heartbeat measures them.
+    /// Their liveness is reset so stale cleanup cannot race the revalidation
+    /// window.
+    pub fn invalidate_direct_routes_for_revalidation(&self) -> Vec<(Ipv4Addr, Route)> {
+        let now = Instant::now();
+        let mut route_table = self.route_table.write();
+        let mut routes_to_probe = Vec::new();
+        for (vip, routes) in route_table.iter_mut() {
+            let mut changed = false;
+            for (route, liveness) in routes.iter_mut() {
+                if route.is_p2p() {
+                    route.rt = -1;
+                    route.loss_rate = None;
+                    liveness.store(now);
+                    routes_to_probe.push((*vip, *route));
+                    changed = true;
+                }
+            }
+            if changed {
+                // Keep the same ascending RTT order used by add_route. The
+                // -1 revalidation marker deliberately sorts first, but route
+                // selection rejects it until a fresh Pong supplies an RTT.
+                routes.sort_by_key(|(route, _)| route.rt);
+            }
+        }
+        routes_to_probe
+    }
+
+    /// Removes a direct route only when it is still awaiting a post-resume
+    /// measurement. A Pong may have refreshed it while its grace timer was
+    /// pending, in which case the route is preserved.
+    pub fn remove_unmeasured_direct_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
+        let mut route_table = self.route_table.write();
+        let mut removed = false;
+        if let Some(routes) = route_table.get_mut(vip) {
+            let before = routes.len();
+            routes.retain(|(route, _)| {
+                !(route.is_p2p() && route.route_key() == route_key && route.rt < 0)
+            });
+            removed = routes.len() != before;
+            if routes.is_empty() {
+                route_table.remove(vip);
+            }
+        }
+        if !removed {
+            return false;
+        }
+        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        let has_direct_route = route_table
+            .get(vip)
+            .is_some_and(|routes| routes.iter().any(|(route, _)| route.is_p2p()));
+        drop(route_table);
+        if !has_direct_route {
+            self.reset_direct_recovery_request(vip);
+        }
+        true
+    }
+
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
         let mut route_table = self.route_table.write();
         route_table.remove(vip);
@@ -628,6 +687,41 @@ mod tests {
             table.get_first_route(&vip).unwrap().route_key(),
             relay.route_key()
         );
+    }
+
+    #[test]
+    fn underlay_revalidation_keeps_the_direct_endpoint_but_requires_a_new_measurement() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 14);
+        let direct =
+            Route::new(ConnectProtocol::UDP, route_key(1014).addr, 1, 42).with_loss_rate(Some(0.2));
+        table.add_route(vip, direct);
+
+        let routes_to_probe = table.invalidate_direct_routes_for_revalidation();
+        assert_eq!(routes_to_probe.len(), 1);
+        assert_eq!(routes_to_probe[0].0, vip);
+        assert_eq!(routes_to_probe[0].1.route_key(), direct.route_key());
+        let (measured, has_direct) = table.payload_route_read(&vip, Duration::from_secs(1));
+        assert!(measured.is_none());
+        assert!(has_direct);
+        let route = table
+            .get_one_p2p_route(&vip)
+            .expect("preserved direct route");
+        assert_eq!(route.rt, -1);
+        assert_eq!(route.loss_rate, None);
+    }
+
+    #[test]
+    fn revalidation_expiry_never_removes_a_route_that_a_pong_refreshed() {
+        let table = RouteTable::new(UseChannelType::Auto, false);
+        let vip = Ipv4Addr::new(10, 0, 0, 15);
+        let key = route_key(1015);
+        table.add_route(vip, Route::from(key, 1, 42));
+        table.invalidate_direct_routes_for_revalidation();
+        table.add_route(vip, Route::from(key, 1, 12));
+
+        assert!(!table.remove_unmeasured_direct_route(&vip, key));
+        assert_eq!(table.get_one_measured_p2p_route(&vip).unwrap().rt, 12);
     }
 
     #[test]
