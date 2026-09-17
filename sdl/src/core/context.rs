@@ -11,7 +11,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Map, Value};
 
-use crate::cipher::CipherModel;
 use crate::control::ControlSession;
 use crate::core::PeerInfo;
 use crate::core::{ExitNodeRoute, PeerIdentity};
@@ -47,7 +46,6 @@ pub(crate) struct SdlContextConfig {
     pub name: String,
     pub token: String,
     pub ip: Option<Ipv4Addr>,
-    pub cipher_model: CipherModel,
     pub device_id: String,
     pub device_pub_key: Vec<u8>,
     pub server_addr: String,
@@ -55,7 +53,6 @@ pub(crate) struct SdlContextConfig {
     #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
-    pub default_interface: crate::transport::socket::LocalInterface,
 }
 
 #[derive(Clone, Debug)]

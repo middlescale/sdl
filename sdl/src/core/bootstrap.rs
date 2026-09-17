@@ -90,8 +90,6 @@ impl Sdl {
         } else {
             nat::local_ipv4()
         };
-        let default_interface = config.local_interface.clone();
-
         //基础信息
         let auth_request = Arc::new(RwLock::new(AuthRequestConfig {
             user_id: config.auth_user_id.clone(),
@@ -103,7 +101,6 @@ impl Sdl {
             name: config.name.clone(),
             token: config.token.clone(),
             ip: config.ip,
-            cipher_model: config.cipher_model,
             device_id: config.device_id.clone(),
             device_pub_key,
             server_addr: config.server_address_str.clone(),
@@ -111,7 +108,6 @@ impl Sdl {
             #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
-            default_interface: default_interface.clone(),
         };
         // 服务停止管理器
         let stop_manager = {
