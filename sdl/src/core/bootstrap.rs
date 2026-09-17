@@ -15,7 +15,7 @@ use crate::core::{
     context::{
         AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewaySubsystem,
         PeerSubsystem, PendingRenameRequest, PendingRequestTable, RenameRequestOutcome,
-        SdlContextConfig, SdlNodeState, SdlServices, PENDING_REQUEST_TTL_MS,
+        RuntimeConfig, SdlNodeState, SdlServices, PENDING_REQUEST_TTL_MS,
     },
     Config, SdlContext,
 };
@@ -79,7 +79,7 @@ impl Sdl {
             ticket: config.auth_ticket.clone(),
         }));
         let exit_node_state = Arc::new(RwLock::new(ExitNodeLocalState::default()));
-        let context_config = SdlContextConfig {
+        let runtime_config = Arc::new(RuntimeConfig {
             name: config.name.clone(),
             token: config.token.clone(),
             ip: config.ip,
@@ -89,7 +89,7 @@ impl Sdl {
             mtu: config.mtu.unwrap_or(crate::protocol::DEFAULT_TUN_MTU),
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
-        };
+        });
         // 服务停止管理器
         let stop_manager = {
             let callback = callback.clone();
@@ -147,7 +147,7 @@ impl Sdl {
         )?;
         let control_session = ControlSession::new(
             Http3Channel::new(config.server_address, &config.server_address_str)?,
-            context_config.clone(),
+            runtime_config.clone(),
             auth_request.clone(),
             exit_node_state.clone(),
             crate::control::SharedDataPlane {
@@ -230,7 +230,7 @@ impl Sdl {
             };
 
             SdlContext {
-                config: context_config.clone(),
+                config: runtime_config.clone(),
                 state: SdlNodeState {
                     auth_request: auth_request.clone(),
                     peers: PeerSubsystem {

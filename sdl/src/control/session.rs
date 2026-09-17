@@ -11,7 +11,7 @@ use protobuf::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::context::{AuthRequestConfig, SdlContextConfig};
+use crate::core::context::{AuthRequestConfig, RuntimeConfig};
 use crate::core::ExitNodeLocalState;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
@@ -79,7 +79,7 @@ impl SharedDataPlane {
 #[derive(Clone)]
 pub struct ControlSession {
     channel: Http3Channel,
-    config: SdlContextConfig,
+    config: Arc<RuntimeConfig>,
     auth_request: Arc<RwLock<AuthRequestConfig>>,
     exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
     data_plane: SharedDataPlane,
@@ -96,7 +96,7 @@ pub struct ControlSession {
 impl ControlSession {
     pub(crate) fn new(
         channel: Http3Channel,
-        config: SdlContextConfig,
+        config: Arc<RuntimeConfig>,
         auth_request: Arc<RwLock<AuthRequestConfig>>,
         exit_node_state: Arc<RwLock<ExitNodeLocalState>>,
         data_plane: SharedDataPlane,

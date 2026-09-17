@@ -38,7 +38,7 @@ pub(crate) struct AuthRequestConfig {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct SdlContextConfig {
+pub(crate) struct RuntimeConfig {
     pub name: String,
     pub token: String,
     pub ip: Option<Ipv4Addr>,
@@ -389,7 +389,7 @@ pub(crate) struct SdlServices {
 // workers.
 #[derive(Clone)]
 pub(crate) struct SdlContext {
-    pub(crate) config: SdlContextConfig,
+    pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) state: SdlNodeState,
     pub(crate) services: SdlServices,
 }
