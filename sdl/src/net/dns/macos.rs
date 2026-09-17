@@ -6,6 +6,7 @@ use crate::DnsProfile;
 
 const MANAGED_HEADER: &str = "# managed by sdl\n";
 
+#[cfg(target_os = "macos")]
 pub(crate) fn apply_split_dns(
     _interface_name: &str,
     previous_profile: Option<&DnsProfile>,
@@ -14,6 +15,7 @@ pub(crate) fn apply_split_dns(
     apply_split_dns_in_dir(&resolver_dir(), previous_profile, profile)
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn revert_split_dns(previous_profile: Option<&DnsProfile>) -> io::Result<()> {
     revert_split_dns_in_dir(&resolver_dir(), previous_profile)
 }
@@ -102,6 +104,7 @@ fn rollback_apply_failure_in_dir(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn resolver_dir() -> PathBuf {
     std::env::var_os("SDL_MACOS_RESOLVER_DIR")
         .map(PathBuf::from)
