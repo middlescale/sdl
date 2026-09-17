@@ -39,7 +39,7 @@ fn log_sampled_stale_drop(head: &[u8], route_addr: std::net::SocketAddr) {
 }
 
 #[derive(Clone)]
-pub struct RecvDataHandler<Call, Device> {
+pub(crate) struct RecvDataHandler<Call, Device> {
     context: Arc<SdlContext>,
     turn: TurnPacketHandler,
     client: ClientPacketHandler<Device>,
@@ -47,7 +47,7 @@ pub struct RecvDataHandler<Call, Device> {
 }
 
 impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
-    pub fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
+    pub(crate) fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
         if buf.len() < HEAD_LEN {
             return;
         }

@@ -5,7 +5,7 @@ edition = "2021"
 autobins = false
 
 [dependencies]
-sdl = { path = "../sdl", package = "sdl", default-features = false, features = ["integrated_tun"] }
+sdl = { path = "../sdl", package = "sdl", default-features = false }
 log = "0.4.17"
 anyhow = "1.0.82"
 console = "0.15.2"
@@ -49,7 +49,6 @@ quic = ["sdl/quic"]
 log = ["dep:log4rs", "dep:env_logger"]
 command = []
 file_config = []
-integrated_tun = ["sdl/integrated_tun"]
 
 [[bin]]
 name = "sdl"

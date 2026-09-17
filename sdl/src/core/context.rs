@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
-#[cfg(feature = "integrated_tun")]
 use anyhow::anyhow;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
@@ -25,12 +24,9 @@ use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::udp_channel::UdpChannel;
-#[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::create_device;
-#[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
 use crate::util::DebugWatch;
-#[cfg(feature = "integrated_tun")]
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
 
@@ -50,7 +46,6 @@ pub(crate) struct SdlContextConfig {
     pub device_pub_key: Vec<u8>,
     pub server_addr: String,
     pub mtu: u32,
-    #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
 }
@@ -246,20 +241,11 @@ impl GatewaySubsystem {
 pub(crate) struct DnsSubsystem {
     pub(crate) profile: Arc<RwLock<Option<DnsProfile>>>,
     pub(crate) pending_queries: Arc<PendingRequestTable<PendingDnsQuery>>,
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) last_interface: Arc<Mutex<Option<String>>>,
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) applied_interface: Arc<Mutex<Option<String>>>,
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) applied_profile: Arc<Mutex<Option<DnsProfile>>>,
 }
 
@@ -357,7 +343,6 @@ impl ExitNodeSubsystem {
     }
 }
 
-#[cfg(feature = "integrated_tun")]
 #[derive(Clone)]
 pub(crate) struct TunSubsystem {
     pub(crate) suspended: Arc<AtomicCell<bool>>,
@@ -383,7 +368,6 @@ pub(crate) struct SdlNodeState {
     pub(crate) current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     pub(crate) data_plane_stats: DataPlaneStats,
     pub(crate) debug_watch: DebugWatch,
-    #[cfg(feature = "integrated_tun")]
     pub(crate) tun: TunSubsystem,
 }
 
@@ -503,12 +487,10 @@ impl SdlContext {
                 .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
     }
 
-    #[cfg(feature = "integrated_tun")]
     pub(crate) fn is_suspended(&self) -> bool {
         self.state.tun.suspended.load()
     }
 
-    #[cfg(feature = "integrated_tun")]
     pub(crate) fn suspend(&self) {
         let _guard = self.state.tun.lifecycle.lock();
         self.state.tun.suspended.store(true);
@@ -516,14 +498,12 @@ impl SdlContext {
         self.state.tun.device_helper.stop();
     }
 
-    #[cfg(feature = "integrated_tun")]
     pub(crate) fn resume<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
         let _guard = self.state.tun.lifecycle.lock();
         self.state.tun.suspended.store(false);
         self.rebuild_tun_locked(callback)
     }
 
-    #[cfg(feature = "integrated_tun")]
     pub(crate) fn sync_tun_with_current_device<Call: SdlCallback>(
         &self,
         callback: &Call,
@@ -537,7 +517,6 @@ impl SdlContext {
         self.rebuild_tun_locked(callback)
     }
 
-    #[cfg(feature = "integrated_tun")]
     fn rebuild_tun_locked<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
         let current_device = self.state.current_device.load();
         if current_device.virtual_ip.is_unspecified()
@@ -571,10 +550,7 @@ impl SdlContext {
         Ok(())
     }
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     fn clear_applied_dns_profile(&self) {
         let _ = self.state.dns.last_interface.lock().take();
         let interface_name = self.state.dns.applied_interface.lock().take();
@@ -595,16 +571,10 @@ impl SdlContext {
         }
     }
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
-    ))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     fn clear_applied_dns_profile(&self) {}
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     fn apply_dns_profile<Call: SdlCallback>(&self, interface_name: &str, callback: &Call) {
         let profile = self.state.dns.profile.read().clone();
         let Some(profile) = profile else {
@@ -638,18 +608,12 @@ impl SdlContext {
         }
     }
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn revert_dns_on_shutdown(&self) {
         self.clear_applied_dns_profile();
     }
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, callback: &Call) {
         let interface_name = self
             .state
@@ -663,10 +627,7 @@ impl SdlContext {
         }
     }
 
-    #[cfg(all(
-        feature = "integrated_tun",
-        not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
-    ))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, _callback: &Call) {}
 
     pub(crate) fn debug_snapshot_json(&self, sections: &[String]) -> anyhow::Result<String> {
@@ -913,7 +874,6 @@ fn debug_build_info_json() -> Value {
         "serial": build.serial,
         "debug_assertions": cfg!(debug_assertions),
         "features": {
-            "integrated_tun": cfg!(feature = "integrated_tun"),
             "quic": cfg!(feature = "quic"),
             "port_mapping": cfg!(feature = "port_mapping"),
             "upnp": cfg!(feature = "upnp"),

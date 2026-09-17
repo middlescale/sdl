@@ -16,19 +16,19 @@ use tun_rs::SyncDevice;
 
 #[repr(transparent)]
 #[derive(Clone, Default)]
-pub struct DeviceAdapter {
+pub(crate) struct DeviceAdapter {
     tun: Arc<Mutex<Option<Arc<SyncDevice>>>>,
 }
 
 impl DeviceAdapter {
-    pub fn insert(&self, device: Arc<SyncDevice>) {
+    pub(crate) fn insert(&self, device: Arc<SyncDevice>) {
         let r = self.tun.lock().replace(device);
         assert!(r.is_none());
     }
-    pub fn remove(&self) {
+    pub(crate) fn remove(&self) {
         drop(self.tun.lock().take());
     }
-    pub fn name(&self) -> Option<String> {
+    pub(crate) fn name(&self) -> Option<String> {
         self.tun.lock().as_ref().and_then(|tun| tun.name().ok())
     }
 }
@@ -56,7 +56,7 @@ impl DeviceWrite for DeviceAdapter {
 }
 
 #[derive(Clone)]
-pub struct TunDeviceHelper {
+pub(crate) struct TunDeviceHelper {
     inner: Arc<Mutex<TunDeviceHelperInner>>,
     device_adapter: DeviceAdapter,
     device_stop: Arc<Mutex<Option<DeviceStop>>>,

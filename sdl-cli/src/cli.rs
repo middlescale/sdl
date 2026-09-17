@@ -471,7 +471,6 @@ fn get_description(key: &str, language: &str) -> String {
         ("--compressor-all <lz4>", ("启用压缩,可选值lz4/zstd<,level>,level为压缩级别,例如 --compressor lz4 或--compressor zstd,10", "Enable compression, options lz4/zstd<,level>, level is compression level, e.g., --compressor lz4 or --compressor zstd,10")),
         ("--compressor-lz4 <lz4>", ("启用压缩,可选值lz4,例如 --compressor lz4", "Enable compression, option lz4, e.g., --compressor lz4")),
         ("--compressor-zstd <zstd>", ("启用压缩,可选值zstd<,level>,level为压缩级别,例如 --compressor zstd,10", "Enable compression, options zstd<,level>, level is compression level, e.g., --compressor zstd,10")),
-        ("--sdl-mapping <x>", ("SDL地址映射,例如 --sdl-mapping tcp:80-10.26.0.10:80 映射目标是SDL网络或其子网中的设备", "SDL address mapping, e.g., --sdl-mapping tcp:80-10.26.0.10:80 maps to a device in SDL network or its subnet")),
         ("--local-dev", ("本地出口网卡的名称", "name of local export network card")),
         ("--disable-stats", ("关闭流量统计", "Disable traffic statistics")),
         ("--list", ("后台运行时,查看其他设备列表", "View list of other devices when running in background")),
@@ -561,12 +560,10 @@ fn print_usage(program: &str, _opts: Options) {
         "  --use-channel <p2p> {}",
         get_description("--use-channel <p2p>", &language)
     );
-    #[cfg(feature = "integrated_tun")]
     println!(
         "  --nic <tun0>        {}",
         get_description("--nic <tun0>", &language)
     );
-    #[cfg(feature = "integrated_tun")]
     println!(
         "  --tun_name <sdl-tun> {}",
         get_description("--tun_name <sdl-tun>", &language)
@@ -603,11 +600,6 @@ fn print_usage(program: &str, _opts: Options) {
         get_description("--compressor-zstd <zstd>", &language)
     );
 
-    #[cfg(not(feature = "integrated_tun"))]
-    println!(
-        "  --sdl-mapping <x>   {}",
-        green(get_description("--sdl-mapping <x>", &language).to_string())
-    );
     println!(
         "  --local-dev <NAME>  {}",
         get_description("--local-dev", &language)
@@ -619,11 +611,6 @@ fn print_usage(program: &str, _opts: Options) {
     println!();
     #[cfg(feature = "command")]
     {
-        // #[cfg(not(feature = "integrated_tun"))]
-        // println!(
-        //     "  --add               {}",
-        //     yellow("后台运行时,添加SDL地址映射 用法同'--sdl-mapping'".to_string())
-        // );
         println!(
             "  --list              {}",
             yellow(get_description("--list", &language).to_string())

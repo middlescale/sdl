@@ -10,7 +10,6 @@ impl SdlCallback for VntHandler {
     fn success(&self) {
         println!(" {} ", style("====== Connect Successfully ======").green())
     }
-    #[cfg(feature = "integrated_tun")]
     fn create_tun(&self, info: sdl::DeviceInfo) {
         println!("create_tun {}", info)
     }

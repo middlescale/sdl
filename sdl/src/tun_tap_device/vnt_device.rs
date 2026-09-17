@@ -2,12 +2,10 @@ use std::io;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "integrated_tun")]
 use tun_rs::SyncDevice;
 
-pub trait DeviceWrite: Clone + Send + Sync + 'static {
+pub(crate) trait DeviceWrite: Clone + Send + Sync + 'static {
     fn write(&self, buf: &[u8]) -> io::Result<usize>;
-    #[cfg(feature = "integrated_tun")]
     fn into_device_adapter(self) -> crate::tun_tap_device::tun_create_helper::DeviceAdapter;
 }
 
@@ -19,7 +17,6 @@ pub(crate) fn write_full_device<Device: DeviceWrite>(
     write_full_impl(|| device.write(buf), buf.len(), context)
 }
 
-#[cfg(feature = "integrated_tun")]
 pub(crate) fn write_full_sync_device(
     device: &SyncDevice,
     buf: &[u8],
@@ -72,13 +69,11 @@ where
     }
 }
 
-#[cfg(feature = "integrated_tun")]
 #[cfg(target_os = "windows")]
 fn send_sync_device(device: &SyncDevice, buf: &[u8]) -> io::Result<usize> {
     device.try_send(buf)
 }
 
-#[cfg(feature = "integrated_tun")]
 #[cfg(not(target_os = "windows"))]
 fn send_sync_device(device: &SyncDevice, buf: &[u8]) -> io::Result<usize> {
     device.send(buf)

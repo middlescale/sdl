@@ -178,7 +178,6 @@ impl Into<u8> for ErrorType {
 
 #[derive(Clone, Debug)]
 pub struct DeviceConfig {
-    #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
     //虚拟网卡mtu值
@@ -195,7 +194,6 @@ pub struct DeviceConfig {
 
 impl DeviceConfig {
     pub fn new(
-        #[cfg(feature = "integrated_tun")]
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         device_name: Option<String>,
         mtu: u32,
@@ -205,7 +203,6 @@ impl DeviceConfig {
         virtual_network: Ipv4Addr,
     ) -> Self {
         Self {
-            #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name,
             mtu,
@@ -258,7 +255,6 @@ pub trait SdlCallback: Clone + Send + Sync + 'static {
 
     /// 创建网卡的信息
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    #[cfg(feature = "integrated_tun")]
     fn create_tun(&self, _info: DeviceInfo) {}
     /// 连接
     fn connect(&self, _info: ConnectInfo) {}
@@ -269,13 +265,6 @@ pub trait SdlCallback: Clone + Send + Sync + 'static {
     /// 注册，返回false则拒绝注册
     fn register(&self, _info: RegisterInfo) -> bool {
         true
-    }
-    #[cfg(not(feature = "integrated_tun"))]
-    fn create_device(&self, _info: DeviceConfig) {}
-    #[cfg(target_os = "android")]
-    #[cfg(feature = "integrated_tun")]
-    fn generate_tun(&self, _info: DeviceConfig) -> usize {
-        0
     }
     fn peer_client_list(&self, _info: Vec<PeerClientInfo>) {}
     /// 本机设备名被控制面异步更新

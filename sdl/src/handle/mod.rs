@@ -5,7 +5,6 @@ pub mod callback;
 mod extension;
 pub mod recv_data;
 pub mod registrar;
-#[cfg(feature = "integrated_tun")]
 pub mod tun_tap;
 
 const SELF_IP: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 2);

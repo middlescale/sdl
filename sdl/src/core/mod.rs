@@ -64,7 +64,6 @@ pub struct Config {
     pub latency_first: bool,
     pub p2p_heartbeat_interval_sec: u64,
     pub p2p_route_idle_timeout_sec: u64,
-    #[cfg(feature = "integrated_tun")]
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub device_name: Option<String>,
     pub use_channel_type: UseChannelType,
@@ -208,9 +207,6 @@ impl Config {
         let port_mapping_list = crate::port_mapping::convert(port_mapping_list)?;
         #[cfg(not(feature = "port_mapping"))]
         let _ = port_mapping_list;
-        #[cfg(not(feature = "integrated_tun"))]
-        let _ = device_name;
-
         let (local_interface, local_ipv4) = if let Some(local_dev) = local_dev {
             let (default_interface, ip) = crate::transport::socket::get_interface(local_dev)?;
             log::info!("default_interface = {:?} local_ip= {ip}", default_interface);
@@ -234,8 +230,7 @@ impl Config {
             latency_first,
             p2p_heartbeat_interval_sec,
             p2p_route_idle_timeout_sec,
-            #[cfg(feature = "integrated_tun")]
-            #[cfg(not(target_os = "android"))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name,
             use_channel_type,
             packet_loss_rate,

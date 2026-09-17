@@ -9,7 +9,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::control::ControlSession;
-#[cfg(feature = "integrated_tun")]
 use crate::core::context::TunSubsystem;
 use crate::core::ExitNodeRoute;
 use crate::core::{
@@ -36,7 +35,6 @@ use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
 use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
-#[cfg(feature = "integrated_tun")]
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
 use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
@@ -51,25 +49,13 @@ pub struct Sdl {
     stop_manager: StopManager,
     config: Config,
     context: Arc<SdlContext>,
-    #[cfg(all(
-        feature = "integrated_tun",
-        any(target_os = "windows", target_os = "linux", target_os = "macos")
-    ))]
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     _split_dns_stop_worker: crate::util::Worker,
 }
 
 impl Sdl {
-    #[cfg(feature = "integrated_tun")]
     pub fn new<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         Sdl::init(config, callback, DeviceAdapter::default())
-    }
-    #[cfg(not(feature = "integrated_tun"))]
-    pub fn new_device<Call: SdlCallback, Device: DeviceWrite>(
-        config: Config,
-        callback: Call,
-        device: Device,
-    ) -> anyhow::Result<Self> {
-        Sdl::init(config, callback, device)
     }
     fn init<Call: SdlCallback, Device: DeviceWrite>(
         config: Config,
@@ -105,7 +91,6 @@ impl Sdl {
             device_pub_key,
             server_addr: config.server_address_str.clone(),
             mtu: config.mtu.unwrap_or(crate::protocol::DEFAULT_TUN_MTU),
-            #[cfg(feature = "integrated_tun")]
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             device_name: config.device_name.clone(),
         };
@@ -233,9 +218,7 @@ impl Sdl {
         }
         let context = Arc::new_cyclic(|weak_context| {
             let data_channel = DataChannel::new(weak_context.clone());
-            #[cfg(feature = "integrated_tun")]
             let suspended = Arc::new(AtomicCell::new(false));
-            #[cfg(feature = "integrated_tun")]
             let tun_device_helper = {
                 TunDeviceHelper::new(
                     stop_manager.clone(),
@@ -267,19 +250,22 @@ impl Sdl {
                     dns: DnsSubsystem {
                         profile: Arc::new(RwLock::new(None::<DnsProfile>)),
                         pending_queries: Arc::new(PendingRequestTable::new(PENDING_REQUEST_TTL_MS)),
-                        #[cfg(all(
-                            feature = "integrated_tun",
-                            any(target_os = "windows", target_os = "linux", target_os = "macos")
+                        #[cfg(any(
+                            target_os = "windows",
+                            target_os = "linux",
+                            target_os = "macos"
                         ))]
                         last_interface: Arc::new(Mutex::new(None)),
-                        #[cfg(all(
-                            feature = "integrated_tun",
-                            any(target_os = "windows", target_os = "linux", target_os = "macos")
+                        #[cfg(any(
+                            target_os = "windows",
+                            target_os = "linux",
+                            target_os = "macos"
                         ))]
                         applied_interface: Arc::new(Mutex::new(None)),
-                        #[cfg(all(
-                            feature = "integrated_tun",
-                            any(target_os = "windows", target_os = "linux", target_os = "macos")
+                        #[cfg(any(
+                            target_os = "windows",
+                            target_os = "linux",
+                            target_os = "macos"
                         ))]
                         applied_profile: Arc::new(Mutex::new(None)),
                     },
@@ -294,7 +280,6 @@ impl Sdl {
                     current_device: current_device.clone(),
                     data_plane_stats: data_plane_stats.clone(),
                     debug_watch: debug_watch.clone(),
-                    #[cfg(feature = "integrated_tun")]
                     tun: TunSubsystem {
                         suspended,
                         lifecycle: Arc::new(Mutex::new(())),
@@ -310,10 +295,7 @@ impl Sdl {
                 },
             }
         });
-        #[cfg(all(
-            feature = "integrated_tun",
-            any(target_os = "windows", target_os = "linux", target_os = "macos")
-        ))]
+        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         let split_dns_stop_worker = {
             let context = context.clone();
             stop_manager.add_listener("splitDns".into(), move || {
@@ -430,10 +412,6 @@ impl Sdl {
             punch_coordinator.clone(),
             punch.clone(),
         );
-
-        // #[cfg(not(target_os = "android"))]
-        // tun_helper.start(device)?;
-
         context
             .services
             .control_session
@@ -457,10 +435,7 @@ impl Sdl {
             stop_manager,
             config,
             context,
-            #[cfg(all(
-                feature = "integrated_tun",
-                any(target_os = "windows", target_os = "linux", target_os = "macos")
-            ))]
+            #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             _split_dns_stop_worker: split_dns_stop_worker,
         })
     }
@@ -476,7 +451,6 @@ impl Sdl {
     pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
         self.context.state.dns.primary_service_ip()
     }
-    #[cfg(feature = "integrated_tun")]
     pub fn tun_device_name(&self) -> Option<String> {
         self.context.state.tun.device_helper.device_name()
     }
@@ -801,35 +775,14 @@ impl Sdl {
             .unwrap_or(0)
     }
     pub fn suspend(&self) -> anyhow::Result<()> {
-        #[cfg(feature = "integrated_tun")]
-        {
-            self.context.suspend();
-            return Ok(());
-        }
-        #[cfg(not(feature = "integrated_tun"))]
-        {
-            anyhow::bail!("suspend requires integrated_tun support")
-        }
+        self.context.suspend();
+        Ok(())
     }
     pub fn resume(&self) -> anyhow::Result<()> {
-        #[cfg(feature = "integrated_tun")]
-        {
-            return self.context.resume(&NullCallback);
-        }
-        #[cfg(not(feature = "integrated_tun"))]
-        {
-            anyhow::bail!("resume requires integrated_tun support")
-        }
+        self.context.resume(&NullCallback)
     }
     pub fn is_suspended(&self) -> bool {
-        #[cfg(feature = "integrated_tun")]
-        {
-            return self.context.is_suspended();
-        }
-        #[cfg(not(feature = "integrated_tun"))]
-        {
-            false
-        }
+        self.context.is_suspended()
     }
     pub fn stop(&self) {
         self.stop_manager.stop()

@@ -68,8 +68,6 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
         let virtual_ip = Ipv4Addr::from(response.virtual_ip);
         let virtual_netmask = Ipv4Addr::from(response.virtual_netmask);
         let virtual_gateway = Ipv4Addr::from(response.virtual_gateway);
-        #[cfg_attr(feature = "integrated_tun", allow(unused_variables))]
-        let virtual_network = Ipv4Addr::from(response.virtual_ip & response.virtual_netmask);
         let register_info = RegisterInfo::new(virtual_ip, virtual_netmask, virtual_gateway);
         log::info!("注册成功：{:?}", register_info);
         let _device_list_update_guard = self.device_list_update_lock.lock();
@@ -142,35 +140,14 @@ impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
                 if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
                     log::info!("ip发生变化,old:{:?},response={:?}", old, response);
                 }
-                #[cfg(not(feature = "integrated_tun"))]
-                {
-                    let device_config = crate::handle::callback::DeviceConfig::new(
-                        #[cfg(any(
-                            target_os = "windows",
-                            target_os = "linux",
-                            target_os = "macos"
-                        ))]
-                        self.context.config.device_name.clone(),
-                        self.context.config.mtu,
-                        virtual_ip,
-                        virtual_netmask,
-                        virtual_gateway,
-                        virtual_network,
-                    );
-                    self.callback.create_device(device_config);
-                }
-                #[cfg(feature = "integrated_tun")]
-                {
-                    if let Err(e) = self.context.sync_tun_with_current_device(&self.callback) {
-                        log::error!("{:?}", e);
-                        self.callback.error(ErrorInfo::new_msg(
-                            ErrorType::FailedToCreateDevice,
-                            format!("{:?}", e),
-                        ));
-                    }
+                if let Err(e) = self.context.sync_tun_with_current_device(&self.callback) {
+                    log::error!("{:?}", e);
+                    self.callback.error(ErrorInfo::new_msg(
+                        ErrorType::FailedToCreateDevice,
+                        format!("{:?}", e),
+                    ));
                 }
             } else if old.status.offline() {
-                #[cfg(feature = "integrated_tun")]
                 self.context.force_apply_dns_profile(&self.callback);
             }
             self.set_device_info_list(device_list_update);

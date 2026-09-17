@@ -4,7 +4,7 @@ version = "2.0.0"
 edition = "2021"
 
 [dependencies]
-tun-rs = { version = "2.8.3", features = ["interruptible"], optional = true }
+tun-rs = { version = "2.8.3", features = ["interruptible"] }
 sdl_packet = { package = "sdl-packet", path = "../sdl-packet" }
 bytes = "1.5.0"
 log = "0.4.17"
@@ -84,7 +84,6 @@ default = [
     "port_mapping",
     "lz4_compress",
     "zstd_compress",
-    "integrated_tun",
     "quic",
 ]
 openssl = ["openssl-sys"]
@@ -97,6 +96,5 @@ chacha20_poly1305 = ["chacha20poly1305", "chacha20"]
 port_mapping = []
 lz4_compress = ["lz4_flex"]
 zstd_compress = ["zstd"]
-integrated_tun = ["tun-rs"]
 upnp = ["igd"]
 quic = ["quinn"]

@@ -46,7 +46,6 @@ mod proto;
 pub mod protocol;
 pub mod transport;
 mod tun_tap_device;
-pub use tun_tap_device::*;
 pub mod util;
 
 pub use handle::callback::*;
