@@ -4,13 +4,10 @@ use std::time::{Duration, Instant};
 
 use tun_rs::SyncDevice;
 
-pub(crate) trait DeviceWrite: Clone + Send + Sync + 'static {
-    fn write(&self, buf: &[u8]) -> io::Result<usize>;
-    fn into_device_adapter(self) -> crate::tun_tap_device::tun_create_helper::DeviceAdapter;
-}
+use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
 
-pub(crate) fn write_full_device<Device: DeviceWrite>(
-    device: &Device,
+pub(crate) fn write_full_device(
+    device: &DeviceAdapter,
     buf: &[u8],
     context: &str,
 ) -> io::Result<usize> {

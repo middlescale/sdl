@@ -36,7 +36,6 @@ use crate::nat::NatTest;
 use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
 use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
-use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
 use crate::{ensure_rustls_crypto_provider, nat, DnsProfile, SdlCallback};
 
@@ -55,15 +54,12 @@ pub struct Sdl {
 
 impl Sdl {
     pub fn new<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
-        Sdl::init(config, callback, DeviceAdapter::default())
+        Sdl::init(config, callback)
     }
-    fn init<Call: SdlCallback, Device: DeviceWrite>(
-        config: Config,
-        callback: Call,
-        device: Device,
-    ) -> anyhow::Result<Self> {
+    fn init<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);
+        let device = DeviceAdapter::default();
         let device_signing_key = load_or_create_device_signing_key(&config.device_id)?;
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
@@ -229,7 +225,7 @@ impl Sdl {
                     peer_table.clone(),
                     peer_crypto.clone(),
                     config.compressor,
-                    device.clone().into_device_adapter(),
+                    device.clone(),
                 )
             };
 

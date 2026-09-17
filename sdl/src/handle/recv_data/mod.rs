@@ -11,7 +11,7 @@ use crate::handle::recv_data::server::ServerPacketHandler;
 use crate::handle::recv_data::turn::TurnPacketHandler;
 use crate::handle::{CurrentDeviceInfo, SELF_IP};
 use crate::protocol::{NetPacket, HEAD_LEN};
-use crate::tun_tap_device::vnt_device::DeviceWrite;
+use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
 
 mod client;
 mod server;
@@ -39,14 +39,14 @@ fn log_sampled_stale_drop(head: &[u8], route_addr: std::net::SocketAddr) {
 }
 
 #[derive(Clone)]
-pub(crate) struct RecvDataHandler<Call, Device> {
+pub(crate) struct RecvDataHandler<Call> {
     context: Arc<SdlContext>,
     turn: TurnPacketHandler,
-    client: ClientPacketHandler<Device>,
-    server: ServerPacketHandler<Call, Device>,
+    client: ClientPacketHandler,
+    server: ServerPacketHandler<Call>,
 }
 
-impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
+impl<Call: SdlCallback> RecvDataHandler<Call> {
     pub(crate) fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
         if buf.len() < HEAD_LEN {
             return;
@@ -82,7 +82,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> RecvDataHandler<Call, Device> {
         }
     }
 
-    pub(crate) fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: DeviceAdapter, callback: Call) -> Self {
         let server = ServerPacketHandler::new(context.clone(), device.clone(), callback);
         let client = ClientPacketHandler::new(context.clone(), device.clone());
         let turn = TurnPacketHandler::new(context.clone());

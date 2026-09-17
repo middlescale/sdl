@@ -159,7 +159,7 @@ impl PunchSessionTracker {
         outcomes
     }
 }
-impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+impl<Call: SdlCallback> ServerPacketHandler<Call> {
     pub(super) fn handle_punch_start(
         &self,
         current_device: &CurrentDeviceInfo,

@@ -8,7 +8,6 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
-use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
@@ -33,9 +32,9 @@ impl DeviceAdapter {
     }
 }
 
-impl DeviceWrite for DeviceAdapter {
+impl DeviceAdapter {
     #[inline]
-    fn write(&self, buf: &[u8]) -> io::Result<usize> {
+    pub(crate) fn write(&self, buf: &[u8]) -> io::Result<usize> {
         if let Some(tun) = self.tun.lock().as_ref() {
             #[cfg(target_os = "windows")]
             {
@@ -48,10 +47,6 @@ impl DeviceWrite for DeviceAdapter {
         } else {
             Err(io::Error::new(io::ErrorKind::NotFound, "not tun device"))
         }
-    }
-
-    fn into_device_adapter(self) -> DeviceAdapter {
-        self
     }
 }
 

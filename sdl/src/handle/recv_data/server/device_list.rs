@@ -1,5 +1,5 @@
 use super::*;
-impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+impl<Call: SdlCallback> ServerPacketHandler<Call> {
     pub(super) fn handle_push_device_list(
         &self,
         current_device: &CurrentDeviceInfo,

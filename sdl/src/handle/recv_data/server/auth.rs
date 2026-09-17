@@ -1,5 +1,5 @@
 use super::*;
-impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+impl<Call: SdlCallback> ServerPacketHandler<Call> {
     pub(super) fn handle_device_auth_ack(
         &self,
         current_device: &CurrentDeviceInfo,

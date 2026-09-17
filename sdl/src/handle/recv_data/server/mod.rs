@@ -42,8 +42,8 @@ use crate::proto::message::{
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
+use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
 use crate::tun_tap_device::vnt_device::write_full_device;
-use crate::tun_tap_device::vnt_device::DeviceWrite;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::{proto, DnsProfile, PeerClientInfo};
 
@@ -72,9 +72,9 @@ fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr
 
 /// 处理来源于服务端的包
 #[derive(Clone)]
-pub struct ServerPacketHandler<Call, Device> {
+pub(crate) struct ServerPacketHandler<Call> {
     context: Arc<SdlContext>,
-    device: Device,
+    device: DeviceAdapter,
     callback: Call,
     punch_sessions: PunchSessionTracker,
     // Keep device-list commit/apply in order with other peer_table epoch mutators.
@@ -92,8 +92,8 @@ struct PeerIdentityPlan {
     reset_identities: HashSet<crate::core::PeerIdentity>,
 }
 
-impl<Call, Device> ServerPacketHandler<Call, Device> {
-    pub(crate) fn new(context: Arc<SdlContext>, device: Device, callback: Call) -> Self {
+impl<Call> ServerPacketHandler<Call> {
+    pub(crate) fn new(context: Arc<SdlContext>, device: DeviceAdapter, callback: Call) -> Self {
         Self {
             context,
             device,
@@ -105,7 +105,7 @@ impl<Call, Device> ServerPacketHandler<Call, Device> {
     }
 }
 
-impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandler<Call, Device> {
+impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
     fn handle(
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
@@ -326,7 +326,7 @@ impl<Call: SdlCallback, Device: DeviceWrite> PacketHandler for ServerPacketHandl
     }
 }
 
-impl<Call: SdlCallback, Device: DeviceWrite> ServerPacketHandler<Call, Device> {
+impl<Call: SdlCallback> ServerPacketHandler<Call> {
     fn send_gateway_reply<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
