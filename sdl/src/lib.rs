@@ -45,7 +45,7 @@ mod port_mapping;
 mod proto;
 pub mod protocol;
 pub mod transport;
-mod tun_tap_device;
+mod tun_device;
 pub mod util;
 
 pub use handle::callback::*;

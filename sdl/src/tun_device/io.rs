@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use tun_rs::SyncDevice;
 
-use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
+use crate::tun_device::lifecycle::TunDeviceWriter;
 
 pub(crate) fn write_full_device(
-    device: &DeviceAdapter,
+    device: &TunDeviceWriter,
     buf: &[u8],
     context: &str,
 ) -> io::Result<usize> {

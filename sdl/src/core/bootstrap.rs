@@ -35,7 +35,7 @@ use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
 use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
-use crate::tun_tap_device::tun_create_helper::{DeviceAdapter, TunDeviceHelper};
+use crate::tun_device::lifecycle::{TunDeviceLifecycle, TunDeviceWriter};
 use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
 use crate::{ensure_rustls_crypto_provider, nat, DnsProfile, SdlCallback};
 
@@ -59,7 +59,7 @@ impl Sdl {
     fn init<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);
-        let device = DeviceAdapter::default();
+        let device = TunDeviceWriter::default();
         let device_signing_key = load_or_create_device_signing_key(&config.device_id)?;
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
@@ -215,8 +215,8 @@ impl Sdl {
         let context = Arc::new_cyclic(|weak_context| {
             let data_channel = DataChannel::new(weak_context.clone());
             let suspended = Arc::new(AtomicCell::new(false));
-            let tun_device_helper = {
-                TunDeviceHelper::new(
+            let tun_device_lifecycle = {
+                TunDeviceLifecycle::new(
                     stop_manager.clone(),
                     data_channel.clone(),
                     current_device.clone(),
@@ -279,7 +279,7 @@ impl Sdl {
                     tun: TunSubsystem {
                         suspended,
                         lifecycle: Arc::new(Mutex::new(())),
-                        device_helper: tun_device_helper,
+                        device_lifecycle: tun_device_lifecycle,
                     },
                 },
                 services: SdlServices {
@@ -448,7 +448,7 @@ impl Sdl {
         self.context.state.dns.primary_service_ip()
     }
     pub fn tun_device_name(&self) -> Option<String> {
-        self.context.state.tun.device_helper.device_name()
+        self.context.state.tun.device_lifecycle.device_name()
     }
     pub fn control_server_addr(&self) -> std::net::SocketAddr {
         self.context.services.control_session.server_addr()

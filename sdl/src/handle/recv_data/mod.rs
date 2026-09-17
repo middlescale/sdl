@@ -11,7 +11,7 @@ use crate::handle::recv_data::server::ServerPacketHandler;
 use crate::handle::recv_data::turn::TurnPacketHandler;
 use crate::handle::{CurrentDeviceInfo, SELF_IP};
 use crate::protocol::{NetPacket, HEAD_LEN};
-use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
+use crate::tun_device::lifecycle::TunDeviceWriter;
 
 mod client;
 mod server;
@@ -82,7 +82,7 @@ impl<Call: SdlCallback> RecvDataHandler<Call> {
         }
     }
 
-    pub(crate) fn new(context: Arc<SdlContext>, device: DeviceAdapter, callback: Call) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: TunDeviceWriter, callback: Call) -> Self {
         let server = ServerPacketHandler::new(context.clone(), device.clone(), callback);
         let client = ClientPacketHandler::new(context.clone(), device.clone());
         let turn = TurnPacketHandler::new(context.clone());

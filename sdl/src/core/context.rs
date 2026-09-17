@@ -24,8 +24,8 @@ use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::udp_channel::UdpChannel;
-use crate::tun_tap_device::create_device;
-use crate::tun_tap_device::tun_create_helper::TunDeviceHelper;
+use crate::tun_device::create_device;
+use crate::tun_device::lifecycle::TunDeviceLifecycle;
 use crate::util::DebugWatch;
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
@@ -347,7 +347,7 @@ impl ExitNodeSubsystem {
 pub(crate) struct TunSubsystem {
     pub(crate) suspended: Arc<AtomicCell<bool>>,
     pub(crate) lifecycle: Arc<Mutex<()>>,
-    pub(crate) device_helper: TunDeviceHelper,
+    pub(crate) device_lifecycle: TunDeviceLifecycle,
 }
 
 // State owned by the local node.  These components primarily hold observable
@@ -495,7 +495,7 @@ impl SdlContext {
         let _guard = self.state.tun.lifecycle.lock();
         self.state.tun.suspended.store(true);
         self.clear_applied_dns_profile();
-        self.state.tun.device_helper.stop();
+        self.state.tun.device_lifecycle.stop();
     }
 
     pub(crate) fn resume<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
@@ -511,7 +511,7 @@ impl SdlContext {
         let _guard = self.state.tun.lifecycle.lock();
         if self.state.tun.suspended.load() {
             self.clear_applied_dns_profile();
-            self.state.tun.device_helper.stop();
+            self.state.tun.device_lifecycle.stop();
             return Ok(());
         }
         self.rebuild_tun_locked(callback)
@@ -526,7 +526,7 @@ impl SdlContext {
             return Ok(());
         }
         self.clear_applied_dns_profile();
-        self.state.tun.device_helper.stop();
+        self.state.tun.device_lifecycle.stop();
         let device_config = DeviceConfig::new(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             self.config.device_name.clone(),
@@ -541,7 +541,7 @@ impl SdlContext {
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
-        self.state.tun.device_helper.start(device)?;
+        self.state.tun.device_lifecycle.start(device)?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             let tun_info = crate::handle::callback::DeviceInfo::new(tun_name, "".into());

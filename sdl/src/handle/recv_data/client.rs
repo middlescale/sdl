@@ -27,8 +27,8 @@ use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::{
     control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
 };
-use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
-use crate::tun_tap_device::vnt_device::write_full_device;
+use crate::tun_device::io::write_full_device;
+use crate::tun_device::lifecycle::TunDeviceWriter;
 use crate::util::icmp_debug::{parse_icmp_echo_meta, IcmpEchoMeta};
 
 static UNKNOWN_PEER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -79,13 +79,13 @@ fn requires_peer_decrypt(source: Ipv4Addr, current_device: &CurrentDeviceInfo) -
 /// 处理来源于客户端的包
 #[derive(Clone)]
 pub(crate) struct ClientPacketHandler {
-    device: DeviceAdapter,
+    device: TunDeviceWriter,
     context: Arc<SdlContext>,
     exit_node_dns_tx: SyncSender<ExitNodeDnsRequest>,
 }
 
 impl ClientPacketHandler {
-    pub(crate) fn new(context: Arc<SdlContext>, device: DeviceAdapter) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: TunDeviceWriter) -> Self {
         let (exit_node_dns_tx, exit_node_dns_rx) = sync_channel(EXIT_NODE_DNS_QUEUE_CAPACITY);
         let exit_node_dns_rx = Arc::new(Mutex::new(exit_node_dns_rx));
         for worker_index in 0..EXIT_NODE_DNS_WORKER_COUNT {

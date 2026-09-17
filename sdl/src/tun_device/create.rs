@@ -12,7 +12,7 @@ pub fn create_device<Call: SdlCallback>(
     config: DeviceConfig,
     _call: &Call,
 ) -> Result<Arc<SyncDevice>, ErrorInfo> {
-    let device = match create_device0(&config) {
+    let device = match create_sync_device(&config) {
         Ok(device) => device,
         Err(e) => {
             return Err(ErrorInfo::new_msg(
@@ -40,7 +40,7 @@ pub fn create_device<Call: SdlCallback>(
     Ok(device)
 }
 
-fn create_device0(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
+fn create_sync_device(config: &DeviceConfig) -> io::Result<Arc<SyncDevice>> {
     let mut tun_builder = tun_rs::DeviceBuilder::new();
     tun_builder = tun_builder.ipv4(config.virtual_ip, config.virtual_netmask, None);
 
@@ -151,6 +151,7 @@ pub fn add_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result
     exe_cmd(&cmd)?;
     Ok(())
 }
+
 #[cfg(target_os = "linux")]
 pub fn add_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> io::Result<()> {
     let prefix_len = u32::from(netmask).count_ones();

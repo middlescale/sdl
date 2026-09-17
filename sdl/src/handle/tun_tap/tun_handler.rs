@@ -22,7 +22,7 @@ use crate::net::dns::local::LocalDnsResolution;
 use crate::protocol;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::{ip_turn_packet, NetPacket};
-use crate::tun_tap_device::vnt_device::write_full_sync_device;
+use crate::tun_device::io::write_full_sync_device;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::util::StopManager;
 fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> anyhow::Result<()> {

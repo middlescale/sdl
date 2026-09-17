@@ -42,8 +42,8 @@ use crate::proto::message::{
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
-use crate::tun_tap_device::tun_create_helper::DeviceAdapter;
-use crate::tun_tap_device::vnt_device::write_full_device;
+use crate::tun_device::io::write_full_device;
+use crate::tun_device::lifecycle::TunDeviceWriter;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::{proto, DnsProfile, PeerClientInfo};
 
@@ -74,7 +74,7 @@ fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr
 #[derive(Clone)]
 pub(crate) struct ServerPacketHandler<Call> {
     context: Arc<SdlContext>,
-    device: DeviceAdapter,
+    device: TunDeviceWriter,
     callback: Call,
     punch_sessions: PunchSessionTracker,
     // Keep device-list commit/apply in order with other peer_table epoch mutators.
@@ -93,7 +93,7 @@ struct PeerIdentityPlan {
 }
 
 impl<Call> ServerPacketHandler<Call> {
-    pub(crate) fn new(context: Arc<SdlContext>, device: DeviceAdapter, callback: Call) -> Self {
+    pub(crate) fn new(context: Arc<SdlContext>, device: TunDeviceWriter, callback: Call) -> Self {
         Self {
             context,
             device,

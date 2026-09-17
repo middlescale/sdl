@@ -15,11 +15,11 @@ use tun_rs::SyncDevice;
 
 #[repr(transparent)]
 #[derive(Clone, Default)]
-pub(crate) struct DeviceAdapter {
+pub(crate) struct TunDeviceWriter {
     tun: Arc<Mutex<Option<Arc<SyncDevice>>>>,
 }
 
-impl DeviceAdapter {
+impl TunDeviceWriter {
     pub(crate) fn insert(&self, device: Arc<SyncDevice>) {
         let r = self.tun.lock().replace(device);
         assert!(r.is_none());
@@ -32,7 +32,7 @@ impl DeviceAdapter {
     }
 }
 
-impl DeviceAdapter {
+impl TunDeviceWriter {
     #[inline]
     pub(crate) fn write(&self, buf: &[u8]) -> io::Result<usize> {
         if let Some(tun) = self.tun.lock().as_ref() {
@@ -51,14 +51,14 @@ impl DeviceAdapter {
 }
 
 #[derive(Clone)]
-pub(crate) struct TunDeviceHelper {
-    inner: Arc<Mutex<TunDeviceHelperInner>>,
-    device_adapter: DeviceAdapter,
+pub(crate) struct TunDeviceLifecycle {
+    inner: Arc<Mutex<TunDeviceLifecycleInner>>,
+    device_writer: TunDeviceWriter,
     device_stop: Arc<Mutex<Option<DeviceStop>>>,
 }
 
 #[derive(Clone)]
-struct TunDeviceHelperInner {
+struct TunDeviceLifecycleInner {
     stop_manager: StopManager,
     data_channel: DataChannel,
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -69,7 +69,7 @@ struct TunDeviceHelperInner {
     compressor: Compressor,
 }
 
-impl TunDeviceHelper {
+impl TunDeviceLifecycle {
     pub fn new(
         stop_manager: StopManager,
         data_channel: DataChannel,
@@ -79,9 +79,9 @@ impl TunDeviceHelper {
         peer_table: Arc<RwLock<crate::core::PeerTable>>,
         peer_crypto: Arc<PeerCryptoManager>,
         compressor: Compressor,
-        device_adapter: DeviceAdapter,
+        device_writer: TunDeviceWriter,
     ) -> Self {
-        let inner = TunDeviceHelperInner {
+        let inner = TunDeviceLifecycleInner {
             stop_manager,
             data_channel,
             current_device,
@@ -93,13 +93,13 @@ impl TunDeviceHelper {
         };
         Self {
             inner: Arc::new(Mutex::new(inner)),
-            device_adapter,
+            device_writer,
             device_stop: Default::default(),
         }
     }
     pub fn stop(&self) {
         if let Some(device_stop) = self.device_stop.lock().take() {
-            self.device_adapter.remove();
+            self.device_writer.remove();
             loop {
                 device_stop.stop();
                 std::thread::sleep(std::time::Duration::from_millis(300));
@@ -110,7 +110,7 @@ impl TunDeviceHelper {
         }
     }
     pub fn start(&self, device: Arc<SyncDevice>) -> io::Result<()> {
-        self.device_adapter.insert(device.clone());
+        self.device_writer.insert(device.clone());
         let device_stop = DeviceStop::default();
         let s = self.device_stop.lock().replace(device_stop.clone());
         assert!(s.is_none());
@@ -129,6 +129,6 @@ impl TunDeviceHelper {
         )
     }
     pub fn device_name(&self) -> Option<String> {
-        self.device_adapter.name()
+        self.device_writer.name()
     }
 }
