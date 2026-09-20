@@ -225,14 +225,13 @@ impl PeerSubsystem {
 }
 
 #[derive(Clone)]
-pub(crate) struct GatewaySubsystem {
-    pub(crate) sessions: GatewaySessions,
+pub(crate) struct GatewayState {
     pub(crate) grant_policy_rev: Arc<AtomicU64>,
 }
 
-impl GatewaySubsystem {
-    pub(crate) fn reset_for_auth_pending(&self) {
-        self.sessions.clear_gateway_grant();
+impl GatewayState {
+    pub(crate) fn reset_for_auth_pending(&self, gateway_sessions: &GatewaySessions) {
+        gateway_sessions.clear_gateway_grant();
         self.grant_policy_rev.store(0, Ordering::Relaxed);
     }
 }
@@ -357,7 +356,7 @@ pub(crate) struct TunSubsystem {
 pub(crate) struct SdlNodeState {
     pub(crate) auth_request: Arc<RwLock<AuthRequestConfig>>,
     pub(crate) peers: PeerSubsystem,
-    pub(crate) gateway: GatewaySubsystem,
+    pub(crate) gateway: GatewayState,
     pub(crate) dns: DnsSubsystem,
     pub(crate) exit_node: ExitNodeSubsystem,
     // Runtime state, independent of the CLI's presentation state.  It makes
@@ -375,26 +374,27 @@ pub(crate) struct SdlNodeState {
 // behavior.  Keeping them separate from `SdlNodeState` makes message-sending
 // and lifecycle work explicit at call sites.
 #[derive(Clone)]
-pub(crate) struct SdlServices {
-    pub(crate) nat_test: NatTest,
-    pub(crate) control_session: ControlSession,
+pub(crate) struct DataPlaneServices {
     pub(crate) route_manager: RouteManager,
     pub(crate) udp_channel: UdpChannel,
+    pub(crate) gateway_sessions: GatewaySessions,
     pub(crate) punch_coordinator: PunchCoordinator,
 }
 
-// `SdlContext` is intentionally shallow-cloneable: state and services either
+// `SdlRuntime` is intentionally shallow-cloneable: state and services either
 // wrap `Arc` state or local handles whose `Clone` implementations share inner
 // state. Keep new fields on that model; this type is cloned into callbacks and
 // workers.
 #[derive(Clone)]
-pub(crate) struct SdlContext {
+pub(crate) struct SdlRuntime {
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) state: SdlNodeState,
-    pub(crate) services: SdlServices,
+    pub(crate) data_plane: DataPlaneServices,
+    pub(crate) control_session: ControlSession,
+    pub(crate) nat_test: NatTest,
 }
 
-impl SdlContext {
+impl SdlRuntime {
     // These expose subsystem boundaries without restoring the old facade of
     // one forwarding method per subsystem operation.  Callers that use a
     // subsystem repeatedly should bind the returned reference locally.
@@ -403,11 +403,15 @@ impl SdlContext {
     }
 
     pub(crate) fn routes(&self) -> &RouteManager {
-        &self.services.route_manager
+        &self.data_plane.route_manager
+    }
+
+    pub(crate) fn data_plane(&self) -> &DataPlaneServices {
+        &self.data_plane
     }
 
     pub(crate) fn control_session(&self) -> &ControlSession {
-        &self.services.control_session
+        &self.control_session
     }
 
     pub(crate) fn block_data_plane_for_auth_pending(&self) {
@@ -419,8 +423,10 @@ impl SdlContext {
             return;
         }
         self.state.peers.reset_for_auth_pending();
-        self.services.route_manager.clear_all_paths();
-        self.state.gateway.reset_for_auth_pending();
+        self.routes().clear_all_paths();
+        self.state
+            .gateway
+            .reset_for_auth_pending(&self.data_plane().gateway_sessions);
         self.state.dns.reset_for_auth_pending();
         self.state.pending_rename_requests.clear();
         self.state.exit_node.reset_for_auth_pending();
@@ -478,11 +484,11 @@ impl SdlContext {
     }
 
     pub(crate) fn is_known_udp_source(&self, addr: std::net::SocketAddr) -> bool {
-        self.services.control_session.is_control_addr(addr)
-            || self.state.gateway.sessions.is_gateway_addr(addr)
-            || self.services.nat_test.has_pending_stun_server_addr(addr)
+        self.control_session.is_control_addr(addr)
+            || self.data_plane().gateway_sessions.is_gateway_addr(addr)
+            || self.nat_test.has_pending_stun_server_addr(addr)
             || self
-                .services
+                .data_plane
                 .route_manager
                 .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
     }
@@ -692,9 +698,9 @@ impl SdlContext {
             "virtual_netmask": current_device.virtual_netmask.to_string(),
             "virtual_network": current_device.virtual_network.to_string(),
             "broadcast_ip": current_device.broadcast_ip.to_string(),
-            "control_server": self.services.control_session.server_addr().to_string(),
+            "control_server": self.control_session.server_addr().to_string(),
             "connect_status": format!("{:?}", current_device.status),
-            "use_channel_type": format!("{:?}", self.services.route_manager.use_channel_type()),
+            "use_channel_type": format!("{:?}", self.routes().use_channel_type()),
             "dns_profile": dns_profile.as_ref().map(|profile| json!({
                 "servers": profile.servers,
                 "match_domains": profile.match_domains,
@@ -711,8 +717,8 @@ impl SdlContext {
     }
 
     fn snapshot_gateway(&self) -> Value {
-        let summary = self.state.gateway.sessions.session_summary();
-        let grant = self.state.gateway.sessions.current_grant_snapshot();
+        let summary = self.data_plane().gateway_sessions.session_summary();
+        let grant = self.data_plane().gateway_sessions.current_grant_snapshot();
         json!({
             "configured": summary.configured,
             "authenticated": summary.authenticated,
@@ -737,7 +743,7 @@ impl SdlContext {
     }
 
     fn snapshot_nat(&self) -> Value {
-        let nat_info = self.services.nat_test.nat_info();
+        let nat_info = self.nat_test.nat_info();
         json!({
             "nat_type": format!("{:?}", nat_info.nat_type),
             "punch_model": format!("{:?}", nat_info.punch_model),
@@ -759,9 +765,8 @@ impl SdlContext {
                 .values()
                 .map(|peer| {
                     let relay_health = self
-                        .state
-                        .gateway
-                        .sessions
+                        .data_plane()
+                        .gateway_sessions
                         .peer_relay_health_summary(peer.virtual_ip);
                     json!({
                         "virtual_ip": peer.virtual_ip.to_string(),
@@ -811,7 +816,7 @@ impl SdlContext {
 
     fn snapshot_routes(&self, current_device: CurrentDeviceInfo) -> Value {
         let mut route_items = self
-            .services
+            .data_plane
             .route_manager
             .snapshot_route_states(current_device.virtual_gateway)
             .into_iter()

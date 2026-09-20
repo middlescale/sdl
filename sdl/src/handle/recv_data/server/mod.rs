@@ -25,7 +25,7 @@ use sdl_packet::ip::ipv4;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::core::PeerInfo;
-use crate::core::SdlContext;
+use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use crate::handle::recv_data::PacketHandler;
@@ -73,7 +73,7 @@ fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr
 /// 处理来源于服务端的包
 #[derive(Clone)]
 pub(crate) struct ServerPacketHandler<Call> {
-    context: Arc<SdlContext>,
+    runtime: Arc<SdlRuntime>,
     device: TunDeviceWriter,
     callback: Call,
     punch_sessions: PunchSessionTracker,
@@ -93,9 +93,9 @@ struct PeerIdentityPlan {
 }
 
 impl<Call> ServerPacketHandler<Call> {
-    pub(crate) fn new(context: Arc<SdlContext>, device: TunDeviceWriter, callback: Call) -> Self {
+    pub(crate) fn new(runtime: Arc<SdlRuntime>, device: TunDeviceWriter, callback: Call) -> Self {
         Self {
-            context,
+            runtime,
             device,
             callback,
             punch_sessions: PunchSessionTracker::default(),
@@ -113,27 +113,21 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
         route_key: RouteKey,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !self
-            .context
-            .services
-            .control_session
-            .is_control_addr(route_key.addr)
+        if !self.runtime.control_session.is_control_addr(route_key.addr)
             && !self
-                .context
-                .state
-                .gateway
-                .sessions
+                .runtime
+                .data_plane()
+                .gateway_sessions
                 .is_gateway_addr(route_key.addr)
         {
             log_sampled_unauthorized_server_source_drop(
                 route_key,
-                self.context.services.control_session.server_addr(),
+                self.runtime.control_session.server_addr(),
             );
             return Ok(());
         }
-        self.context
-            .services
-            .route_manager
+        self.runtime
+            .routes()
             .touch_path(&net_packet.source(), &route_key);
         self.reconcile_punch_sessions(current_device)?;
         if net_packet.protocol() == Protocol::Error
@@ -158,8 +152,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                     CAPABILITY_UDP_ENDPOINT_REPORT_V1
                 ));
             }
-            self.context
-                .services
+            self.runtime
                 .control_session
                 .set_negotiated_capabilities(&response.capabilities);
             let handshake_info =
@@ -187,19 +180,17 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                         let source = net_packet.source();
                         let destination = net_packet.destination();
                         let from_gateway = self
-                            .context
-                            .state
-                            .gateway
-                            .sessions
+                            .runtime
+                            .data_plane()
+                            .gateway_sessions
                             .is_gateway_addr(route_key.addr);
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
                         if from_gateway_peer {
-                            if let Some(peer) = self.context.state.peers.identity_for_vip(&source) {
-                                self.context
-                                    .state
-                                    .gateway
-                                    .sessions
+                            if let Some(peer) = self.runtime.state.peers.identity_for_vip(&source) {
+                                self.runtime
+                                    .data_plane()
+                                    .gateway_sessions
                                     .remember_peer_ingress_gateway(peer, route_key.addr);
                             }
                         }
@@ -240,7 +231,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                             }
                         }
                         if let Some((icmp_source, icmp_destination)) = gateway_echo_reply {
-                            self.context.state.debug_watch.emit(
+                            self.runtime.state.debug_watch.emit(
                                 "icmp",
                                 "gateway_echo_reply_received",
                                 serde_json::json!({
@@ -259,7 +250,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                 net_packet.payload(),
                                 "gateway ip packet inject",
                             )?;
-                            self.context.state.debug_watch.emit(
+                            self.runtime.state.debug_watch.emit(
                                 "icmp",
                                 "gateway_echo_reply_injected",
                                 serde_json::json!({
@@ -276,7 +267,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                         }
                         if from_gateway_peer {
                             if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
-                                self.context.state.debug_watch.emit(
+                                self.runtime.state.debug_watch.emit(
                                     "icmp",
                                     "peer_echo_reply_received",
                                     serde_json::json!({
@@ -297,7 +288,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                 "gateway peer ip packet inject",
                             )?;
                             if let Some((icmp_source, icmp_destination)) = peer_echo_reply {
-                                self.context.state.debug_watch.emit(
+                                self.runtime.state.debug_watch.emit(
                                     "icmp",
                                     "peer_echo_reply_injected",
                                     serde_json::json!({
@@ -335,21 +326,20 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let packet_len = packet.buffer().len();
         let destination = packet.destination();
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .record_logical_up(packet_len);
-        self.context
-            .state
-            .gateway
-            .sessions
+        self.runtime
+            .data_plane()
+            .gateway_sessions
             .send_relay_to_or_active(ingress_gateway, packet)?;
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .record_gateway_up(packet_len);
         if destination != current_device.virtual_gateway {
-            self.context
+            self.runtime
                 .state
                 .data_plane_stats
                 .record_peer_up(destination, packet_len);
@@ -417,12 +407,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         allow_ip_change: bool,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
-            log::info!("已连接的不需要注册，{:?}", self.context.config);
+            log::info!("已连接的不需要注册，{:?}", self.runtime.config);
             return Ok(());
         }
-        log::info!("发送注册请求，{:?}", self.context.config);
-        self.context
-            .services
+        log::info!("发送注册请求，{:?}", self.runtime.config);
+        self.runtime
             .control_session
             .send_registration_request(false, allow_ip_change)?;
         Ok(())
@@ -437,7 +426,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             }
             InErrorPacket::Disconnect => {
                 crate::handle::change_status(
-                    &self.context.state.current_device,
+                    &self.runtime.state.current_device,
                     ConnectStatus::Connecting,
                 );
                 let err = ErrorInfo::new(ErrorType::Disconnect);
@@ -445,11 +434,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 let _device_list_update_guard = self.device_list_update_lock.lock();
                 //掉线epoch要归零
                 {
-                    self.context.state.peers.reset_epoch();
+                    self.runtime.state.peers.reset_epoch();
                 }
-                self.context.state.peers.crypto.clear_all();
-                self.context.services.control_session.send_handshake()?;
-                // self.register(current_device, context, route_key)?;
+                self.runtime.state.peers.crypto.clear_all();
+                self.runtime.control_session.send_handshake()?;
+                // self.register(current_device, runtime, route_key)?;
             }
             InErrorPacket::AddressExhausted => {
                 // 地址用尽
@@ -483,10 +472,9 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 // peer-side ClientPacketHandler. Consume a matching probe reply here
                 // before treating it as a generic route-measurement Pong.
                 if self
-                    .context
-                    .state
-                    .gateway
-                    .sessions
+                    .runtime
+                    .data_plane()
+                    .gateway_sessions
                     .handle_gateway_probe_pong(net_packet.source(), route_key, pong_packet.epoch())
                 {
                     return Ok(());
@@ -496,17 +484,13 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     return Ok(());
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
-                let from_control_or_gateway = self
-                    .context
-                    .services
-                    .control_session
-                    .is_control_addr(route_key.addr)
-                    || self
-                        .context
-                        .state
-                        .gateway
-                        .sessions
-                        .is_gateway_addr(route_key.addr);
+                let from_control_or_gateway =
+                    self.runtime.control_session.is_control_addr(route_key.addr)
+                        || self
+                            .runtime
+                            .data_plane()
+                            .gateway_sessions
+                            .is_gateway_addr(route_key.addr);
                 let learned_metric = if from_control_or_gateway {
                     metric.max(2)
                 } else {
@@ -514,23 +498,18 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 };
                 let rt = (current_time - pong_packet.time()) as i64;
                 let route = Route::from(route_key, learned_metric, rt);
-                self.context
-                    .services
-                    .route_manager
-                    .add_path(net_packet.source(), route);
-                let epoch = self.context.state.peers.epoch();
+                self.runtime.routes().add_path(net_packet.source(), route);
+                let epoch = self.runtime.state.peers.epoch();
                 if pong_packet.epoch() != epoch {
                     //纪元不一致，可能有新客户端连接，向服务端拉取客户端列表
-                    self.context
-                        .services
+                    self.runtime
                         .control_session
                         .send_service_header_only(service_packet::Protocol::PullDeviceList)?;
                 }
             }
             ControlPacket::AddrResponse(addr_packet) => {
                 //更新本地公网ipv4
-                self.context
-                    .services
+                self.runtime
                     .nat_test
                     .update_addr(addr_packet.ipv4(), addr_packet.port());
             }

@@ -34,8 +34,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 &reason,
             ) {
                 match self
-                    .context
-                    .services
+                    .runtime
                     .control_session
                     .try_send_registration_reject_recovery_handshake()
                 {
@@ -72,7 +71,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         log::info!("注册成功：{:?}", register_info);
         let _device_list_update_guard = self.device_list_update_lock.lock();
         let recovering_from_auth_pending =
-            self.context.reset_peer_epoch_for_auth_pending_recovery();
+            self.runtime.reset_peer_epoch_for_auth_pending_recovery();
         let Some(device_list_update) =
             self.prepare_device_list_update(response.device_info_list.clone(), response.epoch as _)
         else {
@@ -96,9 +95,8 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         });
         if self.callback.register(register_info) {
             let route = Route::from_default_rt(route_key, 1);
-            self.context
-                .services
-                .route_manager
+            self.runtime
+                .routes()
                 .add_path_if_absent(virtual_gateway, route);
             let public_ip = response.public_ip.into();
             let public_port = response.public_port as u16;
@@ -106,12 +104,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 observed_udp_port_from_registration(route_key.protocol(), public_port);
             // For QUIC/TCP control, the observed remote port belongs to the control-plane
             // connection, not the data-plane UDP socket used for punching.
-            self.context
-                .services
+            self.runtime
                 .nat_test
                 .update_addr(public_ip, observed_udp_port);
             let old = current_device;
-            let dns_changed = self.context.state.dns.replace_profile(dns_profile);
+            let dns_changed = self.runtime.state.dns.replace_profile(dns_profile);
             let vip_changed = old.virtual_ip != virtual_ip
                 || old.virtual_gateway != virtual_gateway
                 || old.virtual_netmask != virtual_netmask;
@@ -124,7 +121,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 new_current_device.virtual_gateway = virtual_gateway;
                 new_current_device.status = ConnectStatus::Connected;
                 if let Err(c) = self
-                    .context
+                    .runtime
                     .state
                     .current_device
                     .compare_exchange(cur, new_current_device)
@@ -134,13 +131,16 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     break;
                 }
             }
-            self.context.state.gateway.sessions.trigger_connect_now();
+            self.runtime
+                .data_plane()
+                .gateway_sessions
+                .trigger_connect_now();
 
             if vip_changed || dns_changed {
                 if old.virtual_ip != Ipv4Addr::UNSPECIFIED {
                     log::info!("ip发生变化,old:{:?},response={:?}", old, response);
                 }
-                if let Err(e) = self.context.sync_tun_with_current_device(&self.callback) {
+                if let Err(e) = self.runtime.sync_tun_with_current_device(&self.callback) {
                     log::error!("{:?}", e);
                     self.callback.error(ErrorInfo::new_msg(
                         ErrorType::FailedToCreateDevice,
@@ -148,11 +148,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     ));
                 }
             } else if old.status.offline() {
-                self.context.force_apply_dns_profile(&self.callback);
+                self.runtime.force_apply_dns_profile(&self.callback);
             }
             self.set_device_info_list(device_list_update);
             if recovering_from_auth_pending {
-                self.context.finish_auth_pending_recovery();
+                self.runtime.finish_auth_pending_recovery();
             }
             if vip_changed {
                 // apply_gateway_grants() may have kicked the gateway session while
@@ -160,10 +160,12 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 // only when the virtual addressing actually changed so wake/reconnect
                 // paths use the committed VIP without adding an extra round for
                 // unchanged registrations.
-                self.context.state.gateway.sessions.trigger_connect_now();
+                self.runtime
+                    .data_plane()
+                    .gateway_sessions
+                    .trigger_connect_now();
             }
-            self.context
-                .services
+            self.runtime
                 .control_session
                 .request_punch_status_report_with_nat_ready(if old.status.offline() {
                     crate::proto::message::PunchTriggerReason::PunchTriggerReconnectRecovery
@@ -178,11 +180,12 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 ),
             ) {
                 match self
-                    .context
-                    .services
+                    .runtime
                     .control_session
-                    .send_refresh_gateway_grant_request(&self.context.state.gateway.sessions, false)
-                {
+                    .send_refresh_gateway_grant_request(
+                        &self.runtime.data_plane().gateway_sessions,
+                        false,
+                    ) {
                     Ok(_) => {
                         log::info!(
                                     "registration recovered from offline without gateway grant, requested dedicated gateway grant refresh"

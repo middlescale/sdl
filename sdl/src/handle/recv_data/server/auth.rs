@@ -22,8 +22,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             ));
             if should_retry_device_auth_after_challenge_expired(error_reason, &ack.reason) {
                 match self
-                    .context
-                    .services
+                    .runtime
                     .control_session
                     .try_retry_device_auth_after_challenge_expired()
                 {
@@ -67,8 +66,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let challenge = DeviceAuthChallenge::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("DeviceAuthChallenge {:?}", e)))?;
-        self.context
-            .services
+        self.runtime
             .control_session
             .send_device_auth_proof(&challenge)?;
         Ok(())
@@ -94,7 +92,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             Err(response.reason.clone())
         };
         let rename_completed = self
-            .context
+            .runtime
             .state
             .pending_rename_requests
             .take(response.request_id)

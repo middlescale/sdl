@@ -8,8 +8,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         let response = RefreshGatewayGrantResponse::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("RefreshGatewayGrantResponse {:?}", e)))?;
         if should_clear_gateway_grants_from_refresh_response(&response) {
-            self.context.state.gateway.sessions.clear_gateway_grant();
-            self.context
+            self.runtime
+                .data_plane()
+                .gateway_sessions
+                .clear_gateway_grant();
+            self.runtime
                 .state
                 .gateway
                 .grant_policy_rev
@@ -25,14 +28,14 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 == RefreshGatewayGrantResult::REFRESH_GATEWAY_GRANT_RESULT_NO_CHANGE
             {
                 let current_policy_rev = self
-                    .context
+                    .runtime
                     .state
                     .gateway
                     .grant_policy_rev
                     .load(Ordering::Relaxed);
                 if should_apply_gateway_policy_rev(current_policy_rev, response.gateway_policy_rev)
                 {
-                    self.context
+                    self.runtime
                         .state
                         .gateway
                         .grant_policy_rev
@@ -63,10 +66,9 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
-        self.context
-            .state
-            .gateway
-            .sessions
+        self.runtime
+            .data_plane()
+            .gateway_sessions
             .handle_connect_ack(route_key.addr, &ack);
         Ok(())
     }
@@ -82,7 +84,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         let incoming_policy_rev =
             effective_gateway_policy_rev(gateway_policy_rev, &effective_grants, legacy_grant);
         let current_policy_rev = self
-            .context
+            .runtime
             .state
             .gateway
             .grant_policy_rev
@@ -97,14 +99,13 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         }
         if effective_grants.is_empty() {
             if self
-                .context
-                .state
-                .gateway
-                .sessions
+                .runtime
+                .data_plane()
+                .gateway_sessions
                 .current_grant_snapshot()
                 .is_some()
             {
-                self.context
+                self.runtime
                     .state
                     .gateway
                     .grant_policy_rev
@@ -115,8 +116,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 );
                 return;
             }
-            self.context.state.gateway.sessions.clear_gateway_grant();
-            self.context
+            self.runtime
+                .data_plane()
+                .gateway_sessions
+                .clear_gateway_grant();
+            self.runtime
                 .state
                 .gateway
                 .grant_policy_rev
@@ -124,12 +128,15 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             log::info!("gateway grant cleared");
             return;
         }
-        self.context.state.gateway.sessions.set_gateway_grants(
-            &effective_grants,
-            virtual_ip,
-            self.context.config.device_id.clone(),
-        );
-        self.context
+        self.runtime
+            .data_plane()
+            .gateway_sessions
+            .set_gateway_grants(
+                &effective_grants,
+                virtual_ip,
+                self.runtime.config.device_id.clone(),
+            );
+        self.runtime
             .state
             .gateway
             .grant_policy_rev

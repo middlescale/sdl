@@ -9,15 +9,15 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::control::ControlSession;
-use crate::core::context::TunSubsystem;
+use crate::core::runtime::TunSubsystem;
 use crate::core::ExitNodeRoute;
 use crate::core::{
-    context::{
-        AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewaySubsystem,
-        PeerSubsystem, PendingRenameRequest, PendingRequestTable, RenameRequestOutcome,
-        RuntimeConfig, SdlNodeState, SdlServices, PENDING_REQUEST_TTL_MS,
+    runtime::{
+        AuthRequestConfig, DataPlaneServices, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem,
+        GatewayState, PeerSubsystem, PendingRenameRequest, PendingRequestTable,
+        RenameRequestOutcome, RuntimeConfig, SdlNodeState, PENDING_REQUEST_TTL_MS,
     },
-    Config, SdlContext,
+    Config, SdlRuntime,
 };
 use crate::core::{PeerIdentity, PeerInfo};
 use crate::data_plane::data_channel::DataChannel;
@@ -47,7 +47,7 @@ impl SdlCallback for NullCallback {}
 pub struct Sdl {
     stop_manager: StopManager,
     config: Config,
-    context: Arc<SdlContext>,
+    runtime: Arc<SdlRuntime>,
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     _split_dns_stop_worker: crate::util::Worker,
 }
@@ -212,8 +212,8 @@ impl Sdl {
                 callback.direct_route_changed(peer_ip);
             }));
         }
-        let context = Arc::new_cyclic(|weak_context| {
-            let data_channel = DataChannel::new(weak_context.clone());
+        let runtime = Arc::new_cyclic(|weak_runtime| {
+            let data_channel = DataChannel::new(weak_runtime.clone());
             let suspended = Arc::new(AtomicCell::new(false));
             let tun_device_lifecycle = {
                 TunDeviceLifecycle::new(
@@ -229,7 +229,7 @@ impl Sdl {
                 )
             };
 
-            SdlContext {
+            SdlRuntime {
                 config: runtime_config.clone(),
                 state: SdlNodeState {
                     auth_request: auth_request.clone(),
@@ -239,8 +239,7 @@ impl Sdl {
                         crypto: peer_crypto.clone(),
                         probe_tracker: peer_probe_tracker.clone(),
                     },
-                    gateway: GatewaySubsystem {
-                        sessions: gateway_sessions.clone(),
+                    gateway: GatewayState {
                         grant_policy_rev: gateway_grant_policy_rev.clone(),
                     },
                     dns: DnsSubsystem {
@@ -282,23 +281,24 @@ impl Sdl {
                         device_lifecycle: tun_device_lifecycle,
                     },
                 },
-                services: SdlServices {
-                    nat_test: nat_test.clone(),
-                    control_session: control_session.clone(),
+                data_plane: DataPlaneServices {
                     route_manager: route_manager.clone(),
                     udp_channel: udp_channel.clone(),
+                    gateway_sessions: gateway_sessions.clone(),
                     punch_coordinator: punch_coordinator.clone(),
                 },
+                control_session: control_session.clone(),
+                nat_test: nat_test.clone(),
             }
         });
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         let split_dns_stop_worker = {
-            let context = context.clone();
+            let runtime = runtime.clone();
             stop_manager.add_listener("splitDns".into(), move || {
-                context.revert_dns_on_shutdown();
+                runtime.revert_dns_on_shutdown();
             })?
         };
-        let handler = RecvDataHandler::new(context.clone(), device, callback.clone());
+        let handler = RecvDataHandler::new(runtime.clone(), device, callback.clone());
         let control_handler = handler.clone();
         {
             let handler = handler.clone();
@@ -316,8 +316,8 @@ impl Sdl {
                 move |buf, extend, route_key| handler.handle(buf, extend, route_key)
             },
             {
-                let context = context.clone();
-                move |addr| context.is_known_udp_source(addr)
+                let runtime = runtime.clone();
+                move |addr| runtime.is_known_udp_source(addr)
             },
         )?;
         {
@@ -408,8 +408,7 @@ impl Sdl {
             punch_coordinator.clone(),
             punch.clone(),
         );
-        context
-            .services
+        runtime
             .control_session
             .start(stop_manager.clone(), callback.clone(), {
                 let handler = control_handler;
@@ -419,18 +418,15 @@ impl Sdl {
                 }
             })?;
         {
-            let context = context.clone();
+            let runtime = runtime.clone();
             if !config.use_channel_type.is_only_relay() {
-                context
-                    .services
-                    .nat_test
-                    .start_refresh_task(stop_manager.clone())?;
+                runtime.nat_test.start_refresh_task(stop_manager.clone())?;
             }
         }
         Ok(Self {
             stop_manager,
             config,
-            context,
+            runtime,
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             _split_dns_stop_worker: split_dns_stop_worker,
         })
@@ -442,111 +438,104 @@ impl Sdl {
         &self.config.name
     }
     pub fn current_device(&self) -> CurrentDeviceInfo {
-        self.context.state.current_device.load()
+        self.runtime.state.current_device.load()
     }
     pub fn primary_dns_service_ip(&self) -> Option<Ipv4Addr> {
-        self.context.state.dns.primary_service_ip()
+        self.runtime.state.dns.primary_service_ip()
     }
     pub fn tun_device_name(&self) -> Option<String> {
-        self.context.state.tun.device_lifecycle.device_name()
+        self.runtime.state.tun.device_lifecycle.device_name()
     }
     pub fn control_server_addr(&self) -> std::net::SocketAddr {
-        self.context.services.control_session.server_addr()
+        self.runtime.control_session.server_addr()
     }
     pub fn current_device_info(&self) -> Arc<AtomicCell<CurrentDeviceInfo>> {
-        self.context.state.current_device.clone()
+        self.runtime.state.current_device.clone()
     }
     pub fn peer_nat_info(&self, ip: &Ipv4Addr) -> Option<NatInfo> {
-        self.context.state.peers.nat_info(ip)
+        self.runtime.state.peers.nat_info(ip)
     }
     pub fn connection_status(&self) -> ConnectStatus {
-        self.context.state.current_device.load().status
+        self.runtime.state.current_device.load().status
     }
     pub fn nat_info(&self) -> NatInfo {
-        self.context.services.nat_test.nat_info()
+        self.runtime.nat_test.nat_info()
     }
     pub fn device_list(&self) -> Vec<PeerInfo> {
-        self.context.state.peers.list()
+        self.runtime.state.peers.list()
     }
     pub fn peer_info(&self, ip: &Ipv4Addr) -> Option<PeerInfo> {
-        self.context.state.peers.info(ip)
+        self.runtime.state.peers.info(ip)
     }
     pub fn peer_vip_for_identity(&self, identity: &PeerIdentity) -> Option<Ipv4Addr> {
-        self.context.state.peers.vip_for_identity(identity)
+        self.runtime.state.peers.vip_for_identity(identity)
     }
     pub fn route(&self, ip: &Ipv4Addr) -> Option<Route> {
-        self.context.services.route_manager.best_route(ip)
+        self.runtime.routes().best_route(ip)
     }
     pub fn is_peer_active(&self, ip: &Ipv4Addr) -> bool {
-        self.context.services.route_manager.is_peer_active(ip)
+        self.runtime.routes().is_peer_active(ip)
     }
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
-        self.context.state.current_device.load().is_gateway_vip(ip)
+        self.runtime.state.current_device.load().is_gateway_vip(ip)
     }
     pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        self.context
-            .services
-            .route_manager
-            .peer_for_direct_route(route_key)
+        self.runtime.routes().peer_for_direct_route(route_key)
     }
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        self.context.services.route_manager.snapshot_routes()
+        self.runtime.routes().snapshot_routes()
     }
     pub fn gateway_session_summary(
         &self,
     ) -> crate::data_plane::gateway_session::GatewaySessionSummary {
-        self.context.state.gateway.sessions.session_summary()
+        self.runtime.data_plane().gateway_sessions.session_summary()
     }
     pub fn gateway_session_summaries(
         &self,
     ) -> Vec<crate::data_plane::gateway_session::GatewaySessionSummary> {
-        self.context.state.gateway.sessions.session_summaries()
+        self.runtime
+            .data_plane()
+            .gateway_sessions
+            .session_summaries()
     }
 
     pub fn peer_relay_health_summary(
         &self,
         ip: Ipv4Addr,
     ) -> crate::data_plane::gateway_session::PeerRelayHealthSummary {
-        self.context
-            .state
-            .gateway
-            .sessions
+        self.runtime
+            .data_plane()
+            .gateway_sessions
             .peer_relay_health_summary(ip)
     }
     pub fn set_gateway_selection(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
-        self.context
-            .state
-            .gateway
-            .sessions
+        self.runtime
+            .data_plane()
+            .gateway_sessions
             .set_manual_endpoint(endpoint)
     }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
-        self.context.services.route_manager.use_channel_type()
+        self.runtime.routes().use_channel_type()
     }
     pub fn set_use_channel_type(
         &self,
         use_channel_type: crate::data_plane::use_channel_type::UseChannelType,
     ) {
-        let previous = self.context.services.route_manager.use_channel_type();
+        let previous = self.runtime.routes().use_channel_type();
         if previous == use_channel_type {
             return;
         }
-        self.context
-            .services
-            .route_manager
-            .set_use_channel_type(use_channel_type);
+        self.runtime.routes().set_use_channel_type(use_channel_type);
         if use_channel_type.is_only_relay() {
             if let Err(err) = self
-                .context
-                .services
+                .runtime
                 .control_session
                 .send_client_status_report_packet()
             {
                 log::warn!("failed to report relay channel mode: {:?}", err);
             }
         } else {
-            self.context
-                .services
+            self.runtime
                 .control_session
                 .request_punch_status_report_with_nat_ready(
                     crate::proto::message::PunchTriggerReason::PunchTriggerManualRequest,
@@ -560,18 +549,15 @@ impl Sdl {
         ticket: String,
     ) -> anyhow::Result<()> {
         {
-            let mut auth_request = self.context.state.auth_request.write();
+            let mut auth_request = self.runtime.state.auth_request.write();
             auth_request.user_id = Some(user_id);
             auth_request.group = Some(group);
             auth_request.ticket = Some(ticket);
         }
-        self.context
-            .services
-            .control_session
-            .send_device_auth_request()
+        self.runtime.control_session.send_device_auth_request()
     }
     pub fn block_data_plane_for_auth_pending(&self) {
-        self.context.block_data_plane_for_auth_pending();
+        self.runtime.block_data_plane_for_auth_pending();
     }
     pub fn request_device_rename(
         &self,
@@ -580,17 +566,16 @@ impl Sdl {
     ) -> anyhow::Result<RenameRequestOutcome> {
         let (sender, receiver) = mpsc::channel();
         let request_id = self
-            .context
+            .runtime
             .state
             .pending_rename_requests
             .remember(PendingRenameRequest { responder: sender });
         if let Err(err) = self
-            .context
-            .services
+            .runtime
             .control_session
             .send_device_rename_request(request_id, new_name)
         {
-            self.context
+            self.runtime
                 .state
                 .pending_rename_requests
                 .forget(request_id);
@@ -600,14 +585,14 @@ impl Sdl {
             Ok(Ok(outcome)) => Ok(outcome),
             Ok(Err(reason)) => anyhow::bail!("rename rejected: {}", reason),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.context
+                self.runtime
                     .state
                     .pending_rename_requests
                     .forget(request_id);
                 anyhow::bail!("rename request timed out")
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.context
+                self.runtime
                     .state
                     .pending_rename_requests
                     .forget(request_id);
@@ -616,74 +601,73 @@ impl Sdl {
         }
     }
     pub fn set_exit_node_state(&self, state: ExitNodeLocalState) {
-        let should_report_status = self.context.set_exit_node_state(state);
+        let should_report_status = self.runtime.set_exit_node_state(state);
         if should_report_status {
-            self.context.services.control_session.report_client_status();
+            self.runtime.control_session.report_client_status();
         }
     }
     pub fn exit_node_state(&self) -> ExitNodeLocalState {
-        self.context.state.exit_node.snapshot()
+        self.runtime.state.exit_node.snapshot()
     }
     pub fn route_states(&self) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
-        let current_device = self.context.state.current_device.load();
-        self.context
-            .services
-            .route_manager
+        let current_device = self.runtime.state.current_device.load();
+        self.runtime
+            .routes()
             .snapshot_route_states(current_device.virtual_gateway)
     }
     pub fn up_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.up_traffic_total()
+        self.runtime.state.data_plane_stats.up_traffic_total()
     }
     pub fn up_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
-        self.context.state.data_plane_stats.up_traffic_all()
+        self.runtime.state.data_plane_stats.up_traffic_all()
     }
     pub fn up_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
-        self.context.state.data_plane_stats.up_traffic_history()
+        self.runtime.state.data_plane_stats.up_traffic_history()
     }
     pub fn down_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.down_traffic_total()
+        self.runtime.state.data_plane_stats.down_traffic_total()
     }
     pub fn down_stream_all(&self) -> Option<(u64, HashMap<usize, u64>)> {
-        self.context.state.data_plane_stats.down_traffic_all()
+        self.runtime.state.data_plane_stats.down_traffic_all()
     }
     pub fn down_stream_history(&self) -> Option<(u64, HashMap<usize, (u64, Vec<usize>)>)> {
-        self.context.state.data_plane_stats.down_traffic_history()
+        self.runtime.state.data_plane_stats.down_traffic_history()
     }
     pub fn up_stream_by_peer(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
-        self.context.state.data_plane_stats.up_peer_traffic_all()
+        self.runtime.state.data_plane_stats.up_peer_traffic_all()
     }
     pub fn down_stream_by_peer(&self) -> Option<(u64, HashMap<Ipv4Addr, u64>)> {
-        self.context.state.data_plane_stats.down_peer_traffic_all()
+        self.runtime.state.data_plane_stats.down_peer_traffic_all()
     }
     pub fn up_rate_by_peer(&self, window_secs: usize) -> Option<HashMap<Ipv4Addr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .up_peer_traffic_rates(window_secs)
     }
     pub fn down_rate_by_peer(&self, window_secs: usize) -> Option<HashMap<Ipv4Addr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_peer_traffic_rates(window_secs)
     }
     pub fn up_active_speed_by_peer(&self) -> Option<HashMap<Ipv4Addr, u64>> {
-        self.context.state.data_plane_stats.up_peer_active_speeds()
+        self.runtime.state.data_plane_stats.up_peer_active_speeds()
     }
     pub fn down_active_speed_by_peer(&self) -> Option<HashMap<Ipv4Addr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_peer_active_speeds()
     }
     pub fn up_stream_by_transport(&self) -> Option<(u64, HashMap<std::net::IpAddr, u64>)> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .up_transport_traffic_all()
     }
     pub fn down_stream_by_transport(&self) -> Option<(u64, HashMap<std::net::IpAddr, u64>)> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_transport_traffic_all()
@@ -692,7 +676,7 @@ impl Sdl {
         &self,
         window_secs: usize,
     ) -> Option<HashMap<std::net::IpAddr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .up_transport_traffic_rates(window_secs)
@@ -701,61 +685,61 @@ impl Sdl {
         &self,
         window_secs: usize,
     ) -> Option<HashMap<std::net::IpAddr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_transport_traffic_rates(window_secs)
     }
     pub fn up_active_speed_by_transport(&self) -> Option<HashMap<std::net::IpAddr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .up_transport_active_speeds()
     }
     pub fn down_active_speed_by_transport(&self) -> Option<HashMap<std::net::IpAddr, u64>> {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_transport_active_speeds()
     }
     pub fn logical_up_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.logical_up_total()
+        self.runtime.state.data_plane_stats.logical_up_total()
     }
     pub fn logical_down_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.logical_down_total()
+        self.runtime.state.data_plane_stats.logical_down_total()
     }
     pub fn gateway_up_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.gateway_up_total()
+        self.runtime.state.data_plane_stats.gateway_up_total()
     }
     pub fn gateway_down_stream(&self) -> u64 {
-        self.context.state.data_plane_stats.gateway_down_total()
+        self.runtime.state.data_plane_stats.gateway_down_total()
     }
     pub fn gateway_up_rate(&self, window_secs: usize) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .gateway_up_rate(window_secs)
     }
     pub fn gateway_down_rate(&self, window_secs: usize) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .gateway_down_rate(window_secs)
     }
     pub fn gateway_up_active_speed(&self) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .gateway_up_active_speed()
     }
     pub fn gateway_down_active_speed(&self) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .gateway_down_active_speed()
     }
     pub fn transport_up_stream(&self) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .up_transport_traffic_all()
@@ -763,7 +747,7 @@ impl Sdl {
             .unwrap_or(0)
     }
     pub fn transport_down_stream(&self) -> u64 {
-        self.context
+        self.runtime
             .state
             .data_plane_stats
             .down_transport_traffic_all()
@@ -771,14 +755,14 @@ impl Sdl {
             .unwrap_or(0)
     }
     pub fn suspend(&self) -> anyhow::Result<()> {
-        self.context.suspend();
+        self.runtime.suspend();
         Ok(())
     }
     pub fn resume(&self) -> anyhow::Result<()> {
-        self.context.resume(&NullCallback)
+        self.runtime.resume(&NullCallback)
     }
     pub fn is_suspended(&self) -> bool {
-        self.context.is_suspended()
+        self.runtime.is_suspended()
     }
     pub fn stop(&self) {
         self.stop_manager.stop()

@@ -179,7 +179,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             peer_nat_info.public_ports,
             peer_nat_info.local_ipv4()
         );
-        self.context.state.debug_watch.emit(
+        self.runtime.state.debug_watch.emit(
             "punch",
             "start_received",
             serde_json::json!({
@@ -212,14 +212,9 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             attempt: punch_start.attempt,
             deadline_unix_ms,
         };
-        let local_forced_relay = self
-            .context
-            .services
-            .route_manager
-            .use_channel_type()
-            .is_only_relay();
+        let local_forced_relay = self.runtime.routes().use_channel_type().is_only_relay();
         let peer_forced_relay = self
-            .context
+            .runtime
             .state
             .peers
             .table
@@ -255,8 +250,8 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 )
             } else {
                 let accepted = self
-                    .context
-                    .services
+                    .runtime
+                    .data_plane()
                     .punch_coordinator
                     .submit_local(peer_ip, peer_nat_info);
                 if accepted && start.coalesced {
@@ -325,7 +320,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             )?;
         } else if !coalesced {
             self.punch_sessions
-                .spawn_watchdog(self.context.clone(), peer_ip, session);
+                .spawn_watchdog(self.runtime.clone(), peer_ip, session);
         }
         Ok(())
     }
@@ -334,10 +329,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         &self,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        for outcome in self
-            .punch_sessions
-            .reconcile(&self.context.services.route_manager)
-        {
+        for outcome in self.punch_sessions.reconcile(self.runtime.routes()) {
             self.send_punch_results(
                 current_device,
                 &outcome.sessions,
@@ -354,8 +346,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         transport: service_packet::Protocol,
         payload: &[u8],
     ) -> anyhow::Result<()> {
-        self.context
-            .services
+        self.runtime
             .control_session
             .send_service_payload(transport, payload)?;
         Ok(())
@@ -374,10 +365,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         let _ = current_device;
         let selected_endpoint = selected_endpoint_for_result(
             code,
-            self.context
-                .services
-                .route_manager
-                .direct_route(&Ipv4Addr::from(target)),
+            self.runtime.routes().direct_route(&Ipv4Addr::from(target)),
         );
         log::info!(
             "sending PunchResult session_id={} source={} target={} attempt={} code={:?} reason={} selected_endpoint={}",
@@ -390,7 +378,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             format_punch_endpoint(selected_endpoint.as_ref())
         );
         send_punch_result_via_control(
-            &self.context.services.control_session,
+            &self.runtime.control_session,
             session_id,
             source,
             target,
@@ -426,7 +414,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
 impl PunchSessionTracker {
     pub(super) fn spawn_watchdog(
         &self,
-        context: Arc<SdlContext>,
+        runtime: Arc<SdlRuntime>,
         peer_ip: Ipv4Addr,
         session: ActivePunchSession,
     ) {
@@ -445,7 +433,8 @@ impl PunchSessionTracker {
                     {
                         return;
                     }
-                    if context.services.route_manager.direct_path_count(&peer_ip) > 0 {
+                    if runtime.routes().direct_path_count(&peer_ip) > 0
+                    {
                         let state = guard.remove(&peer_ip).expect("active punch state");
                         Some((
                             state.sessions(),
@@ -473,7 +462,7 @@ impl PunchSessionTracker {
                         code,
                         reason
                     );
-                    context.state.debug_watch.emit(
+                    runtime.state.debug_watch.emit(
                         "punch",
                         "watchdog_outcome",
                         serde_json::json!({
@@ -486,11 +475,11 @@ impl PunchSessionTracker {
                     );
                     let selected_endpoint = selected_endpoint_for_result(
                         code,
-                        context.services.route_manager.direct_route(&peer_ip),
+                        runtime.routes().direct_route(&peer_ip),
                     );
                     for punch_session in sessions {
                         if let Err(err) = send_punch_result_via_control(
-                            &context.services.control_session,
+                            &runtime.control_session,
                             punch_session.session_id,
                             punch_session.source,
                             punch_session.target,

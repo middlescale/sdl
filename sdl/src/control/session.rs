@@ -11,7 +11,7 @@ use protobuf::Message;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::core::context::{AuthRequestConfig, RuntimeConfig};
+use crate::core::runtime::{AuthRequestConfig, RuntimeConfig};
 use crate::core::ExitNodeLocalState;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;

@@ -16,7 +16,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         let mut response = DebugCollectResponse::new();
         response.request_id = request.request_id;
         response.collected_at_unix_ms = crate::handle::now_time() as i64;
-        match self.context.debug_snapshot_json(&request.sections) {
+        match self.runtime.debug_snapshot_json(&request.sections) {
             Ok(snapshot_json) => {
                 response.ok = true;
                 response.snapshot_json = snapshot_json;
@@ -49,7 +49,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let request = DebugWatchStartRequest::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("DebugWatchStartRequest {:?}", e)))?;
-        let (started_at_unix_ms, expire_at_unix_ms) = self.context.state.debug_watch.start(
+        let (started_at_unix_ms, expire_at_unix_ms) = self.runtime.state.debug_watch.start(
             request.request_id,
             &request.sections,
             request.duration_sec.max(1),
@@ -68,7 +68,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             service_packet::Protocol::DebugWatchStartResponse,
             &bytes,
         )?;
-        self.context.state.debug_watch.emit(
+        self.runtime.state.debug_watch.emit(
             "runtime",
             "watch_started",
             serde_json::json!({
@@ -88,7 +88,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let request = DebugWatchStopRequest::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("DebugWatchStopRequest {:?}", e)))?;
-        let stopped_watch_id = self.context.state.debug_watch.stop(Some(request.watch_id));
+        let stopped_watch_id = self.runtime.state.debug_watch.stop(Some(request.watch_id));
         let mut response = DebugWatchStopResponse::new();
         response.request_id = request.request_id;
         response.watch_id = stopped_watch_id.unwrap_or(request.watch_id);

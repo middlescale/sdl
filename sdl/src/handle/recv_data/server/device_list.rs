@@ -12,7 +12,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         // accumulated while authorization was pending.  Do not clear
         // the flag here: only RegistrationResponse clears CLI/runtime
         // auth-pending state after its authoritative snapshot commits.
-        self.context.reset_peer_epoch_for_auth_pending_recovery();
+        self.runtime.reset_peer_epoch_for_auth_pending_recovery();
         let device_list_update =
             self.prepare_device_list_update(response.device_info_list, response.epoch as _);
         self.apply_gateway_grants(
@@ -31,7 +31,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             return Ok(());
         };
         self.set_device_info_list(device_list_update);
-        self.context.services.control_session.report_client_status();
+        self.runtime.control_session.report_client_status();
         Ok(())
     }
 
@@ -51,7 +51,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             .collect();
         let previous_peers = {
             let previous_peers = match self
-                .context
+                .runtime
                 .state
                 .peers
                 .replace_devices_if_fresh(epoch, next_devices)
@@ -121,20 +121,17 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             }
         }
         for vip in &reset_vips {
-            self.context.services.route_manager.clear_peer(vip);
+            self.runtime.routes().clear_peer(vip);
         }
-        self.context
-            .services
-            .route_manager
-            .retain_peers(&active_vips);
-        self.context
+        self.runtime.routes().retain_peers(&active_vips);
+        self.runtime
             .state
             .peers
             .nat_info_map
             .write()
             .retain(|vip, _| active_vips.contains(vip) && !reset_vips.contains(vip));
         let mut peer_session_ciphers = std::collections::HashMap::with_capacity(ip_list.len());
-        let local_online_session_key = self.context.state.peers.crypto.online_session_key();
+        let local_online_session_key = self.runtime.state.peers.crypto.online_session_key();
         for peer_info in &ip_list {
             let Some(local_online_session_key) = local_online_session_key.as_ref() else {
                 log::warn!("missing local online session key, skip deriving peer session ciphers");
@@ -143,7 +140,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             match crate::util::derive_peer_session_key(
                 local_online_session_key,
                 &peer_info.online_kx_pub,
-                &self.context.config.token,
+                &self.runtime.config.token,
             )
             .and_then(crate::cipher::Cipher::new_key)
             {
@@ -160,27 +157,26 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 }
             }
         }
-        self.context
+        self.runtime
             .state
             .peers
             .crypto
             .rotate_peer_session_ciphers(peer_session_ciphers);
-        self.context
+        self.runtime
             .state
             .peers
             .crypto
             .retain_peers(&identity_plan.active_identities);
-        self.context
-            .state
-            .gateway
-            .sessions
+        self.runtime
+            .data_plane()
+            .gateway_sessions
             .retain_peer_ingress_gateways(&identity_plan.active_identities);
-        self.context
+        self.runtime
             .state
             .peers
             .crypto
             .clear_previous_ciphers_for(&identity_plan.reset_identities);
-        self.context.apply_selected_exit_node_route();
+        self.runtime.apply_selected_exit_node_route();
         self.callback.peer_client_list(
             ip_list
                 .into_iter()

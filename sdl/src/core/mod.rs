@@ -8,18 +8,18 @@ use crate::transport::socket::LocalInterface;
 use crate::util::{address_choose, dns_query_all};
 use anyhow::anyhow;
 pub use bootstrap::Sdl;
-pub(crate) use context::SdlContext;
-pub use context::{ExitNodeLocalState, RenameRequestOutcome};
 pub(crate) use exit_node_route::ExitNodeRoute;
 pub use identity::PeerIdentity;
 pub use peer::{PeerInfo, PeerStatus, PeerTable};
+pub(crate) use runtime::SdlRuntime;
+pub use runtime::{ExitNodeLocalState, RenameRequestOutcome};
 use std::net::{Ipv4Addr, SocketAddr};
 
 mod bootstrap;
-pub(crate) mod context;
 mod exit_node_route;
 mod identity;
 mod peer;
+pub(crate) mod runtime;
 
 pub const PUB_STUN: [&str; 4] = [
     "stun.miwifi.com",

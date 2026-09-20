@@ -1,4 +1,4 @@
-use crate::core::SdlContext;
+use crate::core::SdlRuntime;
 use crate::data_plane::route::RouteKey;
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::CurrentDeviceInfo;
@@ -9,12 +9,12 @@ use std::sync::Arc;
 /// 处理客户端中转包
 #[derive(Clone)]
 pub struct TurnPacketHandler {
-    context: Arc<SdlContext>,
+    runtime: Arc<SdlRuntime>,
 }
 
 impl TurnPacketHandler {
-    pub(crate) fn new(context: Arc<SdlContext>) -> Self {
-        Self { context }
+    pub(crate) fn new(runtime: Arc<SdlRuntime>) -> Self {
+        Self { runtime }
     }
 }
 
@@ -34,7 +34,7 @@ impl PacketHandler for TurnPacketHandler {
                 return Ok(());
             }
             let destination = net_packet.destination();
-            if let Some(route) = self.context.routes().best_route(&destination) {
+            if let Some(route) = self.runtime.routes().best_route(&destination) {
                 if route.addr == route_key.addr {
                     //防止环路
                     log::warn!("来源和目标相同 {:?},{:?}", route_key, net_packet.head());
@@ -42,8 +42,8 @@ impl PacketHandler for TurnPacketHandler {
                 }
                 if route.metric <= ttl {
                     return self
-                        .context
-                        .services
+                        .runtime
+                        .data_plane()
                         .udp_channel
                         .send_by_key(net_packet.buffer(), route.route_key())
                         .context("转发失败");

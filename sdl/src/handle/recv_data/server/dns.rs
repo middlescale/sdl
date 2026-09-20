@@ -6,7 +6,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     ) -> anyhow::Result<()> {
         let response = DnsQueryResponse::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("DnsQueryResponse {:?}", e)))?;
-        let Some(pending) = self.context.state.dns.take_query(response.request_id) else {
+        let Some(pending) = self.runtime.state.dns.take_query(response.request_id) else {
             log::debug!(
                 "drop dns response for unknown request_id={}",
                 response.request_id

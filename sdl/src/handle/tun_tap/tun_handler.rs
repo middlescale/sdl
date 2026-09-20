@@ -201,8 +201,8 @@ pub(crate) fn handle(
             {
                 let dns_client_port = udp_packet.source_port();
                 let dns_payload = udp_packet.payload().to_vec();
-                if let Ok(context) = data_channel.context() {
-                    let profile = context.state.dns.profile.read().clone();
+                if let Ok(runtime) = data_channel.runtime() {
+                    let profile = runtime.state.dns.profile.read().clone();
                     let decision = {
                         let guard = peer_table.read();
                         crate::net::dns::local::resolve_local_query(
@@ -212,7 +212,7 @@ pub(crate) fn handle(
                         )
                     };
                     if let LocalDnsResolution::Answered(dns_response_payload) = decision {
-                        let pending = crate::core::context::PendingDnsQuery::new(
+                        let pending = crate::core::runtime::PendingDnsQuery::new(
                             src_ip,
                             dest_ip,
                             udp_packet.source_port(),

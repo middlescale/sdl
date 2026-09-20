@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 
 use serde_json::Value;
 
-use crate::core::SdlContext;
+use crate::core::SdlRuntime;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteKind;
@@ -12,7 +12,7 @@ use crate::data_plane::use_channel_type::UseChannelType;
 
 #[derive(Clone)]
 pub struct DataChannel {
-    context: Weak<SdlContext>,
+    runtime: Weak<SdlRuntime>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -22,27 +22,21 @@ enum DataPath {
 }
 
 impl DataChannel {
-    pub(crate) fn new(context: Weak<SdlContext>) -> Self {
-        Self { context }
+    pub(crate) fn new(runtime: Weak<SdlRuntime>) -> Self {
+        Self { runtime }
     }
 
     pub fn allows_gateway_relay(&self) -> bool {
-        self.context
+        self.runtime
             .upgrade()
-            .map(|context| {
-                !context
-                    .services
-                    .route_manager
-                    .use_channel_type()
-                    .is_only_p2p()
-            })
+            .map(|runtime| !runtime.routes().use_channel_type().is_only_p2p())
             .unwrap_or(false)
     }
 
     pub fn is_dns_service_ip(&self, vip: &Ipv4Addr) -> bool {
-        self.context
+        self.runtime
             .upgrade()
-            .map(|context| context.state.dns.is_service_ip(*vip))
+            .map(|runtime| runtime.state.dns.is_service_ip(*vip))
             .unwrap_or(false)
     }
 
@@ -51,10 +45,10 @@ impl DataChannel {
         buf: &crate::protocol::NetPacket<B>,
         vip: &Ipv4Addr,
     ) -> io::Result<RouteKind> {
-        let context = self.context()?;
-        let route_manager = context.services.route_manager.clone();
-        let is_gateway_vip = context.state.current_device.load().is_gateway_vip(vip);
-        let peer_channel_mode = context.state.peers.preferred_channel_mode(vip);
+        let runtime = self.runtime()?;
+        let route_manager = runtime.routes().clone();
+        let is_gateway_vip = runtime.state.current_device.load().is_gateway_vip(vip);
+        let peer_channel_mode = runtime.state.peers.preferred_channel_mode(vip);
         let measured_direct_route = if !is_gateway_vip {
             route_manager.activate_peer(vip);
             let (measured_direct_route, has_direct_route) = route_manager.payload_route_read(vip);
@@ -63,10 +57,7 @@ impl DataChannel {
             {
                 // The first packet still follows the normal relay fallback while
                 // control coordinates a direct route in the background.
-                context
-                    .services
-                    .control_session
-                    .request_direct_recovery_for(*vip);
+                runtime.control_session.request_direct_recovery_for(*vip);
             }
             measured_direct_route
         } else {
@@ -79,7 +70,7 @@ impl DataChannel {
             measured_direct_route,
         ) {
             Some(DataPath::P2pUdp(route_key)) => {
-                match self.send_udp(context.as_ref(), buf, route_key) {
+                match self.send_udp(runtime.as_ref(), buf, route_key) {
                     Ok(()) => Ok(RouteKind::P2p),
                     Err(err) => {
                         if !is_definitive_p2p_path_error(&err) {
@@ -99,16 +90,18 @@ impl DataChannel {
                             route_key,
                             err
                         );
-                            let peer_identity = context.state.peers.identity_for_vip(vip);
-                            context.state.gateway.sessions.maybe_send_peer_relay_probe(
-                                *vip,
-                                peer_identity.as_ref(),
-                                context.state.peers.crypto.as_ref(),
-                            );
-                            context
-                                .state
-                                .gateway
-                                .sessions
+                            let peer_identity = runtime.state.peers.identity_for_vip(vip);
+                            runtime
+                                .data_plane()
+                                .gateway_sessions
+                                .maybe_send_peer_relay_probe(
+                                    *vip,
+                                    peer_identity.as_ref(),
+                                    runtime.state.peers.crypto.as_ref(),
+                                );
+                            runtime
+                                .data_plane()
+                                .gateway_sessions
                                 .send_relay_for_peer(peer_identity.as_ref(), buf)?;
                             Ok(RouteKind::GatewayRelay)
                         } else {
@@ -124,16 +117,18 @@ impl DataChannel {
                 }
             }
             Some(DataPath::GatewayRelay) => {
-                let peer_identity = context.state.peers.identity_for_vip(vip);
-                context.state.gateway.sessions.maybe_send_peer_relay_probe(
-                    *vip,
-                    peer_identity.as_ref(),
-                    context.state.peers.crypto.as_ref(),
-                );
-                context
-                    .state
-                    .gateway
-                    .sessions
+                let peer_identity = runtime.state.peers.identity_for_vip(vip);
+                runtime
+                    .data_plane()
+                    .gateway_sessions
+                    .maybe_send_peer_relay_probe(
+                        *vip,
+                        peer_identity.as_ref(),
+                        runtime.state.peers.crypto.as_ref(),
+                    );
+                runtime
+                    .data_plane()
+                    .gateway_sessions
                     .send_relay_for_peer(peer_identity.as_ref(), buf)?;
                 Ok(RouteKind::GatewayRelay)
             }
@@ -149,8 +144,8 @@ impl DataChannel {
         buf: &crate::protocol::NetPacket<B>,
         route: Route,
     ) -> io::Result<()> {
-        let context = self.context()?;
-        self.send_udp(context.as_ref(), buf, route.route_key())
+        let runtime = self.runtime()?;
+        self.send_udp(runtime.as_ref(), buf, route.route_key())
     }
 
     pub fn proxy_dns_query(
@@ -160,8 +155,8 @@ impl DataChannel {
         client_port: u16,
         payload: &[u8],
     ) -> io::Result<()> {
-        let context = self.context()?;
-        let request_id = context
+        let runtime = self.runtime()?;
+        let request_id = runtime
             .state
             .dns
             .remember_query(client_ip, dns_server_ip, client_port);
@@ -169,59 +164,59 @@ impl DataChannel {
             match crate::net::dns::tunnel::build_dns_query_payload(request_id, payload) {
                 Ok(payload) => payload,
                 Err(err) => {
-                    context.state.dns.forget_query(request_id);
+                    runtime.state.dns.forget_query(request_id);
                     return Err(err);
                 }
             };
-        if let Err(err) = context.services.control_session.send_service_payload(
+        if let Err(err) = runtime.control_session.send_service_payload(
             crate::protocol::service_packet::Protocol::DnsQueryRequest,
             &query_payload,
         ) {
-            context.state.dns.forget_query(request_id);
+            runtime.state.dns.forget_query(request_id);
             return Err(io::Error::other(err));
         }
         Ok(())
     }
 
     pub fn emit_debug_watch_event(&self, section: &str, event_type: &str, payload: Value) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.debug_watch.emit(section, event_type, payload);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.debug_watch.emit(section, event_type, payload);
         }
     }
 
     pub fn record_peer_up_traffic(&self, vip: Ipv4Addr, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_peer_up(vip, len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_peer_up(vip, len);
         }
     }
 
     pub fn record_peer_down_traffic(&self, vip: Ipv4Addr, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_peer_down(vip, len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_peer_down(vip, len);
         }
     }
 
     pub fn record_logical_up_traffic(&self, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_logical_up(len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_logical_up(len);
         }
     }
 
     pub fn record_logical_down_traffic(&self, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_logical_down(len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_logical_down(len);
         }
     }
 
     pub fn record_gateway_up_traffic(&self, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_gateway_up(len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_gateway_up(len);
         }
     }
 
     pub fn record_gateway_down_traffic(&self, len: usize) {
-        if let Some(context) = self.context.upgrade() {
-            context.state.data_plane_stats.record_gateway_down(len);
+        if let Some(runtime) = self.runtime.upgrade() {
+            runtime.state.data_plane_stats.record_gateway_down(len);
         }
     }
 
@@ -242,19 +237,19 @@ impl DataChannel {
 
     fn send_udp<B: AsRef<[u8]>>(
         &self,
-        context: &SdlContext,
+        runtime: &SdlRuntime,
         buf: &crate::protocol::NetPacket<B>,
         route_key: RouteKey,
     ) -> io::Result<()> {
-        context
-            .services
+        runtime
+            .data_plane()
             .udp_channel
             .send_by_key(buf.buffer(), route_key)
     }
 
-    pub(crate) fn context(&self) -> io::Result<Arc<SdlContext>> {
-        self.context.upgrade().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "data channel context dropped")
+    pub(crate) fn runtime(&self) -> io::Result<Arc<SdlRuntime>> {
+        self.runtime.upgrade().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "data channel runtime dropped")
         })
     }
 }
