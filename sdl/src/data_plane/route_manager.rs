@@ -10,6 +10,7 @@ use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
+pub use crate::data_plane::route_table::StaleDirectRoute;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::body::ENCRYPTION_RESERVED;
@@ -42,18 +43,12 @@ struct RouteSender {
     udp_channel: UdpChannel,
 }
 
-pub enum StaleDirectRoute {
-    Timeout(Ipv4Addr, Route),
-    Sleep(Duration),
-    None,
-}
-
 pub struct StaleDirectRouteCleanup {
     pub delay: Duration,
 }
 
 impl RouteManager {
-    pub fn new(
+    pub(crate) fn new(
         route_table: Arc<RouteTable>,
         udp_channel: UdpChannel,
         stop_manager: StopManager,
@@ -83,7 +78,8 @@ impl RouteManager {
         Ok(manager)
     }
 
-    pub fn new_detached(route_table: Arc<RouteTable>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new_detached(route_table: Arc<RouteTable>) -> Self {
         Self {
             route_table,
             peer_crypto: Arc::new(PeerCryptoManager::new(0)),
@@ -116,7 +112,7 @@ impl RouteManager {
     }
 
     pub fn latency_first(&self) -> bool {
-        self.route_table.latency_first
+        self.route_table.latency_first()
     }
 
     pub fn add_path_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -384,28 +380,7 @@ impl RouteManager {
     }
 
     pub fn next_stale_direct_route(&self, read_idle: Duration) -> StaleDirectRoute {
-        let mut max = Duration::from_secs(0);
-        let read_guard = self.route_table.route_table.read();
-        let mut has_p2p = false;
-        for (ip, routes) in read_guard.iter() {
-            for (route, time) in routes {
-                if !route.is_p2p() {
-                    continue;
-                }
-                has_p2p = true;
-                let last_read = time.load().elapsed();
-                if last_read >= read_idle {
-                    return StaleDirectRoute::Timeout(*ip, *route);
-                } else if max < last_read {
-                    max = last_read;
-                }
-            }
-        }
-        if !has_p2p {
-            return StaleDirectRoute::None;
-        }
-        let sleep_time = read_idle.checked_sub(max).unwrap_or_default();
-        StaleDirectRoute::Sleep(sleep_time)
+        self.route_table.next_stale_direct_route(read_idle)
     }
 
     pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo) {

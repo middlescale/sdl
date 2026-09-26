@@ -18,12 +18,18 @@ type PeerActivityMap = FnvHashMap<Ipv4Addr, PeerActivity>;
 // map write lock.
 const PEER_ACTIVITY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-pub struct RouteTable {
-    pub(crate) route_table: RwLock<RouteMap>,
+pub(crate) struct RouteTable {
+    routes: RwLock<RouteMap>,
     peer_activity: RwLock<PeerActivityMap>,
     direct_route_keys: RwLock<FnvHashSet<RouteKey>>,
-    pub(crate) latency_first: bool,
-    pub(crate) use_channel_type: AtomicCell<UseChannelType>,
+    latency_first: bool,
+    use_channel_type: AtomicCell<UseChannelType>,
+}
+
+pub enum StaleDirectRoute {
+    Timeout(Ipv4Addr, Route),
+    Sleep(Duration),
+    None,
 }
 
 struct PeerActivity {
@@ -43,7 +49,7 @@ impl PeerActivity {
 impl RouteTable {
     pub(crate) fn new(use_channel_type: UseChannelType, latency_first: bool) -> Self {
         Self {
-            route_table: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
+            routes: RwLock::new(FnvHashMap::with_capacity_and_hasher(64, Default::default())),
             peer_activity: RwLock::new(FnvHashMap::with_capacity_and_hasher(
                 64,
                 Default::default(),
@@ -61,9 +67,36 @@ impl RouteTable {
         self.use_channel_type.load()
     }
 
+    pub fn latency_first(&self) -> bool {
+        self.latency_first
+    }
+
+    pub fn next_stale_direct_route(&self, read_idle: Duration) -> StaleDirectRoute {
+        let mut max = Duration::ZERO;
+        let routes = self.routes.read();
+        let mut has_p2p = false;
+        for (ip, paths) in routes.iter() {
+            for (route, time) in paths {
+                if !route.is_p2p() {
+                    continue;
+                }
+                has_p2p = true;
+                let last_read = time.load().elapsed();
+                if last_read >= read_idle {
+                    return StaleDirectRoute::Timeout(*ip, *route);
+                } else if max < last_read {
+                    max = last_read;
+                }
+            }
+        }
+        if !has_p2p {
+            return StaleDirectRoute::None;
+        }
+        StaleDirectRoute::Sleep(read_idle.checked_sub(max).unwrap_or_default())
+    }
+
     pub fn set_use_channel_type(&self, use_channel_type: UseChannelType) {
-        self.use_channel_type.store(use_channel_type);
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         for routes in route_table.values_mut() {
             routes.retain(|(route, _)| match use_channel_type {
                 UseChannelType::Relay => !route.is_p2p(),
@@ -73,6 +106,9 @@ impl RouteTable {
         }
         route_table.retain(|_, routes| !routes.is_empty());
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        // Admission checks in add_route_ hold the same lock. Publish the new
+        // mode only after incompatible routes have been removed.
+        self.use_channel_type.store(use_channel_type);
     }
 
     pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) {
@@ -84,22 +120,15 @@ impl RouteTable {
     }
 
     fn add_route_(&self, vip: Ipv4Addr, route: Route, only_if_absent: bool) {
+        let mut route_table = self.routes.write();
+        // Keep the mode check and insertion in one critical section with
+        // set_use_channel_type, so an old-mode route cannot arrive after pruning.
         match self.use_channel_type() {
             UseChannelType::Relay if route.is_p2p() => return,
             UseChannelType::P2p if !route.is_p2p() => return,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::Auto => {}
         }
         let key = route.route_key();
-        if only_if_absent {
-            if let Some(list) = self.route_table.read().get(&vip) {
-                for (x, _) in list {
-                    if x.route_key() == key {
-                        return;
-                    }
-                }
-            }
-        }
-        let mut route_table = self.route_table.write();
         let list = route_table
             .entry(vip)
             .or_insert_with(|| Vec::with_capacity(4));
@@ -136,15 +165,17 @@ impl RouteTable {
         }
     }
 
+    #[cfg(test)]
     pub fn get_routes(&self, vip: &Ipv4Addr) -> Option<Vec<Route>> {
-        self.route_table
+        self.routes
             .read()
             .get(vip)
             .map(|v| v.iter().map(|(i, _)| *i).collect())
     }
 
+    #[cfg(test)]
     pub fn get_first_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        self.route_table.read().get(vip).and_then(|routes| {
+        self.routes.read().get(vip).and_then(|routes| {
             routes
                 .iter()
                 // A negative RTT marks a direct route that is being
@@ -158,7 +189,7 @@ impl RouteTable {
     /// liveness has already expired. This keeps forwarding and the public
     /// route view aligned with payload selection while cleanup catches up.
     pub fn get_first_live_route(&self, vip: &Ipv4Addr, stale_timeout: Duration) -> Option<Route> {
-        self.route_table.read().get(vip).and_then(|routes| {
+        self.routes.read().get(vip).and_then(|routes| {
             routes.iter().find_map(|(route, liveness)| {
                 (route.rt >= 0 && (!route.is_p2p() || liveness.load().elapsed() < stale_timeout))
                     .then_some(*route)
@@ -167,14 +198,14 @@ impl RouteTable {
     }
 
     pub fn get_one_p2p_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        self.route_table
+        self.routes
             .read()
             .get(vip)
             .and_then(|v| v.iter().find_map(|(i, _)| i.is_p2p().then_some(*i)))
     }
 
     pub fn get_one_measured_p2p_route(&self, vip: &Ipv4Addr) -> Option<Route> {
-        self.route_table.read().get(vip).and_then(|v| {
+        self.routes.read().get(vip).and_then(|v| {
             v.iter()
                 .find_map(|(i, _)| (i.is_p2p() && i.has_measured_rt()).then_some(*i))
         })
@@ -189,7 +220,7 @@ impl RouteTable {
         vip: &Ipv4Addr,
         stale_timeout: Duration,
     ) -> (Option<Route>, bool) {
-        let route_table = self.route_table.read();
+        let route_table = self.routes.read();
         let Some(routes) = route_table.get(vip) else {
             return (None, false);
         };
@@ -207,7 +238,7 @@ impl RouteTable {
     }
 
     pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        let table = self.route_table.read();
+        let table = self.routes.read();
         for (k, v) in table.iter() {
             for (route, _) in v {
                 if &route.route_key() == route_key && route.is_p2p() {
@@ -223,7 +254,7 @@ impl RouteTable {
     }
 
     pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
-        self.route_table
+        self.routes
             .read()
             .get(vip)
             .map(|routes| {
@@ -235,7 +266,7 @@ impl RouteTable {
     }
 
     pub fn no_need_punch(&self, vip: &Ipv4Addr) -> bool {
-        self.route_table
+        self.routes
             .read()
             .get(vip)
             .map(|v| v.iter().any(|(k, _)| k.is_p2p()))
@@ -243,7 +274,7 @@ impl RouteTable {
     }
 
     pub fn p2p_num(&self, vip: &Ipv4Addr) -> usize {
-        self.route_table
+        self.routes
             .read()
             .get(vip)
             .map(|v| v.iter().filter(|(k, _)| k.is_p2p()).count())
@@ -251,7 +282,7 @@ impl RouteTable {
     }
 
     pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        self.route_table
+        self.routes
             .read()
             .iter()
             .map(|(k, v)| (*k, v.iter().map(|(i, _)| *i).collect()))
@@ -259,7 +290,7 @@ impl RouteTable {
     }
 
     pub fn route_table_one_p2p(&self) -> Vec<(Ipv4Addr, Route)> {
-        let table = self.route_table.read();
+        let table = self.routes.read();
         let mut list = Vec::with_capacity(8);
         for (ip, routes) in table.iter() {
             for (route, _) in routes.iter() {
@@ -270,14 +301,6 @@ impl RouteTable {
             }
         }
         list
-    }
-
-    pub fn route_table_one(&self) -> Vec<(Ipv4Addr, Route)> {
-        self.route_table
-            .read()
-            .iter()
-            .filter_map(|(k, v)| v.first().map(|(route, _)| (*k, *route)))
-            .collect()
     }
 
     /// Records application payload traffic for the UI activity state. Route
@@ -343,7 +366,7 @@ impl RouteTable {
     }
 
     pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        let mut write_guard = self.route_table.write();
+        let mut write_guard = self.routes.write();
         if let Some(routes) = write_guard.get_mut(vip) {
             routes.retain(|(x, _)| x.route_key() != route_key);
             if routes.is_empty() {
@@ -361,7 +384,7 @@ impl RouteTable {
     }
 
     pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
-        if let Some(routes) = self.route_table.read().get(vip) {
+        if let Some(routes) = self.routes.read().get(vip) {
             for (route, time) in routes {
                 if &route.route_key() == route_key {
                     time.store(Instant::now());
@@ -377,7 +400,7 @@ impl RouteTable {
     /// window.
     pub fn invalidate_direct_routes_for_revalidation(&self) -> Vec<(Ipv4Addr, Route)> {
         let now = Instant::now();
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         let mut routes_to_probe = Vec::new();
         for (vip, routes) in route_table.iter_mut() {
             let mut changed = false;
@@ -404,7 +427,7 @@ impl RouteTable {
     /// measurement. A Pong may have refreshed it while its grace timer was
     /// pending, in which case the route is preserved.
     pub fn remove_unmeasured_direct_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         let mut removed = false;
         if let Some(routes) = route_table.get_mut(vip) {
             let before = routes.len();
@@ -431,7 +454,7 @@ impl RouteTable {
     }
 
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         route_table.remove(vip);
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
         drop(route_table);
@@ -439,7 +462,7 @@ impl RouteTable {
     }
 
     pub fn clear_all(&self) {
-        self.route_table.write().clear();
+        self.routes.write().clear();
         self.direct_route_keys.write().clear();
         self.peer_activity.write().clear();
     }
@@ -447,7 +470,7 @@ impl RouteTable {
     /// Drops only direct P2P paths while retaining relay paths as an immediate
     /// fallback after the local underlay has changed.
     pub fn clear_direct_routes(&self) -> Vec<Ipv4Addr> {
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         let mut affected_peers = Vec::new();
         route_table.retain(|vip, routes| {
             let before = routes.len();
@@ -466,7 +489,7 @@ impl RouteTable {
     }
 
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
-        let mut route_table = self.route_table.write();
+        let mut route_table = self.routes.write();
         route_table.retain(|vip, _| valid_peers.contains(vip));
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
         drop(route_table);
@@ -631,6 +654,68 @@ mod tests {
 
         table.remove_route(&vip, direct);
         assert!(!table.has_direct_route_key(&direct));
+    }
+
+    #[test]
+    fn channel_mode_is_published_only_after_route_pruning() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let vip = Ipv4Addr::new(10, 0, 0, 24);
+        let direct = route_key(1024);
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+
+        let write_guard = table.routes.write();
+        let start = Arc::new(Barrier::new(2));
+        let setter = {
+            let table = table.clone();
+            let start = start.clone();
+            thread::spawn(move || {
+                start.wait();
+                table.set_use_channel_type(UseChannelType::Relay);
+            })
+        };
+        start.wait();
+        // The setter is blocked by the table lock; it must not advertise the
+        // new mode while the old direct route is still present.
+        thread::sleep(Duration::from_millis(10));
+        assert_eq!(table.use_channel_type(), UseChannelType::Auto);
+        drop(write_guard);
+        setter.join().unwrap();
+
+        assert_eq!(table.use_channel_type(), UseChannelType::Relay);
+        assert!(!table.has_direct_route_key(&direct));
+        table.add_route(vip, Route::from_default_rt(direct, 1));
+        assert!(!table.has_direct_route_key(&direct));
+    }
+
+    #[test]
+    fn concurrent_mode_switch_and_route_add_leave_no_disallowed_route() {
+        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
+        let vip = Ipv4Addr::new(10, 0, 0, 25);
+        let direct = route_key(1025);
+        let start = Arc::new(Barrier::new(3));
+        let setter = {
+            let table = table.clone();
+            let start = start.clone();
+            thread::spawn(move || {
+                start.wait();
+                table.set_use_channel_type(UseChannelType::Relay);
+            })
+        };
+        let adder = {
+            let table = table.clone();
+            let start = start.clone();
+            thread::spawn(move || {
+                start.wait();
+                table.add_route(vip, Route::from_default_rt(direct, 1));
+            })
+        };
+        start.wait();
+        setter.join().unwrap();
+        adder.join().unwrap();
+
+        assert_eq!(table.use_channel_type(), UseChannelType::Relay);
+        assert!(!table.has_direct_route_key(&direct));
+        assert!(table.get_routes(&vip).is_none());
     }
 
     #[test]
