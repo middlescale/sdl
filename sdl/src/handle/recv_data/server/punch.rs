@@ -251,7 +251,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             } else {
                 let accepted = self
                     .runtime
-                    .data_plane()
+                    .data_plane
                     .punch_coordinator
                     .submit_local(peer_ip, peer_nat_info);
                 if accepted && start.coalesced {

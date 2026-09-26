@@ -13,20 +13,20 @@ use crate::core::runtime::TunSubsystem;
 use crate::core::ExitNodeRoute;
 use crate::core::{
     runtime::{
-        AuthRequestConfig, DataPlaneServices, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem,
-        GatewayState, PeerSubsystem, PendingRenameRequest, PendingRequestTable,
-        RenameRequestOutcome, RuntimeConfig, SdlNodeState, PENDING_REQUEST_TTL_MS,
+        AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewayState,
+        PeerSubsystem, PendingRenameRequest, PendingRequestTable, RenameRequestOutcome,
+        RuntimeConfig, SdlNodeState, PENDING_REQUEST_TTL_MS,
     },
     Config, SdlRuntime,
 };
 use crate::core::{PeerIdentity, PeerInfo};
-use crate::data_plane::data_channel::DataChannel;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
+use crate::data_plane::runtime::DataPlaneRuntime;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::recv_data::RecvDataHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo};
@@ -213,17 +213,11 @@ impl Sdl {
             }));
         }
         let runtime = Arc::new_cyclic(|weak_runtime| {
-            let data_channel = DataChannel::new(weak_runtime.clone());
             let suspended = Arc::new(AtomicCell::new(false));
             let tun_device_lifecycle = {
                 TunDeviceLifecycle::new(
                     stop_manager.clone(),
-                    data_channel.clone(),
-                    current_device.clone(),
-                    gateway_sessions.clone(),
-                    exit_node_route.clone(),
-                    peer_table.clone(),
-                    peer_crypto.clone(),
+                    weak_runtime.clone(),
                     config.compressor,
                     device.clone(),
                 )
@@ -281,7 +275,7 @@ impl Sdl {
                         device_lifecycle: tun_device_lifecycle,
                     },
                 },
-                data_plane: DataPlaneServices {
+                data_plane: DataPlaneRuntime {
                     route_manager: route_manager.clone(),
                     udp_channel: udp_channel.clone(),
                     gateway_sessions: gateway_sessions.clone(),
@@ -488,15 +482,12 @@ impl Sdl {
     pub fn gateway_session_summary(
         &self,
     ) -> crate::data_plane::gateway_session::GatewaySessionSummary {
-        self.runtime.data_plane().gateway_sessions.session_summary()
+        self.runtime.data_plane.gateway_sessions.session_summary()
     }
     pub fn gateway_session_summaries(
         &self,
     ) -> Vec<crate::data_plane::gateway_session::GatewaySessionSummary> {
-        self.runtime
-            .data_plane()
-            .gateway_sessions
-            .session_summaries()
+        self.runtime.data_plane.gateway_sessions.session_summaries()
     }
 
     pub fn peer_relay_health_summary(
@@ -504,13 +495,13 @@ impl Sdl {
         ip: Ipv4Addr,
     ) -> crate::data_plane::gateway_session::PeerRelayHealthSummary {
         self.runtime
-            .data_plane()
+            .data_plane
             .gateway_sessions
             .peer_relay_health_summary(ip)
     }
     pub fn set_gateway_selection(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
         self.runtime
-            .data_plane()
+            .data_plane
             .gateway_sessions
             .set_manual_endpoint(endpoint)
     }

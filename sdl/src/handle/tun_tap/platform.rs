@@ -1,29 +1,19 @@
 use crate::compression::Compressor;
-use crate::core::ExitNodeRoute;
-use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
-use crate::data_plane::peer_crypto::PeerCryptoManager;
+use crate::core::SdlRuntime;
 use crate::handle::tun_tap::DeviceStop;
-use crate::handle::CurrentDeviceInfo;
 use crate::protocol::BUFFER_SIZE;
 use crate::util::StopManager;
 use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::RwLock;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tun_rs::InterruptEvent;
 use tun_rs::SyncDevice;
 
 pub(crate) fn start_simple(
     stop_manager: StopManager,
-    data_channel: &DataChannel,
+    runtime: &Weak<SdlRuntime>,
     device: Arc<SyncDevice>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    exit_node_route: ExitNodeRoute,
-    peer_table: Arc<RwLock<crate::core::PeerTable>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> anyhow::Result<()> {
@@ -48,17 +38,7 @@ pub(crate) fn start_simple(
         });
     }
 
-    if let Err(e) = start_simple0(
-        data_channel,
-        device,
-        &event,
-        current_device,
-        gateway_sessions,
-        exit_node_route,
-        peer_table,
-        peer_crypto,
-        compressor,
-    ) {
+    if let Err(e) = start_simple0(runtime, device, &event, compressor) {
         log::error!("{:?}", e);
     }
     device_stop.stopped();
@@ -69,14 +49,9 @@ pub(crate) fn start_simple(
 }
 
 fn start_simple0(
-    data_channel: &DataChannel,
+    runtime: &Weak<SdlRuntime>,
     device: Arc<SyncDevice>,
     event: &InterruptEvent,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    exit_node_route: ExitNodeRoute,
-    peer_table: Arc<RwLock<crate::core::PeerTable>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
 ) -> anyhow::Result<()> {
     let mut buf = [0; BUFFER_SIZE];
@@ -113,17 +88,15 @@ fn start_simple0(
             }
         };
         buf[..12].fill(0);
+        let Some(runtime) = runtime.upgrade() else {
+            return Ok(());
+        };
         match crate::handle::tun_tap::tun_handler::handle(
-            data_channel,
+            runtime.as_ref(),
             &mut buf,
             len,
             &mut extend,
             &device,
-            current_device.load(),
-            &gateway_sessions,
-            &exit_node_route,
-            &peer_table,
-            &peer_crypto,
             &compressor,
         ) {
             Ok(_) => {}

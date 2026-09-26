@@ -1,16 +1,11 @@
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::compression::Compressor;
-use crate::core::ExitNodeRoute;
-use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
-use crate::data_plane::peer_crypto::PeerCryptoManager;
+use crate::core::SdlRuntime;
 use crate::handle::tun_tap::DeviceStop;
-use crate::handle::CurrentDeviceInfo;
 use crate::util::StopManager;
-use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use tun_rs::SyncDevice;
 
 #[repr(transparent)]
@@ -60,35 +55,20 @@ pub(crate) struct TunDeviceLifecycle {
 #[derive(Clone)]
 struct TunDeviceLifecycleInner {
     stop_manager: StopManager,
-    data_channel: DataChannel,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    exit_node_route: ExitNodeRoute,
-    peer_table: Arc<RwLock<crate::core::PeerTable>>,
-    peer_crypto: Arc<PeerCryptoManager>,
+    runtime: Weak<SdlRuntime>,
     compressor: Compressor,
 }
 
 impl TunDeviceLifecycle {
     pub fn new(
         stop_manager: StopManager,
-        data_channel: DataChannel,
-        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        gateway_sessions: GatewaySessions,
-        exit_node_route: ExitNodeRoute,
-        peer_table: Arc<RwLock<crate::core::PeerTable>>,
-        peer_crypto: Arc<PeerCryptoManager>,
+        runtime: Weak<SdlRuntime>,
         compressor: Compressor,
         device_writer: TunDeviceWriter,
     ) -> Self {
         let inner = TunDeviceLifecycleInner {
             stop_manager,
-            data_channel,
-            current_device,
-            gateway_sessions,
-            exit_node_route,
-            peer_table,
-            peer_crypto,
+            runtime,
             compressor,
         };
         Self {
@@ -117,13 +97,8 @@ impl TunDeviceLifecycle {
         let inner = self.inner.lock().clone();
         crate::handle::tun_tap::tun_handler::start(
             inner.stop_manager,
-            inner.data_channel,
+            inner.runtime,
             device,
-            inner.current_device,
-            inner.gateway_sessions,
-            inner.exit_node_route,
-            inner.peer_table,
-            inner.peer_crypto,
             inner.compressor,
             device_stop,
         )

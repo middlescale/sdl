@@ -252,23 +252,8 @@ fn send_reply_by_route<B: AsRef<[u8]>>(
     let packet_len = packet.buffer().as_ref().len();
     let destination = packet.destination();
     runtime.state.data_plane_stats.record_logical_up(packet_len);
-    if runtime
-        .data_plane()
-        .gateway_sessions
-        .is_gateway_addr(route_key.addr)
-    {
-        runtime
-            .data_plane()
-            .gateway_sessions
-            .send_relay_to_or_active(route_key.addr, packet)?;
+    if runtime.data_plane.send_reply_by_route(packet, route_key)? {
         runtime.state.data_plane_stats.record_gateway_up(packet_len);
-    } else if route_key.protocol().is_udp() {
-        runtime
-            .data_plane()
-            .udp_channel
-            .send_by_key(packet.buffer(), route_key)?;
-    } else {
-        return Err(anyhow!("unsupported reply route {:?}", route_key));
     }
     let gateway_vip = runtime.state.current_device.load().virtual_gateway;
     if destination != gateway_vip {
@@ -357,7 +342,7 @@ impl PacketHandler for ClientPacketHandler {
         }
         if self
             .runtime
-            .data_plane()
+            .data_plane
             .gateway_sessions
             .is_gateway_addr(route_key.addr)
         {
@@ -367,7 +352,7 @@ impl PacketHandler for ClientPacketHandler {
                 .record_gateway_down(packet_len);
             if source != current_device.virtual_gateway {
                 self.runtime
-                    .data_plane()
+                    .data_plane
                     .gateway_sessions
                     .observe_peer_relay_receive(source, route_key);
             }
@@ -609,7 +594,7 @@ impl ClientPacketHandler {
             ControlPacket::PongPacket(pong_packet) => {
                 if self
                     .runtime
-                    .data_plane()
+                    .data_plane
                     .gateway_sessions
                     .handle_gateway_probe_pong(source, route_key, pong_packet.epoch())
                 {
@@ -617,7 +602,7 @@ impl ClientPacketHandler {
                 }
                 if self
                     .runtime
-                    .data_plane()
+                    .data_plane
                     .gateway_sessions
                     .handle_peer_relay_probe_pong(source, route_key, pong_packet.epoch())
                 {
@@ -906,18 +891,15 @@ impl ClientPacketHandler {
                     encrypt_by_route(self.runtime.as_ref(), &source, &mut punch_packet)?;
                     if self
                         .runtime
-                        .data_plane()
+                        .data_plane
                         .punch_coordinator
                         .submit_from_peer(source, peer_nat_info)
                     {
-                        self.runtime
-                            .data_plane()
-                            .udp_channel
-                            .send_by_key(punch_packet.buffer(), route_key)?;
+                        self.runtime.data_plane.send_p2p(&punch_packet, route_key)?;
                     }
                 } else {
                     self.runtime
-                        .data_plane()
+                        .data_plane
                         .punch_coordinator
                         .submit_local(source, peer_nat_info);
                 }

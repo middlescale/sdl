@@ -168,7 +168,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             .crypto
             .retain_peers(&identity_plan.active_identities);
         self.runtime
-            .data_plane()
+            .data_plane
             .gateway_sessions
             .retain_peer_ingress_gateways(&identity_plan.active_identities);
         self.runtime

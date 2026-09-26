@@ -1,20 +1,15 @@
-use crossbeam_utils::atomic::AtomicCell;
-use parking_lot::RwLock;
 use sdl_packet::icmp::icmp::IcmpPacket;
 use sdl_packet::icmp::Kind;
 use sdl_packet::ip::ipv4::packet::IpV4Packet;
 use sdl_packet::ip::ipv4::protocol::Protocol;
 use sdl_packet::udp::udp::UdpPacket;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::{io, thread};
 use tun_rs::SyncDevice;
 
 use crate::compression::Compressor;
-use crate::core::ExitNodeRoute;
-use crate::data_plane::data_channel::DataChannel;
-use crate::data_plane::gateway_session::GatewaySessions;
-use crate::data_plane::peer_crypto::PeerCryptoManager;
+use crate::core::SdlRuntime;
 use crate::data_plane::route_state::RouteKind;
 use crate::handle::tun_tap::DeviceStop;
 use crate::handle::CurrentDeviceInfo;
@@ -41,15 +36,10 @@ fn icmp(device_writer: &SyncDevice, mut ipv4_packet: IpV4Packet<&mut [u8]>) -> a
     Ok(())
 }
 
-pub fn start(
+pub(crate) fn start(
     stop_manager: StopManager,
-    data_channel: DataChannel,
+    runtime: Weak<SdlRuntime>,
     device: Arc<SyncDevice>,
-    current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-    gateway_sessions: GatewaySessions,
-    exit_node_route: ExitNodeRoute,
-    peer_table: Arc<RwLock<crate::core::PeerTable>>,
-    peer_crypto: Arc<PeerCryptoManager>,
     compressor: Compressor,
     device_stop: DeviceStop,
 ) -> io::Result<()> {
@@ -58,13 +48,8 @@ pub fn start(
         .spawn(move || {
             if let Err(e) = crate::handle::tun_tap::start_simple(
                 stop_manager,
-                &data_channel,
+                &runtime,
                 device,
-                current_device,
-                gateway_sessions,
-                exit_node_route,
-                peer_table,
-                peer_crypto,
                 compressor,
                 device_stop,
             ) {
@@ -75,13 +60,10 @@ pub fn start(
     Ok(())
 }
 
-fn broadcast(
-    channel: &DataChannel,
-    net_packet: &NetPacket<&mut [u8]>,
-    current_device: &CurrentDeviceInfo,
-    peer_table: &RwLock<crate::core::PeerTable>,
-    peer_crypto: &PeerCryptoManager,
-) -> anyhow::Result<()> {
+fn broadcast(runtime: &SdlRuntime, net_packet: &NetPacket<&mut [u8]>) -> anyhow::Result<()> {
+    let current_device = runtime.state.current_device.load();
+    let peer_table = &runtime.state.peers.table;
+    let peer_crypto = runtime.state.peers.crypto.as_ref();
     let list: Vec<(Ipv4Addr, crate::core::PeerIdentity)> = peer_table
         .read()
         .values()
@@ -113,15 +95,30 @@ fn broadcast(
         };
         cipher.encrypt_ipv4(&mut peer_packet)?;
 
-        match channel.send_to_peer(&peer_packet, &peer_ip) {
+        match runtime.send_to_peer(&peer_packet, &peer_ip) {
             Ok(RouteKind::P2p) => {
-                channel.record_logical_up_traffic(peer_packet.buffer().len());
-                channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
+                runtime
+                    .state
+                    .data_plane_stats
+                    .record_logical_up(peer_packet.buffer().len());
+                runtime
+                    .state
+                    .data_plane_stats
+                    .record_peer_up(peer_ip, peer_packet.buffer().len());
             }
             Ok(RouteKind::GatewayRelay | RouteKind::Relay) => {
-                channel.record_logical_up_traffic(peer_packet.buffer().len());
-                channel.record_gateway_up_traffic(peer_packet.buffer().len());
-                channel.record_peer_up_traffic(peer_ip, peer_packet.buffer().len());
+                runtime
+                    .state
+                    .data_plane_stats
+                    .record_logical_up(peer_packet.buffer().len());
+                runtime
+                    .state
+                    .data_plane_stats
+                    .record_gateway_up(peer_packet.buffer().len());
+                runtime
+                    .state
+                    .data_plane_stats
+                    .record_peer_up(peer_ip, peer_packet.buffer().len());
             }
             Err(err) => {
                 log::debug!(
@@ -149,18 +146,17 @@ fn overlay_source_for_tun_packet(src_ip: Ipv4Addr, current_device: &CurrentDevic
 /// |12字节开头|ip报文|至少1024字节结尾|
 ///
 pub(crate) fn handle(
-    data_channel: &DataChannel,
+    runtime: &SdlRuntime,
     buf: &mut [u8],
     data_len: usize, //数据总长度=12+ip包长度
     extend: &mut [u8],
     device_writer: &SyncDevice,
-    current_device: CurrentDeviceInfo,
-    gateway_sessions: &GatewaySessions,
-    exit_node_route: &ExitNodeRoute,
-    peer_table: &RwLock<crate::core::PeerTable>,
-    peer_crypto: &PeerCryptoManager,
     compressor: &Compressor,
 ) -> anyhow::Result<()> {
+    let current_device = runtime.state.current_device.load();
+    let exit_node_route = &runtime.state.exit_node.route;
+    let peer_table = &runtime.state.peers.table;
+    let peer_crypto = runtime.state.peers.crypto.as_ref();
     //忽略掉结构不对的情况（ipv6数据、win tap会读到空数据），不然日志打印太多了
     let ipv4_packet = match IpV4Packet::new(&mut buf[12..data_len]) {
         Ok(packet) => packet,
@@ -173,7 +169,7 @@ pub(crate) fn handle(
         let icmp_meta = IcmpPacket::new(ipv4_packet.payload())
             .ok()
             .and_then(|packet| parse_icmp_echo_meta(&packet));
-        data_channel.emit_debug_watch_event(
+        runtime.state.debug_watch.emit(
             "icmp",
             "tun_outbound",
             serde_json::json!({
@@ -194,49 +190,45 @@ pub(crate) fn handle(
     let overlay_src_ip = overlay_source_for_tun_packet(src_ip, &current_device);
     let mut dest_ip = ipv4_packet.destination_ip();
     if ipv4_packet.protocol() == Protocol::Udp {
-        if data_channel.is_dns_service_ip(&dest_ip) {
+        if runtime.is_dns_service_ip(dest_ip) {
             let udp_packet = UdpPacket::new(src_ip, dest_ip, ipv4_packet.payload())?;
             if udp_packet.destination_port() == 53
                 && crate::net::dns::query::is_dns_query_payload(udp_packet.payload())
             {
                 let dns_client_port = udp_packet.source_port();
                 let dns_payload = udp_packet.payload().to_vec();
-                if let Ok(runtime) = data_channel.runtime() {
-                    let profile = runtime.state.dns.profile.read().clone();
-                    let decision = {
-                        let guard = peer_table.read();
-                        crate::net::dns::local::resolve_local_query(
-                            udp_packet.payload(),
-                            profile.as_ref(),
-                            guard.devices(),
-                        )
-                    };
-                    if let LocalDnsResolution::Answered(dns_response_payload) = decision {
-                        let pending = crate::core::runtime::PendingDnsQuery::new(
-                            src_ip,
-                            dest_ip,
-                            udp_packet.source_port(),
-                        );
-                        if let Ok(response_packet) =
-                            crate::net::dns::tunnel::build_dns_response_packet(
-                                &pending,
-                                &dns_response_payload,
-                            )
-                        {
-                            write_full_sync_device(
-                                device_writer,
-                                &response_packet,
-                                "local dns response",
-                            )?;
-                            return Ok(());
-                        }
+                let profile = runtime.state.dns.profile.read().clone();
+                let decision = {
+                    let guard = peer_table.read();
+                    crate::net::dns::local::resolve_local_query(
+                        udp_packet.payload(),
+                        profile.as_ref(),
+                        guard.devices(),
+                    )
+                };
+                if let LocalDnsResolution::Answered(dns_response_payload) = decision {
+                    let pending = crate::core::runtime::PendingDnsQuery::new(
+                        src_ip,
+                        dest_ip,
+                        udp_packet.source_port(),
+                    );
+                    if let Ok(response_packet) = crate::net::dns::tunnel::build_dns_response_packet(
+                        &pending,
+                        &dns_response_payload,
+                    ) {
+                        write_full_sync_device(
+                            device_writer,
+                            &response_packet,
+                            "local dns response",
+                        )?;
+                        return Ok(());
                     }
                 }
                 if let Some(next_hop) = exit_node_route.next_hop_for_external_destination(&dest_ip)
                 {
                     dest_ip = next_hop;
                 } else {
-                    data_channel.proxy_dns_query(src_ip, dest_ip, dns_client_port, &dns_payload)?;
+                    runtime.proxy_dns_query(src_ip, dest_ip, dns_client_port, &dns_payload)?;
                     return Ok(());
                 }
             }
@@ -252,7 +244,7 @@ pub(crate) fn handle(
     net_packet.set_destination(dest_ip);
     if dest_ip == current_device.virtual_gateway {
         if protocol == Protocol::Icmp {
-            data_channel.emit_debug_watch_event(
+            runtime.state.debug_watch.emit(
                 "icmp",
                 "gateway_relay_forward",
                 serde_json::json!({
@@ -262,9 +254,15 @@ pub(crate) fn handle(
                 }),
             );
         }
-        gateway_sessions.send_relay(&net_packet)?;
-        data_channel.record_logical_up_traffic(net_packet.buffer().len());
-        data_channel.record_gateway_up_traffic(net_packet.buffer().len());
+        runtime.data_plane.send_gateway_relay(&net_packet)?;
+        runtime
+            .state
+            .data_plane_stats
+            .record_logical_up(net_packet.buffer().len());
+        runtime
+            .state
+            .data_plane_stats
+            .record_gateway_up(net_packet.buffer().len());
         return Ok(());
     }
     if !Ipv4Addr::is_multicast(&dest_ip)
@@ -305,13 +303,7 @@ pub(crate) fn handle(
     };
     if is_broadcast {
         // 广播 发送到直连目标
-        broadcast(
-            data_channel,
-            &net_packet,
-            &current_device,
-            peer_table,
-            peer_crypto,
-        )?;
+        broadcast(runtime, &net_packet)?;
         return Ok(());
     }
 
@@ -321,15 +313,30 @@ pub(crate) fn handle(
         .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", dest_ip))?;
     let cipher = peer_crypto.current_cipher(&peer_identity)?;
     cipher.encrypt_ipv4(&mut net_packet)?;
-    match data_channel.send_to_peer(&net_packet, &dest_ip) {
+    match runtime.send_to_peer(&net_packet, &dest_ip) {
         Ok(RouteKind::P2p) => {
-            data_channel.record_logical_up_traffic(net_packet.buffer().len());
-            data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
+            runtime
+                .state
+                .data_plane_stats
+                .record_logical_up(net_packet.buffer().len());
+            runtime
+                .state
+                .data_plane_stats
+                .record_peer_up(dest_ip, net_packet.buffer().len());
         }
         Ok(RouteKind::GatewayRelay | RouteKind::Relay) => {
-            data_channel.record_logical_up_traffic(net_packet.buffer().len());
-            data_channel.record_gateway_up_traffic(net_packet.buffer().len());
-            data_channel.record_peer_up_traffic(dest_ip, net_packet.buffer().len());
+            runtime
+                .state
+                .data_plane_stats
+                .record_logical_up(net_packet.buffer().len());
+            runtime
+                .state
+                .data_plane_stats
+                .record_gateway_up(net_packet.buffer().len());
+            runtime
+                .state
+                .data_plane_stats
+                .record_peer_up(dest_ip, net_packet.buffer().len());
         }
         Err(err) => {
             return Err(err.into());

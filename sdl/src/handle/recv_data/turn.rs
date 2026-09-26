@@ -43,9 +43,8 @@ impl PacketHandler for TurnPacketHandler {
                 if route.metric <= ttl {
                     return self
                         .runtime
-                        .data_plane()
-                        .udp_channel
-                        .send_by_key(net_packet.buffer(), route.route_key())
+                        .data_plane
+                        .send_p2p(&net_packet, route.route_key())
                         .context("转发失败");
                 }
             }

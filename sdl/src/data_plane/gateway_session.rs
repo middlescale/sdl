@@ -1830,7 +1830,7 @@ impl GatewaySessions {
     /// Records the gateway that most recently delivered relay traffic for a peer.
     ///
     /// This is only a relay fallback hint. Measured P2P routes remain preferred by
-    /// `DataChannel`, and the hint expires so a peer can move to another gateway.
+    /// `SdlRuntime`, and the hint expires so a peer can move to another gateway.
     pub fn remember_peer_ingress_gateway(&self, peer: PeerIdentity, endpoint: SocketAddr) {
         if !self.sessions.lock().contains_key(&endpoint) {
             return;
@@ -1991,6 +1991,18 @@ impl GatewaySessions {
             .unwrap_or(false)
     }
 
+    /// Best-effort, rate-limited end-to-end health probe for a peer relay path.
+    ///
+    /// This is called immediately before normal payload is relayed to `peer_ip`.
+    /// When a current peer cipher is available, it emits an encrypted control
+    /// Ping through that peer's ingress gateway (or the active gateway fallback)
+    /// at most once per [`PEER_RELAY_PROBE_INTERVAL_MS`]. The matching Pong is
+    /// consumed by [`Self::handle_peer_relay_probe_pong`] and updates the peer's
+    /// relay-health summary.
+    ///
+    /// Probe construction, encryption, or sending failures are intentionally
+    /// non-fatal: they are diagnostic signals and must not prevent the payload
+    /// relay attempt that follows this call.
     pub fn maybe_send_peer_relay_probe(
         &self,
         peer_ip: Ipv4Addr,

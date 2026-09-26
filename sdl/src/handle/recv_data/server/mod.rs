@@ -116,7 +116,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
         if !self.runtime.control_session.is_control_addr(route_key.addr)
             && !self
                 .runtime
-                .data_plane()
+                .data_plane
                 .gateway_sessions
                 .is_gateway_addr(route_key.addr)
         {
@@ -181,7 +181,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                         let destination = net_packet.destination();
                         let from_gateway = self
                             .runtime
-                            .data_plane()
+                            .data_plane
                             .gateway_sessions
                             .is_gateway_addr(route_key.addr);
                         let from_gateway_peer =
@@ -189,7 +189,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                         if from_gateway_peer {
                             if let Some(peer) = self.runtime.state.peers.identity_for_vip(&source) {
                                 self.runtime
-                                    .data_plane()
+                                    .data_plane
                                     .gateway_sessions
                                     .remember_peer_ingress_gateway(peer, route_key.addr);
                             }
@@ -331,7 +331,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             .data_plane_stats
             .record_logical_up(packet_len);
         self.runtime
-            .data_plane()
+            .data_plane
             .gateway_sessions
             .send_relay_to_or_active(ingress_gateway, packet)?;
         self.runtime
@@ -473,7 +473,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 // before treating it as a generic route-measurement Pong.
                 if self
                     .runtime
-                    .data_plane()
+                    .data_plane
                     .gateway_sessions
                     .handle_gateway_probe_pong(net_packet.source(), route_key, pong_packet.epoch())
                 {
@@ -488,7 +488,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     self.runtime.control_session.is_control_addr(route_key.addr)
                         || self
                             .runtime
-                            .data_plane()
+                            .data_plane
                             .gateway_sessions
                             .is_gateway_addr(route_key.addr);
                 let learned_metric = if from_control_or_gateway {

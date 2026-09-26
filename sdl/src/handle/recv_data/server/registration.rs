@@ -132,7 +132,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 }
             }
             self.runtime
-                .data_plane()
+                .data_plane
                 .gateway_sessions
                 .trigger_connect_now();
 
@@ -161,7 +161,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 // paths use the committed VIP without adding an extra round for
                 // unchanged registrations.
                 self.runtime
-                    .data_plane()
+                    .data_plane
                     .gateway_sessions
                     .trigger_connect_now();
             }
@@ -183,7 +183,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     .runtime
                     .control_session
                     .send_refresh_gateway_grant_request(
-                        &self.runtime.data_plane().gateway_sessions,
+                        &self.runtime.data_plane.gateway_sessions,
                         false,
                     ) {
                     Ok(_) => {

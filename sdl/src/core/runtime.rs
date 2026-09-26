@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::io;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -17,13 +18,14 @@ use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::RouteKey;
 use crate::data_plane::route_manager::RouteManager;
+use crate::data_plane::route_state::RouteKind;
+use crate::data_plane::runtime::{is_definitive_p2p_path_error, DataPlaneRuntime, PayloadPath};
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::NatInfo;
-use crate::nat::punch_workers::PunchCoordinator;
 use crate::nat::NatTest;
+use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
-use crate::transport::udp_channel::UdpChannel;
 use crate::tun_device::create_device;
 use crate::tun_device::lifecycle::TunDeviceLifecycle;
 use crate::util::DebugWatch;
@@ -370,26 +372,15 @@ pub(crate) struct SdlNodeState {
     pub(crate) tun: TunSubsystem,
 }
 
-// Active runtime components that own transport, path-maintenance, or probing
-// behavior.  Keeping them separate from `SdlNodeState` makes message-sending
-// and lifecycle work explicit at call sites.
-#[derive(Clone)]
-pub(crate) struct DataPlaneServices {
-    pub(crate) route_manager: RouteManager,
-    pub(crate) udp_channel: UdpChannel,
-    pub(crate) gateway_sessions: GatewaySessions,
-    pub(crate) punch_coordinator: PunchCoordinator,
-}
-
-// `SdlRuntime` is intentionally shallow-cloneable: state and services either
-// wrap `Arc` state or local handles whose `Clone` implementations share inner
-// state. Keep new fields on that model; this type is cloned into callbacks and
-// workers.
+// `SdlRuntime` is intentionally shallow-cloneable: node state and active
+// runtime components either wrap `Arc` state or local handles whose `Clone`
+// implementations share inner state. Keep new fields on that model; this type
+// is cloned into callbacks and workers.
 #[derive(Clone)]
 pub(crate) struct SdlRuntime {
     pub(crate) config: Arc<RuntimeConfig>,
     pub(crate) state: SdlNodeState,
-    pub(crate) data_plane: DataPlaneServices,
+    pub(crate) data_plane: DataPlaneRuntime,
     pub(crate) control_session: ControlSession,
     pub(crate) nat_test: NatTest,
 }
@@ -406,12 +397,116 @@ impl SdlRuntime {
         &self.data_plane.route_manager
     }
 
-    pub(crate) fn data_plane(&self) -> &DataPlaneServices {
-        &self.data_plane
-    }
-
     pub(crate) fn control_session(&self) -> &ControlSession {
         &self.control_session
+    }
+
+    pub(crate) fn is_dns_service_ip(&self, vip: Ipv4Addr) -> bool {
+        self.state.dns.is_service_ip(vip)
+    }
+
+    pub(crate) fn send_to_peer<B: AsRef<[u8]>>(
+        &self,
+        packet: &NetPacket<B>,
+        vip: &Ipv4Addr,
+    ) -> io::Result<RouteKind> {
+        let is_gateway_vip = self.state.current_device.load().is_gateway_vip(vip);
+        let peer_channel_mode = self.state.peers.preferred_channel_mode(vip);
+        let route_plan =
+            self.data_plane
+                .prepare_peer_payload_route(vip, is_gateway_vip, peer_channel_mode);
+        if route_plan.direct_recovery_requested {
+            // The first payload keeps the normal relay fallback while control
+            // coordinates a direct route in the background.
+            self.control_session.request_direct_recovery_for(*vip);
+        }
+        match route_plan.path {
+            Some(PayloadPath::P2pUdp(route_key)) => {
+                match self.data_plane.send_p2p(packet, route_key) {
+                    Ok(()) => Ok(RouteKind::P2p),
+                    Err(err) if !is_definitive_p2p_path_error(&err) => {
+                        log::debug!(
+                            "p2p send failed for {}, preserving route {:?}: {:?}",
+                            vip,
+                            route_key,
+                            err
+                        );
+                        Err(err)
+                    }
+                    Err(err) => {
+                        self.data_plane.mark_p2p_path_failed(vip, route_key);
+                        if !route_plan.allows_gateway_relay {
+                            log::warn!(
+                            "p2p send failed for {}, removed route {:?}, relay fallback unavailable: {:?}",
+                            vip,
+                            route_key,
+                            err
+                        );
+                            return Err(err);
+                        }
+                        log::warn!(
+                        "p2p send failed for {}, removed route {:?}, falling back to relay: {:?}",
+                        vip,
+                        route_key,
+                        err
+                    );
+                        self.send_peer_relay(*vip, packet)?;
+                        Ok(RouteKind::GatewayRelay)
+                    }
+                }
+            }
+            Some(PayloadPath::GatewayRelay) => {
+                self.send_peer_relay(*vip, packet)?;
+                Ok(RouteKind::GatewayRelay)
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("peer route not found: {vip}"),
+            )),
+        }
+    }
+
+    fn send_peer_relay<B: AsRef<[u8]>>(
+        &self,
+        vip: Ipv4Addr,
+        packet: &NetPacket<B>,
+    ) -> io::Result<()> {
+        let peer_identity = self.state.peers.identity_for_vip(&vip);
+        self.data_plane.send_peer_relay(
+            vip,
+            peer_identity.as_ref(),
+            self.state.peers.crypto.as_ref(),
+            packet,
+        )
+    }
+
+    pub(crate) fn proxy_dns_query(
+        &self,
+        client_ip: Ipv4Addr,
+        dns_server_ip: Ipv4Addr,
+        client_port: u16,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let request_id = self
+            .state
+            .dns
+            .remember_query(client_ip, dns_server_ip, client_port);
+        let query_payload =
+            match crate::net::dns::tunnel::build_dns_query_payload(request_id, payload) {
+                Ok(payload) => payload,
+                Err(err) => {
+                    self.state.dns.forget_query(request_id);
+                    return Err(err);
+                }
+            };
+        if let Err(err) = self.control_session.send_service_payload(
+            crate::protocol::service_packet::Protocol::DnsQueryRequest,
+            &query_payload,
+        ) {
+            self.state.dns.forget_query(request_id);
+            return Err(io::Error::other(err));
+        }
+        Ok(())
     }
 
     pub(crate) fn block_data_plane_for_auth_pending(&self) {
@@ -426,7 +521,7 @@ impl SdlRuntime {
         self.routes().clear_all_paths();
         self.state
             .gateway
-            .reset_for_auth_pending(&self.data_plane().gateway_sessions);
+            .reset_for_auth_pending(&self.data_plane.gateway_sessions);
         self.state.dns.reset_for_auth_pending();
         self.state.pending_rename_requests.clear();
         self.state.exit_node.reset_for_auth_pending();
@@ -485,7 +580,7 @@ impl SdlRuntime {
 
     pub(crate) fn is_known_udp_source(&self, addr: std::net::SocketAddr) -> bool {
         self.control_session.is_control_addr(addr)
-            || self.data_plane().gateway_sessions.is_gateway_addr(addr)
+            || self.data_plane.gateway_sessions.is_gateway_addr(addr)
             || self.nat_test.has_pending_stun_server_addr(addr)
             || self
                 .data_plane
@@ -717,8 +812,8 @@ impl SdlRuntime {
     }
 
     fn snapshot_gateway(&self) -> Value {
-        let summary = self.data_plane().gateway_sessions.session_summary();
-        let grant = self.data_plane().gateway_sessions.current_grant_snapshot();
+        let summary = self.data_plane.gateway_sessions.session_summary();
+        let grant = self.data_plane.gateway_sessions.current_grant_snapshot();
         json!({
             "configured": summary.configured,
             "authenticated": summary.authenticated,
@@ -765,7 +860,7 @@ impl SdlRuntime {
                 .values()
                 .map(|peer| {
                     let relay_health = self
-                        .data_plane()
+                        .data_plane
                         .gateway_sessions
                         .peer_relay_health_summary(peer.virtual_ip);
                     json!({
