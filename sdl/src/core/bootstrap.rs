@@ -13,9 +13,9 @@ use crate::core::runtime::TunSubsystem;
 use crate::core::ExitNodeRoute;
 use crate::core::{
     runtime::{
-        AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, GatewayState,
-        PeerSubsystem, PendingRenameRequest, PendingRequestTable, RenameRequestOutcome,
-        RuntimeConfig, SdlNodeState, PENDING_REQUEST_TTL_MS,
+        AuthRequestConfig, DnsSubsystem, ExitNodeLocalState, ExitNodeSubsystem, PeerSubsystem,
+        PendingRenameRequest, PendingRequestTable, RenameRequestOutcome, RuntimeConfig,
+        SdlNodeState, PENDING_REQUEST_TTL_MS,
     },
     Config, SdlRuntime,
 };
@@ -233,9 +233,7 @@ impl Sdl {
                         crypto: peer_crypto.clone(),
                         probe_tracker: peer_probe_tracker.clone(),
                     },
-                    gateway: GatewayState {
-                        grant_policy_rev: gateway_grant_policy_rev.clone(),
-                    },
+                    gateway_grant_policy_rev: gateway_grant_policy_rev.clone(),
                     dns: DnsSubsystem {
                         profile: Arc::new(RwLock::new(None::<DnsProfile>)),
                         pending_queries: Arc::new(PendingRequestTable::new(PENDING_REQUEST_TTL_MS)),
@@ -500,10 +498,7 @@ impl Sdl {
             .peer_relay_health_summary(ip)
     }
     pub fn set_gateway_selection(&self, endpoint: Option<SocketAddr>) -> anyhow::Result<()> {
-        self.runtime
-            .data_plane
-            .gateway_sessions
-            .set_manual_endpoint(endpoint)
+        self.runtime.set_gateway_selection(endpoint)
     }
     pub fn use_channel_type(&self) -> crate::data_plane::use_channel_type::UseChannelType {
         self.runtime.routes().use_channel_type()

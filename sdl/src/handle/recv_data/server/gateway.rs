@@ -14,8 +14,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 .clear_gateway_grant();
             self.runtime
                 .state
-                .gateway
-                .grant_policy_rev
+                .gateway_grant_policy_rev
                 .store(response.gateway_policy_rev, Ordering::Relaxed);
             log::warn!(
                 "gateway grant revoked by refresh response: {}",
@@ -30,15 +29,13 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 let current_policy_rev = self
                     .runtime
                     .state
-                    .gateway
-                    .grant_policy_rev
+                    .gateway_grant_policy_rev
                     .load(Ordering::Relaxed);
                 if should_apply_gateway_policy_rev(current_policy_rev, response.gateway_policy_rev)
                 {
                     self.runtime
                         .state
-                        .gateway
-                        .grant_policy_rev
+                        .gateway_grant_policy_rev
                         .store(response.gateway_policy_rev, Ordering::Relaxed);
                 }
             }
@@ -86,8 +83,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         let current_policy_rev = self
             .runtime
             .state
-            .gateway
-            .grant_policy_rev
+            .gateway_grant_policy_rev
             .load(Ordering::Relaxed);
         if !should_apply_gateway_policy_rev(current_policy_rev, incoming_policy_rev) {
             log::info!(
@@ -107,8 +103,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             {
                 self.runtime
                     .state
-                    .gateway
-                    .grant_policy_rev
+                    .gateway_grant_policy_rev
                     .store(incoming_policy_rev, Ordering::Relaxed);
                 log::warn!(
                     "gateway grant update omitted grants; retaining cached gateway grant policy_rev={}",
@@ -122,8 +117,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 .clear_gateway_grant();
             self.runtime
                 .state
-                .gateway
-                .grant_policy_rev
+                .gateway_grant_policy_rev
                 .store(incoming_policy_rev, Ordering::Relaxed);
             log::info!("gateway grant cleared");
             return;
@@ -135,8 +129,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         );
         self.runtime
             .state
-            .gateway
-            .grant_policy_rev
+            .gateway_grant_policy_rev
             .store(incoming_policy_rev, Ordering::Relaxed);
         log::info!(
             "gateway grants applied policy_rev={} count={} gateways={:?}",
