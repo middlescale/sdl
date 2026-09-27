@@ -25,7 +25,6 @@ use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
-use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::runtime::DataPlaneRuntime;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::handle::recv_data::RecvDataHandler;
@@ -129,12 +128,9 @@ impl Sdl {
             Arc::new(RwLock::new(HashMap::with_capacity(16)));
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
         let gateway_grant_policy_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let route_table = Arc::new(RouteTable::new(
+        let route_manager = RouteManager::new(
             config.use_channel_type,
             config.latency_first,
-        ));
-        let route_manager = RouteManager::new(
-            route_table.clone(),
             udp_channel.clone(),
             stop_manager.clone(),
             current_device.clone(),
@@ -474,7 +470,7 @@ impl Sdl {
     pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
         self.runtime.routes().peer_for_direct_route(route_key)
     }
-    pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
+    pub(crate) fn route_snapshot(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.runtime.routes().snapshot_routes()
     }
     pub fn gateway_session_summary(

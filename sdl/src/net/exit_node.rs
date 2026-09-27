@@ -825,7 +825,7 @@ fn collect_auto_excludes(runtime: &Sdl, selected_identity: Option<&PeerIdentity>
             }
         }
     }
-    for (_peer_ip, routes) in runtime.route_table() {
+    for (_peer_ip, routes) in runtime.route_snapshot() {
         for route in routes {
             if route.is_p2p() {
                 add_socket_addr_exclude(&mut excludes, route.addr);

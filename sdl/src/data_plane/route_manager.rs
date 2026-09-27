@@ -49,7 +49,8 @@ pub struct StaleDirectRouteCleanup {
 
 impl RouteManager {
     pub(crate) fn new(
-        route_table: Arc<RouteTable>,
+        use_channel_type: UseChannelType,
+        latency_first: bool,
         udp_channel: UdpChannel,
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
@@ -60,6 +61,7 @@ impl RouteManager {
         stale_direct_timeout: Duration,
         peer_table: Arc<RwLock<crate::core::PeerTable>>,
     ) -> anyhow::Result<Self> {
+        let route_table = Arc::new(RouteTable::new(use_channel_type, latency_first));
         let manager = Self {
             route_table,
             peer_crypto,
@@ -203,11 +205,11 @@ impl RouteManager {
     }
 
     pub fn snapshot_routes(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
-        self.route_table.route_table()
+        self.route_table.snapshot_routes()
     }
 
     pub fn snapshot_direct_routes(&self) -> Vec<(Ipv4Addr, Route)> {
-        self.route_table.route_table_one_p2p()
+        self.route_table.snapshot_direct_routes()
     }
 
     /// Records application traffic for the peer activity display.
@@ -266,7 +268,7 @@ impl RouteManager {
         virtual_gateway: Ipv4Addr,
     ) -> Vec<(Ipv4Addr, Vec<RouteState>)> {
         self.route_table
-            .route_table()
+            .snapshot_routes()
             .into_iter()
             .map(|(peer_ip, routes)| {
                 let states = routes

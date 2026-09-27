@@ -281,7 +281,7 @@ impl RouteTable {
             .unwrap_or(0)
     }
 
-    pub fn route_table(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
+    pub fn snapshot_routes(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.routes
             .read()
             .iter()
@@ -289,7 +289,7 @@ impl RouteTable {
             .collect()
     }
 
-    pub fn route_table_one_p2p(&self) -> Vec<(Ipv4Addr, Route)> {
+    pub fn snapshot_direct_routes(&self) -> Vec<(Ipv4Addr, Route)> {
         let table = self.routes.read();
         let mut list = Vec::with_capacity(8);
         for (ip, routes) in table.iter() {
@@ -732,7 +732,7 @@ mod tests {
 
         assert!(table.get_first_route(&vip).is_none());
         assert!(!table.has_direct_route_key(&direct));
-        assert!(table.route_table().is_empty());
+        assert!(table.snapshot_routes().is_empty());
     }
 
     #[test]
