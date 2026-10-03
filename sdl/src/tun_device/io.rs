@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tun_rs::SyncDevice;
 
-use crate::tun_device::lifecycle::TunDeviceWriter;
+use crate::tun_device::TunDeviceWriter;
 
 pub(crate) fn write_full_device(
     device: &TunDeviceWriter,

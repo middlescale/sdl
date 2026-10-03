@@ -9,7 +9,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::control::ControlSession;
-use crate::core::runtime::TunSubsystem;
 use crate::core::ExitNodeRoute;
 use crate::core::{
     runtime::{
@@ -34,7 +33,7 @@ use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
 use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
-use crate::tun_device::lifecycle::{TunDeviceLifecycle, TunDeviceWriter};
+use crate::tun_device::TunSubsystem;
 use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
 use crate::{ensure_rustls_crypto_provider, nat, DnsProfile, SdlCallback};
 
@@ -58,7 +57,6 @@ impl Sdl {
     fn init<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);
-        let device = TunDeviceWriter::default();
         let device_signing_key = load_or_create_device_signing_key(&config.device_id)?;
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
@@ -209,16 +207,11 @@ impl Sdl {
             }));
         }
         let runtime = Arc::new_cyclic(|weak_runtime| {
-            let suspended = Arc::new(AtomicCell::new(false));
-            let tun_device_lifecycle = {
-                TunDeviceLifecycle::new(
-                    stop_manager.clone(),
-                    weak_runtime.clone(),
-                    config.compressor,
-                    device.clone(),
-                )
-            };
-
+            let tun = TunSubsystem::new(
+                stop_manager.clone(),
+                weak_runtime.clone(),
+                config.compressor,
+            );
             SdlRuntime {
                 config: runtime_config.clone(),
                 state: SdlNodeState {
@@ -263,11 +256,7 @@ impl Sdl {
                     current_device: current_device.clone(),
                     data_plane_stats: data_plane_stats.clone(),
                     debug_watch: debug_watch.clone(),
-                    tun: TunSubsystem {
-                        suspended,
-                        lifecycle: Arc::new(Mutex::new(())),
-                        device_lifecycle: tun_device_lifecycle,
-                    },
+                    tun,
                 },
                 data_plane: DataPlaneRuntime {
                     route_manager: route_manager.clone(),
@@ -286,7 +275,11 @@ impl Sdl {
                 runtime.revert_dns_on_shutdown();
             })?
         };
-        let handler = RecvDataHandler::new(runtime.clone(), device, callback.clone());
+        let handler = RecvDataHandler::new(
+            runtime.clone(),
+            runtime.state.tun.writer(),
+            callback.clone(),
+        );
         let control_handler = handler.clone();
         {
             let handler = handler.clone();
@@ -432,7 +425,7 @@ impl Sdl {
         self.runtime.state.dns.primary_service_ip()
     }
     pub fn tun_device_name(&self) -> Option<String> {
-        self.runtime.state.tun.device_lifecycle.device_name()
+        self.runtime.state.tun.device_name()
     }
     pub fn control_server_addr(&self) -> std::net::SocketAddr {
         self.runtime.control_session.server_addr()

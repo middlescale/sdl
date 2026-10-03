@@ -12,6 +12,7 @@ libc = "0.2.137"
 crossbeam-utils = "0.8"
 crossbeam-epoch = "0.9.15"
 parking_lot = "0.12.1"
+arc-swap = "1.7.1"
 rand = "0.8.5"
 sha2 = { version = "0.10.6", features = ["oid"] }
 curve25519-dalek = "4.1.3"

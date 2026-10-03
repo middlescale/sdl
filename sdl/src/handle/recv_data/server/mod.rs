@@ -43,7 +43,7 @@ use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
 use crate::tun_device::io::write_full_device;
-use crate::tun_device::lifecycle::TunDeviceWriter;
+use crate::tun_device::TunDeviceWriter;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
 use crate::{proto, DnsProfile, PeerClientInfo};
 

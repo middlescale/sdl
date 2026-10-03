@@ -11,7 +11,7 @@ use crate::handle::recv_data::server::ServerPacketHandler;
 use crate::handle::recv_data::turn::TurnPacketHandler;
 use crate::handle::{CurrentDeviceInfo, SELF_IP};
 use crate::protocol::{NetPacket, HEAD_LEN};
-use crate::tun_device::lifecycle::TunDeviceWriter;
+use crate::tun_device::TunDeviceWriter;
 
 mod client;
 mod server;

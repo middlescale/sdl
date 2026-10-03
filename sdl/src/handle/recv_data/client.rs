@@ -28,7 +28,7 @@ use crate::protocol::{
     control_packet, ip_turn_packet, other_turn_packet, NetPacket, Protocol, MAX_TTL,
 };
 use crate::tun_device::io::write_full_device;
-use crate::tun_device::lifecycle::TunDeviceWriter;
+use crate::tun_device::TunDeviceWriter;
 use crate::util::icmp_debug::{parse_icmp_echo_meta, IcmpEchoMeta};
 
 static UNKNOWN_PEER_DROP_COUNT: AtomicU64 = AtomicU64::new(0);

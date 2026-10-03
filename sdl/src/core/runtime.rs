@@ -26,7 +26,7 @@ use crate::nat::NatTest;
 use crate::protocol::NetPacket;
 use crate::transport::connect_protocol::ConnectProtocol;
 use crate::tun_device::create_device;
-use crate::tun_device::lifecycle::TunDeviceLifecycle;
+use crate::tun_device::{TunSubsystem, TunTransition};
 use crate::util::DebugWatch;
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
@@ -331,13 +331,6 @@ impl ExitNodeSubsystem {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct TunSubsystem {
-    pub(crate) suspended: Arc<AtomicCell<bool>>,
-    pub(crate) lifecycle: Arc<Mutex<()>>,
-    pub(crate) device_lifecycle: TunDeviceLifecycle,
-}
-
 // State owned by the local node.  These components primarily hold observable
 // runtime state; their APIs may update that state but do not own background
 // transport lifecycle.
@@ -583,36 +576,40 @@ impl SdlRuntime {
     }
 
     pub(crate) fn is_suspended(&self) -> bool {
-        self.state.tun.suspended.load()
+        self.state.tun.is_suspended()
     }
 
     pub(crate) fn suspend(&self) {
-        let _guard = self.state.tun.lifecycle.lock();
-        self.state.tun.suspended.store(true);
+        let mut tun = self.state.tun.transition();
+        tun.set_suspended(true);
         self.clear_applied_dns_profile();
-        self.state.tun.device_lifecycle.stop();
+        tun.stop_device();
     }
 
     pub(crate) fn resume<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
-        let _guard = self.state.tun.lifecycle.lock();
-        self.state.tun.suspended.store(false);
-        self.rebuild_tun_locked(callback)
+        let mut tun = self.state.tun.transition();
+        tun.set_suspended(false);
+        self.rebuild_tun_locked(&mut tun, callback)
     }
 
     pub(crate) fn sync_tun_with_current_device<Call: SdlCallback>(
         &self,
         callback: &Call,
     ) -> anyhow::Result<()> {
-        let _guard = self.state.tun.lifecycle.lock();
-        if self.state.tun.suspended.load() {
+        let mut tun = self.state.tun.transition();
+        if tun.is_suspended() {
             self.clear_applied_dns_profile();
-            self.state.tun.device_lifecycle.stop();
+            tun.stop_device();
             return Ok(());
         }
-        self.rebuild_tun_locked(callback)
+        self.rebuild_tun_locked(&mut tun, callback)
     }
 
-    fn rebuild_tun_locked<Call: SdlCallback>(&self, callback: &Call) -> anyhow::Result<()> {
+    fn rebuild_tun_locked<Call: SdlCallback>(
+        &self,
+        tun: &mut TunTransition<'_>,
+        callback: &Call,
+    ) -> anyhow::Result<()> {
         let current_device = self.state.current_device.load();
         if current_device.virtual_ip.is_unspecified()
             || current_device.virtual_gateway.is_unspecified()
@@ -621,7 +618,7 @@ impl SdlRuntime {
             return Ok(());
         }
         self.clear_applied_dns_profile();
-        self.state.tun.device_lifecycle.stop();
+        tun.stop_device();
         let device_config = DeviceConfig::new(
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             self.config.device_name.clone(),
@@ -636,7 +633,7 @@ impl SdlRuntime {
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         self.apply_dns_profile(&tun_name, callback);
-        self.state.tun.device_lifecycle.start(device)?;
+        tun.start_device(device)?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         {
             let tun_info = crate::handle::callback::DeviceInfo::new(tun_name, "".into());
