@@ -3,15 +3,12 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tun_rs::SyncDevice;
 
-use crate::{DeviceConfig, ErrorInfo, ErrorType, SdlCallback};
+use crate::{DeviceConfig, ErrorInfo, ErrorType};
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const DEFAULT_TUN_NAME: &str = "sdl-tun";
 
-pub fn create_device<Call: SdlCallback>(
-    config: DeviceConfig,
-    _call: &Call,
-) -> Result<Arc<SyncDevice>, ErrorInfo> {
+pub fn create_device(config: DeviceConfig) -> Result<Arc<SyncDevice>, ErrorInfo> {
     let device = match create_sync_device(&config) {
         Ok(device) => device,
         Err(e) => {

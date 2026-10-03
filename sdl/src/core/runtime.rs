@@ -628,7 +628,7 @@ impl SdlRuntime {
             current_device.virtual_gateway,
             current_device.virtual_network,
         );
-        let device = create_device(device_config, callback).map_err(|e| anyhow!("{}", e))?;
+        let device = create_device(device_config).map_err(|e| anyhow!("{}", e))?;
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
         let tun_name = device.name().unwrap_or_else(|_| "sdl-tun".to_string());
         #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
