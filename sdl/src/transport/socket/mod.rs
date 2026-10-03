@@ -27,16 +27,16 @@ pub async fn connect_tcp(
     bind_port: u16,
     default_interface: &LocalInterface,
 ) -> anyhow::Result<tokio::net::TcpStream> {
-    let socket = create_tcp0(addr.is_ipv4(), bind_port, default_interface)?;
+    let socket = create_tcp_with_bind_port(addr.is_ipv4(), bind_port, default_interface)?;
     Ok(socket.connect(addr).await?)
 }
 pub fn create_tcp(
     v4: bool,
     default_interface: &LocalInterface,
 ) -> anyhow::Result<tokio::net::TcpSocket> {
-    create_tcp0(v4, 0, default_interface)
+    create_tcp_with_bind_port(v4, 0, default_interface)
 }
-pub fn create_tcp0(
+pub fn create_tcp_with_bind_port(
     v4: bool,
     bind_port: u16,
     default_interface: &LocalInterface,
