@@ -5,7 +5,12 @@ use std::path::Path;
 use std::process::Command;
 
 fn write_if_changed(src: &Path, dst: &Path) {
-    let src_bytes = fs::read(src).expect("read generated proto failed");
+    // rust-protobuf 3.2.0 emits this obsolete lint allowance. Filter it out
+    // here so every regeneration remains compatible with current Rust.
+    let generated = fs::read_to_string(src).expect("read generated proto failed");
+    let src_bytes = generated
+        .replace("#![allow(box_pointers)]\n", "")
+        .into_bytes();
     let same = fs::read(dst)
         .map(|dst_bytes| dst_bytes == src_bytes)
         .unwrap_or(false);

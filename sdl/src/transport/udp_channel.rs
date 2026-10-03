@@ -880,7 +880,7 @@ mod tests {
 
     #[test]
     fn normalize_recv_addr_restores_ipv4_from_mapped_ipv6() {
-        let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
+        let _ = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), true, false);
         let mapped = SocketAddr::V6(SocketAddrV6::new(
             Ipv4Addr::new(192, 0, 2, 10).to_ipv6_mapped(),
             4000,
