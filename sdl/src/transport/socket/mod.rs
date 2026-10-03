@@ -16,8 +16,9 @@ pub trait VntSocketTrait {
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalInterface {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     index: u32,
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     name: Option<String>,
 }
 
@@ -124,8 +125,9 @@ pub fn get_interface(dest_name: String) -> anyhow::Result<(LocalInterface, Ipv4A
                 if let IpAddr::V4(ip) = addr.ip() {
                     return Ok((
                         LocalInterface {
+                            #[cfg(any(target_os = "macos", target_os = "windows"))]
                             index: iface.index,
-                            #[cfg(unix)]
+                            #[cfg(target_os = "linux")]
                             name: Some(iface.name),
                         },
                         ip,
