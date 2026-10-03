@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use std::thread;
 use std::time::Duration;
 
-use crate::tun_device::create::{add_route, delete_route, exe_cmd};
+use crate::net::system_route::{add_route, delete_route, exe_cmd};
 use crate::DnsProfile;
 
 const DNS_ROUTE_READY_TIMEOUT: Duration = Duration::from_secs(4);
