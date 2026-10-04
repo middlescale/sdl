@@ -76,29 +76,29 @@ impl GatewaySession {
         if current_device.virtual_ip == Ipv4Addr::UNSPECIFIED {
             return NO_GATEWAY_MAINTENANCE_DELAY;
         }
-        let guard = self.state.lock();
-        if guard.udp_rebuild_requested {
+        let state = self.state.lock();
+        if state.udp_rebuild_requested {
             return Duration::ZERO;
         }
         let now_ms = now_time() as i64;
-        let ticket_available = now_ms <= guard.ticket_expire_unix_ms && !guard.ticket.is_empty();
-        if !ticket_available && now_ms > guard.grace_expire_unix_ms {
+        let ticket_available = now_ms <= state.ticket_expire_unix_ms && !state.ticket.is_empty();
+        if !ticket_available && now_ms > state.grace_expire_unix_ms {
             return NO_GATEWAY_MAINTENANCE_DELAY;
         }
-        if guard.authenticated
-            && guard.lease_expire_unix_ms > 0
-            && now_ms > guard.lease_expire_unix_ms
+        if state.authenticated
+            && state.lease_expire_unix_ms > 0
+            && now_ms > state.lease_expire_unix_ms
         {
             return Duration::ZERO;
         }
-        let hello_interval_ms = if guard.authenticated {
-            i64::from(guard.keepalive_secs.max(3)) * 1_000
+        let hello_interval_ms = if state.authenticated {
+            i64::from(state.keepalive_secs.max(3)) * 1_000
         } else {
             3_000
         };
-        let hello_delay_ms = (guard.last_hello_unix_ms + hello_interval_ms - now_ms).max(0);
-        let probe_delay_ms = if Self::is_available(&guard, now_ms) {
-            (guard.last_probe_sent_unix_ms + probe_interval_ms - now_ms).max(0)
+        let hello_delay_ms = (state.last_hello_unix_ms + hello_interval_ms - now_ms).max(0);
+        let probe_delay_ms = if state.is_available(now_ms) {
+            (state.last_probe_sent_unix_ms + probe_interval_ms - now_ms).max(0)
         } else {
             i64::MAX
         };
@@ -109,9 +109,9 @@ impl GatewaySession {
         if !self.is_udp() {
             return false;
         }
-        let mut guard = self.state.lock();
-        let requested = guard.udp_rebuild_requested;
-        guard.udp_rebuild_requested = false;
+        let mut state = self.state.lock();
+        let requested = state.udp_rebuild_requested;
+        state.udp_rebuild_requested = false;
         requested
     }
 }

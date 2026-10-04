@@ -13,51 +13,78 @@ use super::{
     GatewaySessionSummary, GATEWAY_HELLOS_BEFORE_TIMEOUT, GATEWAY_PROBE_UNREACHABLE_AFTER,
 };
 
-impl GatewaySession {
-    pub(super) fn summary(&self) -> GatewaySessionSummary {
-        self.reconcile_stream_authentication();
-        let guard = self.state.lock();
-        let now_ms = now_time() as i64;
-        let grant_phase = Self::grant_phase(&guard, now_ms);
-        GatewaySessionSummary {
-            configured: true,
-            authenticated: Self::is_available(&guard, now_ms),
-            endpoint: Some(self.endpoint),
-            gateway_id: guard.gateway_id.clone(),
-            channel_name: guard.channel_name.clone(),
-            grant_state: Self::grant_state(grant_phase),
-            soft_refresh_after_unix_ms: Self::soft_refresh_after_unix_ms(&guard),
-            hard_expire_unix_ms: Self::hard_expire_unix_ms(&guard),
-            lease_expire_unix_ms: guard.lease_expire_unix_ms,
-            grace_expire_unix_ms: guard.grace_expire_unix_ms,
-            reauth_required: guard.reauth_required,
-            last_gateway_error: guard.last_gateway_error.clone(),
-            last_gateway_error_kind: guard.last_gateway_error_kind,
-            last_gateway_error_unix_ms: guard.last_gateway_error_unix_ms,
-            consecutive_gateway_errors: guard.consecutive_gateway_errors,
-            rt_ms: guard.last_rtt_ms,
-            active: false,
-            grant_phase,
-            consecutive_send_failures: guard.consecutive_send_failures,
-            relay_health: Self::relay_health(&guard, now_ms),
-            last_probe_unix_ms: guard.last_probe_reply_unix_ms,
-            last_probe_rtt_ms: guard.last_probe_rtt_ms,
-            consecutive_probe_failures: guard.consecutive_probe_failures,
-            relay_send_failures_total: self.stats.gateway_send_failures_total(),
-        }
-    }
-
-    pub(super) fn relay_health(guard: &GatewaySessionState, now_ms: i64) -> GatewayRelayHealth {
-        if !Self::is_available(guard, now_ms) {
+impl GatewaySessionState {
+    pub(super) fn relay_health(&self, now_ms: i64) -> GatewayRelayHealth {
+        if !self.is_available(now_ms) {
             return GatewayRelayHealth::Unknown;
         }
-        if guard.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
+        if self.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
             return GatewayRelayHealth::Unreachable;
         }
-        if guard.last_probe_reply_unix_ms <= 0 {
+        if self.last_probe_reply_unix_ms <= 0 {
             return GatewayRelayHealth::Degraded;
         }
         GatewayRelayHealth::Healthy
+    }
+
+    pub(super) fn record_gateway_error(
+        &mut self,
+        kind: GatewayErrorKind,
+        error: String,
+        now_ms: i64,
+    ) {
+        if self.last_gateway_error_kind == Some(kind)
+            && self.last_gateway_error.as_deref() == Some(error.as_str())
+        {
+            self.consecutive_gateway_errors = self.consecutive_gateway_errors.saturating_add(1);
+        } else {
+            self.consecutive_gateway_errors = 1;
+        }
+        self.last_gateway_error = Some(error);
+        self.last_gateway_error_kind = Some(kind);
+        self.last_gateway_error_unix_ms = now_ms;
+    }
+
+    pub(super) fn clear_gateway_error(&mut self) {
+        self.last_gateway_error = None;
+        self.last_gateway_error_kind = None;
+        self.last_gateway_error_unix_ms = 0;
+        self.consecutive_gateway_errors = 0;
+    }
+}
+
+impl GatewaySession {
+    pub(super) fn summary(&self) -> GatewaySessionSummary {
+        self.reconcile_stream_authentication();
+        let state = self.state.lock();
+        let now_ms = now_time() as i64;
+        let grant_phase = state.grant_phase(now_ms);
+        GatewaySessionSummary {
+            configured: true,
+            authenticated: state.is_available(now_ms),
+            endpoint: Some(self.endpoint),
+            gateway_id: state.gateway_id.clone(),
+            channel_name: state.channel_name.clone(),
+            grant_state: grant_phase.grant_state(),
+            soft_refresh_after_unix_ms: state.soft_refresh_after_unix_ms(),
+            hard_expire_unix_ms: state.hard_expire_unix_ms(),
+            lease_expire_unix_ms: state.lease_expire_unix_ms,
+            grace_expire_unix_ms: state.grace_expire_unix_ms,
+            reauth_required: state.reauth_required,
+            last_gateway_error: state.last_gateway_error.clone(),
+            last_gateway_error_kind: state.last_gateway_error_kind,
+            last_gateway_error_unix_ms: state.last_gateway_error_unix_ms,
+            consecutive_gateway_errors: state.consecutive_gateway_errors,
+            rt_ms: state.last_rtt_ms,
+            active: false,
+            grant_phase,
+            consecutive_send_failures: state.consecutive_send_failures,
+            relay_health: state.relay_health(now_ms),
+            last_probe_unix_ms: state.last_probe_reply_unix_ms,
+            last_probe_rtt_ms: state.last_probe_rtt_ms,
+            consecutive_probe_failures: state.consecutive_probe_failures,
+            relay_send_failures_total: self.stats.gateway_send_failures_total(),
+        }
     }
 
     pub(super) fn is_relay_available(&self) -> bool {
@@ -65,19 +92,18 @@ impl GatewaySession {
             return false;
         }
         self.reconcile_stream_authentication();
-        let guard = self.state.lock();
-        Self::is_available(&guard, now_time() as i64)
+        let state = self.state.lock();
+        state.is_available(now_time() as i64)
     }
 
     pub(super) fn record_send_failure(&self, kind: io::ErrorKind) -> bool {
-        let mut guard = self.state.lock();
-        Self::record_gateway_error(
-            &mut guard,
+        let mut state = self.state.lock();
+        state.record_gateway_error(
             GatewayErrorKind::SendFailed,
             format!("send_failed:{}", gateway_send_error_code(kind)),
             now_time() as i64,
         );
-        guard.consecutive_send_failures += 1;
+        state.consecutive_send_failures += 1;
         let udp_transport_error = self.is_udp()
             && matches!(
                 kind,
@@ -86,66 +112,40 @@ impl GatewaySession {
                     | io::ErrorKind::NotConnected
             );
         if udp_transport_error {
-            guard.udp_rebuild_requested = true;
+            state.udp_rebuild_requested = true;
         }
-        if guard.consecutive_send_failures >= 3 {
-            guard.authenticated = false;
+        if state.consecutive_send_failures >= 3 {
+            state.authenticated = false;
         }
-        guard.udp_rebuild_requested
+        state.udp_rebuild_requested
     }
 
     pub(super) fn record_send_success(&self) {
-        let mut guard = self.state.lock();
-        guard.consecutive_send_failures = 0;
-        if guard.last_gateway_error_kind == Some(GatewayErrorKind::SendFailed) {
-            Self::clear_gateway_error(&mut guard);
+        let mut state = self.state.lock();
+        state.consecutive_send_failures = 0;
+        if state.last_gateway_error_kind == Some(GatewayErrorKind::SendFailed) {
+            state.clear_gateway_error();
         }
-    }
-
-    pub(super) fn record_gateway_error(
-        guard: &mut GatewaySessionState,
-        kind: GatewayErrorKind,
-        error: String,
-        now_ms: i64,
-    ) {
-        if guard.last_gateway_error_kind == Some(kind)
-            && guard.last_gateway_error.as_deref() == Some(error.as_str())
-        {
-            guard.consecutive_gateway_errors = guard.consecutive_gateway_errors.saturating_add(1);
-        } else {
-            guard.consecutive_gateway_errors = 1;
-        }
-        guard.last_gateway_error = Some(error);
-        guard.last_gateway_error_kind = Some(kind);
-        guard.last_gateway_error_unix_ms = now_ms;
-    }
-
-    pub(super) fn clear_gateway_error(guard: &mut GatewaySessionState) {
-        guard.last_gateway_error = None;
-        guard.last_gateway_error_kind = None;
-        guard.last_gateway_error_unix_ms = 0;
-        guard.consecutive_gateway_errors = 0;
     }
 
     pub(super) fn record_unanswered_hello(&self) -> bool {
-        let mut guard = self.state.lock();
-        if guard.authenticated {
-            guard.unanswered_hello_count = 0;
+        let mut state = self.state.lock();
+        if state.authenticated {
+            state.unanswered_hello_count = 0;
             return false;
         }
-        guard.unanswered_hello_count += 1;
-        if guard.unanswered_hello_count >= GATEWAY_HELLOS_BEFORE_TIMEOUT {
-            Self::record_gateway_error(
-                &mut guard,
+        state.unanswered_hello_count += 1;
+        if state.unanswered_hello_count >= GATEWAY_HELLOS_BEFORE_TIMEOUT {
+            state.record_gateway_error(
                 GatewayErrorKind::ConnectTimeout,
                 "connect_timeout".to_string(),
                 now_time() as i64,
             );
             if self.is_udp() {
-                guard.udp_rebuild_requested = true;
+                state.udp_rebuild_requested = true;
             }
         }
-        guard.udp_rebuild_requested
+        state.udp_rebuild_requested
     }
 
     pub(super) fn maybe_build_gateway_probe(
@@ -153,27 +153,25 @@ impl GatewaySession {
         current_device: &CurrentDeviceInfo,
         probe_interval_ms: i64,
     ) -> anyhow::Result<Option<NetPacket<Vec<u8>>>> {
-        let mut guard = self.state.lock();
+        let mut state = self.state.lock();
         let now_ms = now_time() as i64;
-        if !Self::is_available(&guard, now_ms)
-            || now_ms - guard.last_probe_sent_unix_ms < probe_interval_ms
+        if !state.is_available(now_ms) || now_ms - state.last_probe_sent_unix_ms < probe_interval_ms
         {
             return Ok(None);
         }
-        if guard.last_probe_sent_unix_ms > guard.last_probe_reply_unix_ms {
-            guard.consecutive_probe_failures = guard.consecutive_probe_failures.saturating_add(1);
-            if guard.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
-                Self::record_gateway_error(
-                    &mut guard,
+        if state.last_probe_sent_unix_ms > state.last_probe_reply_unix_ms {
+            state.consecutive_probe_failures = state.consecutive_probe_failures.saturating_add(1);
+            if state.consecutive_probe_failures >= GATEWAY_PROBE_UNREACHABLE_AFTER {
+                state.record_gateway_error(
                     GatewayErrorKind::ProbeUnreachable,
                     "probe_unreachable".to_string(),
                     now_ms,
                 );
             }
         }
-        guard.last_probe_sent_unix_ms = now_ms;
-        guard.gateway_virtual_ip = Some(current_device.virtual_gateway);
-        guard.probe_epoch = guard.probe_epoch.wrapping_add(1).max(1);
+        state.last_probe_sent_unix_ms = now_ms;
+        state.gateway_virtual_ip = Some(current_device.virtual_gateway);
+        state.probe_epoch = state.probe_epoch.wrapping_add(1).max(1);
         let mut packet = NetPacket::new(vec![0u8; 12 + 4])?;
         packet.set_default_version();
         packet.set_protocol(Protocol::Control);
@@ -183,7 +181,7 @@ impl GatewaySession {
         packet.set_destination(current_device.virtual_gateway);
         let mut ping = PingPacket::new(packet.payload_mut())?;
         ping.set_time(now_time() as u16);
-        ping.set_epoch(guard.probe_epoch);
+        ping.set_epoch(state.probe_epoch);
         Ok(Some(packet))
     }
 
@@ -196,16 +194,16 @@ impl GatewaySession {
         if !self.matches_addr(route_key.addr) {
             return false;
         }
-        let mut guard = self.state.lock();
-        if Some(source) != guard.gateway_virtual_ip || epoch != guard.probe_epoch {
+        let mut state = self.state.lock();
+        if Some(source) != state.gateway_virtual_ip || epoch != state.probe_epoch {
             return false;
         }
         let now_ms = now_time() as i64;
-        guard.last_probe_reply_unix_ms = now_ms;
-        guard.last_probe_rtt_ms = Some((now_ms - guard.last_probe_sent_unix_ms).max(1));
-        guard.consecutive_probe_failures = 0;
-        if guard.last_gateway_error_kind == Some(GatewayErrorKind::ProbeUnreachable) {
-            Self::clear_gateway_error(&mut guard);
+        state.last_probe_reply_unix_ms = now_ms;
+        state.last_probe_rtt_ms = Some((now_ms - state.last_probe_sent_unix_ms).max(1));
+        state.consecutive_probe_failures = 0;
+        if state.last_gateway_error_kind == Some(GatewayErrorKind::ProbeUnreachable) {
+            state.clear_gateway_error();
         }
         true
     }
@@ -252,21 +250,12 @@ mod tests {
             grace_expire_unix_ms: i64::MAX,
             ..Default::default()
         };
-        assert_eq!(
-            GatewaySession::relay_health(&state, 1),
-            GatewayRelayHealth::Degraded
-        );
+        assert_eq!(state.relay_health(1), GatewayRelayHealth::Degraded);
         state.consecutive_probe_failures = GATEWAY_PROBE_UNREACHABLE_AFTER;
-        assert_eq!(
-            GatewaySession::relay_health(&state, 1),
-            GatewayRelayHealth::Unreachable
-        );
+        assert_eq!(state.relay_health(1), GatewayRelayHealth::Unreachable);
         state.last_probe_reply_unix_ms = 1;
         state.consecutive_probe_failures = 0;
-        assert_eq!(
-            GatewaySession::relay_health(&state, 1),
-            GatewayRelayHealth::Healthy
-        );
+        assert_eq!(state.relay_health(1), GatewayRelayHealth::Healthy);
     }
 
     #[test]

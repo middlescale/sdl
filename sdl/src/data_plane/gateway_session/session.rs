@@ -299,20 +299,20 @@ impl GatewaySession {
     pub(super) fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
         self.reconcile_stream_authentication();
         {
-            let guard = self.state.lock();
+            let state = self.state.lock();
             let now_ms = now_time() as i64;
-            let expire_unix_ms = guard
+            let expire_unix_ms = state
                 .grace_expire_unix_ms
-                .max(guard.lease_expire_unix_ms)
-                .max(guard.ticket_expire_unix_ms);
-            if !Self::is_available(&guard, now_ms) {
+                .max(state.lease_expire_unix_ms)
+                .max(state.ticket_expire_unix_ms);
+            if !state.is_available(now_ms) {
                 log::debug!(
                     "gateway relay unavailable endpoint={}, authenticated={}, now_ms={}, expire_unix_ms={}, session_id={}",
                     self.endpoint,
-                    guard.authenticated,
+                    state.authenticated,
                     now_ms,
                     expire_unix_ms,
-                    guard.session_id
+                    state.session_id
                 );
                 return Err(io::Error::new(
                     io::ErrorKind::NotConnected,
