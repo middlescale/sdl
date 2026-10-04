@@ -46,6 +46,8 @@ pub struct Sdl {
     stop_manager: StopManager,
     config: Config,
     runtime: Arc<SdlRuntime>,
+    // Retain the stop-listener handle: dropping it unregisters and runs the
+    // DNS cleanup callback, so it must live with Sdl rather than init's scope.
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     _split_dns_stop_worker: crate::util::Worker,
 }
@@ -54,6 +56,7 @@ impl Sdl {
     pub fn new<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         Sdl::init(config, callback)
     }
+
     fn init<Call: SdlCallback>(config: Config, callback: Call) -> anyhow::Result<Self> {
         ensure_rustls_crypto_provider();
         log::info!("config: {:?}", config);

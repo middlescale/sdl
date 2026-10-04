@@ -54,7 +54,7 @@ pub fn parse_control_address(raw: &str) -> anyhow::Result<ControlAddress> {
     let authority = format_authority(host, port);
     let path = match uri.path_and_query().map(|value| value.as_str()) {
         Some("/") | None => DEFAULT_CONTROL_PATH.to_string(),
-        Some(path) if path.is_empty() => DEFAULT_CONTROL_PATH.to_string(),
+        Some("") => DEFAULT_CONTROL_PATH.to_string(),
         Some(path) => path.to_string(),
     };
 
