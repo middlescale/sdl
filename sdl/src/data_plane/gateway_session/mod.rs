@@ -22,7 +22,10 @@ mod endpoint;
 mod grants;
 mod health;
 mod maintenance;
+mod registry;
 mod relay;
+
+use registry::GatewaySessionRegistry;
 mod selection;
 mod session;
 
@@ -240,13 +243,6 @@ pub struct GatewaySessionSummary {
     pub relay_send_failures_total: u64,
 }
 
-#[derive(Default)]
-struct GatewaySelectionState {
-    manual_endpoint: Option<SocketAddr>,
-    selected_endpoint: Option<SocketAddr>,
-    last_switch_unix_ms: i64,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct PeerIngressGateway {
     endpoint: SocketAddr,
@@ -272,9 +268,8 @@ pub struct PeerRelayHealthSummary {
 pub struct GatewaySessions {
     current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     runtime: Arc<OnceLock<(StopManager, PacketCallback)>>,
-    sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
+    registry: Arc<Mutex<GatewaySessionRegistry>>,
     dormant_stream_sessions: Arc<Mutex<HashMap<SocketAddr, GatewaySession>>>,
-    selection: Arc<Mutex<GatewaySelectionState>>,
     peer_ingress_gateways: Arc<Mutex<HashMap<PeerIdentity, PeerIngressGateway>>>,
     peer_relay_probes: Arc<Mutex<HashMap<Ipv4Addr, PeerRelayProbe>>>,
     peer_relay_receives: Arc<Mutex<HashMap<Ipv4Addr, i64>>>,
@@ -296,9 +291,8 @@ impl GatewaySessions {
         Self {
             current_device,
             runtime: Arc::new(OnceLock::new()),
-            sessions: Arc::new(Mutex::new(HashMap::new())),
+            registry: Arc::new(Mutex::new(GatewaySessionRegistry::default())),
             dormant_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
-            selection: Arc::new(Mutex::new(GatewaySelectionState::default())),
             peer_ingress_gateways: Arc::new(Mutex::new(HashMap::new())),
             peer_relay_probes: Arc::new(Mutex::new(HashMap::new())),
             peer_relay_receives: Arc::new(Mutex::new(HashMap::new())),

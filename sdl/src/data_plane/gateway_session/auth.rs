@@ -515,9 +515,7 @@ mod tests {
         );
 
         let session = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("gateway session")
             .clone();
         {
@@ -604,9 +602,7 @@ mod tests {
         );
 
         let session = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("gateway session")
             .clone();
         let channel = match &session.channel {
@@ -705,9 +701,7 @@ mod tests {
         );
 
         let session = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("gateway session")
             .clone();
         let channel = match &session.channel {

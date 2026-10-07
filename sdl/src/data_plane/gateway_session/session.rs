@@ -436,9 +436,7 @@ mod tests {
             "device-1".into(),
         );
         let session = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("gateway session")
             .clone();
         let current_device = CurrentDeviceInfo::new(
@@ -545,7 +543,7 @@ mod tests {
             );
 
             let endpoint = endpoint.parse().unwrap();
-            assert!(!sessions.sessions.lock().contains_key(&endpoint));
+            assert!(!sessions.contains_endpoint(endpoint));
             assert!(!sessions
                 .dormant_stream_sessions
                 .lock()

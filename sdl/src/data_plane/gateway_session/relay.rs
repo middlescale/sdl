@@ -14,26 +14,18 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, MAX_TTL};
 
-use super::selection::gateway_session_order_key;
 use super::{
     GatewaySession, GatewaySessions, PeerIngressGateway, PeerRelayHealthSummary,
     PEER_INGRESS_GATEWAY_TTL, PEER_RELAY_PROBE_INTERVAL_MS,
 };
 
 impl GatewaySessions {
-    pub fn is_gateway_addr(&self, addr: SocketAddr) -> bool {
-        self.sessions
-            .lock()
-            .values()
-            .any(|session| session.matches_addr(addr))
-    }
-
     /// Records the gateway that most recently delivered relay traffic for a peer.
     ///
     /// This is only a relay fallback hint. Measured P2P routes remain preferred by
     /// `SdlRuntime`, and the hint expires so a peer can move to another gateway.
     pub fn remember_peer_ingress_gateway(&self, peer: PeerIdentity, endpoint: SocketAddr) {
-        if !self.sessions.lock().contains_key(&endpoint) {
+        if !self.contains_endpoint(endpoint) {
             return;
         }
         self.peer_ingress_gateways.lock().insert(
@@ -62,7 +54,7 @@ impl GatewaySessions {
     }
 
     pub(super) fn relay_session_at(&self, endpoint: SocketAddr) -> Option<GatewaySession> {
-        let session = self.sessions.lock().get(&endpoint).cloned()?;
+        let session = self.session_at(endpoint)?;
         session.is_relay_available().then_some(session)
     }
 
@@ -76,17 +68,12 @@ impl GatewaySessions {
         endpoint: SocketAddr,
         packet: &NetPacket<B>,
     ) -> io::Result<()> {
-        let session = self
-            .sessions
-            .lock()
-            .get(&endpoint)
-            .cloned()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "requested gateway session is unavailable",
-                )
-            })?;
+        let session = self.session_at(endpoint).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "requested gateway session is unavailable",
+            )
+        })?;
         session.send_relay(packet)
     }
 
@@ -119,22 +106,7 @@ impl GatewaySessions {
     }
 
     pub fn send_relay<B: AsRef<[u8]>>(&self, packet: &NetPacket<B>) -> io::Result<()> {
-        let guard = self.sessions.lock();
-        let active = self.choose_active_endpoint_locked(&guard);
-        let manual_endpoint = self.selection.lock().manual_endpoint;
-        if let Some(endpoint) = manual_endpoint {
-            let Some(session) = guard.get(&endpoint).cloned() else {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "selected gateway session is unavailable",
-                ));
-            };
-            drop(guard);
-            return session.send_relay(packet);
-        }
-        let mut sessions: Vec<GatewaySession> = guard.values().cloned().collect();
-        drop(guard);
-        sessions.sort_by_key(|session| gateway_session_order_key(session, active));
+        let sessions = self.relay_candidates();
         let mut last_err = None;
         for session in sessions {
             match session.send_relay(packet) {
@@ -163,11 +135,16 @@ impl GatewaySessions {
     }
 
     pub fn handle_connect_ack(&self, from: SocketAddr, ack: &GatewayConnectAck) {
-        if let Some(session) = self.sessions.lock().get(&from).cloned() {
+        // session_at returns an owned handle and releases the registry lock;
+        // authentication/channel updates and backoff locking happen outside it.
+        if let Some(session) = self.session_at(from) {
             session.handle_connect_ack(ack);
             if ack.ok {
                 self.udp_rebuild_backoff.lock().remove(&from);
             }
+            // Authentication changes are runtime events, not status reads.
+            self.refresh_selection();
+            self.wake_maintenance();
         } else {
             log::debug!(
                 "received gateway connect ack from unknown endpoint={} session_id={} ok={} reason={}",
@@ -177,19 +154,6 @@ impl GatewaySessions {
                 ack.reason
             );
         }
-    }
-
-    pub fn handle_gateway_probe_pong(
-        &self,
-        source: Ipv4Addr,
-        route_key: RouteKey,
-        epoch: u16,
-    ) -> bool {
-        self.sessions
-            .lock()
-            .get(&route_key.addr)
-            .map(|session| session.handle_gateway_probe_pong(source, route_key, epoch))
-            .unwrap_or(false)
     }
 
     /// Best-effort, rate-limited end-to-end health probe for a peer relay path.
@@ -419,10 +383,10 @@ mod tests {
             state.authenticated = true;
             state.hard_expire_unix_ms = now_time() as i64 + 60_000;
         }
-        let mut configured = sessions.sessions.lock();
-        configured.insert(ingress_endpoint, ingress);
-        configured.insert(active_endpoint, active);
-        drop(configured);
+        let mut registry = sessions.registry.lock();
+        registry.install_session(ingress);
+        registry.install_session(active);
+        drop(registry);
         sessions.peer_ingress_gateways.lock().insert(
             peer.clone(),
             PeerIngressGateway {

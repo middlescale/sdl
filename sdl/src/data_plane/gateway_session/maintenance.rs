@@ -125,9 +125,7 @@ impl GatewaySessions {
             .runtime
             .set((stop_manager.clone(), Arc::new(on_packet)));
         let (stop_manager, on_packet) = self.runtime.get().unwrap();
-        for session in self.sessions.lock().values() {
-            session.start(stop_manager, on_packet)?;
-        }
+        self.start_registered_sessions(stop_manager, on_packet)?;
         if self.worker_started.swap(true) {
             return Ok(());
         }
@@ -165,24 +163,14 @@ impl GatewaySessions {
     }
 
     pub fn trigger_connect_now(&self) {
+        // Serialize periodic and immediate maintenance passes, including UDP
+        // rebuilds. The registry lock only protects membership and selection.
         let _maintenance = self.maintenance_lock.lock();
-        self.trigger_connect_now_locked();
-    }
-
-    pub(super) fn trigger_connect_now_locked(&self) {
         let current_device = self.current_device.load();
-        let (active_endpoint, sessions): (Option<SocketAddr>, Vec<_>) = {
-            let sessions = self.sessions.lock();
-            let active_endpoint = self.choose_active_endpoint_locked(&sessions);
-            (
-                active_endpoint,
-                sessions
-                    .iter()
-                    .map(|(endpoint, session)| (*endpoint, session.clone()))
-                    .collect(),
-            )
-        };
-        for (endpoint, session) in sessions {
+        let snapshot = self.refresh_selection_and_snapshot();
+        let active_endpoint = snapshot.active_endpoint;
+        for session in snapshot.sessions {
+            let endpoint = session.endpoint;
             let probe_interval_ms = if Some(endpoint) == active_endpoint {
                 GATEWAY_PROBE_INTERVAL_MS
             } else {
@@ -204,12 +192,13 @@ impl GatewaySessions {
 
     pub(super) fn next_maintenance_delay(&self) -> Duration {
         let current_device = self.current_device.load();
-        let sessions = self.sessions.lock();
-        let active_endpoint = self.choose_active_endpoint_locked(&sessions);
-        sessions
+        let snapshot = self.session_snapshot();
+        let active_endpoint = snapshot.active_endpoint;
+        snapshot
+            .sessions
             .iter()
-            .map(|(endpoint, session)| {
-                let probe_interval_ms = if Some(*endpoint) == active_endpoint {
+            .map(|session| {
+                let probe_interval_ms = if Some(session.endpoint) == active_endpoint {
                     GATEWAY_PROBE_INTERVAL_MS
                 } else {
                     STANDBY_GATEWAY_PROBE_INTERVAL_MS
@@ -224,13 +213,7 @@ impl GatewaySessions {
     /// transports keep their self-healing connections and are not rebuilt.
     pub fn rebuild_udp_sessions_after_underlay_change(&self) {
         self.udp_rebuild_backoff.lock().clear();
-        let endpoints = self
-            .sessions
-            .lock()
-            .values()
-            .filter(|session| session.is_udp())
-            .map(|session| session.endpoint)
-            .collect::<Vec<_>>();
+        let endpoints = self.udp_endpoints();
         for endpoint in endpoints {
             self.rebuild_udp_session(endpoint);
         }
@@ -240,8 +223,8 @@ impl GatewaySessions {
 
     pub(super) fn rebuild_udp_session(&self, endpoint: SocketAddr) {
         let old = {
-            let mut sessions = self.sessions.lock();
-            let Some(session) = sessions.get(&endpoint) else {
+            let mut registry = self.registry.lock();
+            let Some(session) = registry.session_at(endpoint) else {
                 return;
             };
             if !session.is_udp() {
@@ -251,8 +234,8 @@ impl GatewaySessions {
                 return;
             }
             log::warn!("rebuilding UDP gateway session endpoint={}", endpoint);
-            sessions
-                .remove(&endpoint)
+            registry
+                .remove_session(endpoint)
                 .expect("gateway session disappeared")
         };
         let replacement = match old.recreate_udp() {
@@ -281,8 +264,8 @@ impl GatewaySessions {
             }
         }
         replacement.reactivate();
-        let mut sessions = self.sessions.lock();
-        if sessions.contains_key(&endpoint) {
+        let mut registry = self.registry.lock();
+        if registry.contains_endpoint(endpoint) {
             log::debug!(
                 "skip stale UDP gateway replacement because a newer session exists endpoint={}",
                 endpoint
@@ -291,7 +274,7 @@ impl GatewaySessions {
             let _ = replacement.stop_udp_runtime();
             return;
         }
-        sessions.insert(endpoint, replacement);
+        registry.install_session(replacement);
     }
 
     pub(super) fn try_begin_udp_rebuild(&self, endpoint: SocketAddr) -> bool {
@@ -387,7 +370,7 @@ mod tests {
             Ipv4Addr::new(10, 26, 0, 3),
             "device-1".into(),
         );
-        let session = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+        let session = sessions.session_at(endpoint).unwrap().clone();
 
         assert!(session.record_send_failure(io::ErrorKind::NetworkUnreachable));
         assert!(session.take_udp_rebuild_request());
@@ -425,12 +408,12 @@ mod tests {
             Ipv4Addr::new(10, 26, 0, 3),
             "device-1".into(),
         );
-        let old = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+        let old = sessions.session_at(endpoint).unwrap().clone();
         assert!(old.record_send_failure(io::ErrorKind::AddrNotAvailable));
 
         sessions.trigger_connect_now();
 
-        let replacement = sessions.sessions.lock().get(&endpoint).unwrap().clone();
+        let replacement = sessions.session_at(endpoint).unwrap().clone();
         assert!(!Arc::ptr_eq(&old.state, &replacement.state));
         assert!(old.udp_stop_handle.lock().is_none());
         assert!(replacement.started.load());

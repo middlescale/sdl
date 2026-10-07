@@ -1,13 +1,13 @@
 //! Apply and retire the control-plane gateway grant set.
 
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 
 use crate::handle::now_time;
 use crate::proto::message::{GatewayAccessGrant, GatewayChannelKind};
 
 use super::endpoint::{resolve_gateway_channel, ResolvedGatewayChannel};
-use super::{GatewayGrantSnapshot, GatewaySelectionState, GatewaySession, GatewaySessions};
+use super::{GatewaySession, GatewaySessions};
 
 impl GatewaySessions {
     pub fn set_gateway_grant(
@@ -100,16 +100,12 @@ impl GatewaySessions {
                 .map(|(grant, _)| grant.gateway_id.clone())
                 .collect::<Vec<_>>()
         );
-        let mut guard = self.sessions.lock();
-        let removed_endpoints: Vec<SocketAddr> = guard
-            .keys()
-            .filter(|endpoint| !desired.contains(endpoint))
-            .copied()
-            .collect();
+        let mut registry = self.registry.lock();
+        let removed_endpoints = registry.endpoints_outside(&desired);
         let mut dormant = self.dormant_stream_sessions.lock();
         for endpoint in removed_endpoints {
             self.udp_rebuild_backoff.lock().remove(&endpoint);
-            let Some(session) = guard.remove(&endpoint) else {
+            let Some(session) = registry.remove_session(endpoint) else {
                 continue;
             };
             session.retire();
@@ -126,7 +122,7 @@ impl GatewaySessions {
         }
         for (grant, resolved_channel) in parsed {
             let endpoint = resolved_channel.endpoint;
-            let session = if let Some(existing) = guard.get(&endpoint).cloned() {
+            let session = if let Some(existing) = registry.session_at(endpoint) {
                 if !existing.matches_kind(resolved_channel.kind) {
                     log::warn!(
                         "ignore gateway channel kind change for active endpoint={} requested_kind={:?}",
@@ -138,7 +134,7 @@ impl GatewaySessions {
                 existing
             } else if let Some(existing) = dormant.remove(&endpoint) {
                 if existing.matches_kind(resolved_channel.kind) {
-                    guard.insert(endpoint, existing.clone());
+                    registry.install_session(existing.clone());
                     existing
                 } else {
                     log::warn!(
@@ -189,7 +185,7 @@ impl GatewaySessions {
                         self.stats.clone(),
                     ),
                 };
-                guard.insert(endpoint, created.clone());
+                registry.install_session(created.clone());
                 created
             };
             if let Err(e) = session.update_grant(&grant, device_id.clone()) {
@@ -201,7 +197,7 @@ impl GatewaySessions {
                         endpoint
                     );
                 }
-                guard.remove(&endpoint);
+                registry.remove_session(endpoint);
                 continue;
             }
             if let Some((stop_manager, on_packet)) = self.runtime.get() {
@@ -214,14 +210,14 @@ impl GatewaySessions {
                             endpoint
                         );
                     }
-                    guard.remove(&endpoint);
+                    registry.remove_session(endpoint);
                     continue;
                 }
             }
             session.reactivate();
         }
-        self.reset_selection_if_missing(&guard);
-        drop(guard);
+        registry.reset_selection_if_missing();
+        drop(registry);
         self.peer_ingress_gateways
             .lock()
             .retain(|_, ingress| desired.contains(&ingress.endpoint));
@@ -230,10 +226,11 @@ impl GatewaySessions {
     }
 
     pub fn clear_gateway_grant(&self) {
-        let mut sessions = self.sessions.lock();
+        let mut registry = self.registry.lock();
         let mut dormant = self.dormant_stream_sessions.lock();
         self.udp_rebuild_backoff.lock().clear();
-        for (endpoint, session) in sessions.drain() {
+        for session in registry.take_all_sessions() {
+            let endpoint = session.endpoint;
             session.retire();
             if session.is_udp() {
                 if !session.stop_udp_runtime() {
@@ -247,23 +244,11 @@ impl GatewaySessions {
             }
         }
         drop(dormant);
-        drop(sessions);
-        *self.selection.lock() = GatewaySelectionState::default();
+        registry.clear_selection();
+        drop(registry);
         self.peer_ingress_gateways.lock().clear();
         self.refresh_requested_at_ms.store(0);
         self.wake_maintenance();
-    }
-
-    pub fn current_grant_snapshot(&self) -> Option<GatewayGrantSnapshot> {
-        self.sessions
-            .lock()
-            .values()
-            .map(GatewaySession::grant_snapshot)
-            .max_by_key(|snapshot| {
-                snapshot
-                    .hard_expire_unix_ms
-                    .max(snapshot.ticket_expire_unix_ms)
-            })
     }
 
     pub fn mark_refresh_requested(&self) {
@@ -373,15 +358,13 @@ mod tests {
                 "device-1".into(),
             );
             let original = sessions
-                .sessions
-                .lock()
-                .get(&endpoint)
+                .session_at(endpoint)
                 .expect("original stream session")
                 .clone();
 
             sessions.clear_gateway_grant();
             assert!(!original.active.load());
-            assert!(sessions.sessions.lock().is_empty());
+            assert!(sessions.session_snapshot().sessions.is_empty());
             assert!(sessions
                 .dormant_stream_sessions
                 .lock()
@@ -389,9 +372,7 @@ mod tests {
 
             sessions.set_gateway_grants(&[grant], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
             let reused = sessions
-                .sessions
-                .lock()
-                .get(&endpoint)
+                .session_at(endpoint)
                 .expect("reused stream session")
                 .clone();
 
@@ -452,9 +433,7 @@ mod tests {
             "device-1".into(),
         );
         let original = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("original QUIC session")
             .clone();
 
@@ -464,9 +443,7 @@ mod tests {
             "device-1".into(),
         );
         let active = sessions
-            .sessions
-            .lock()
-            .get(&endpoint)
+            .session_at(endpoint)
             .expect("original active session retained")
             .clone();
         assert!(Arc::ptr_eq(&original.state, &active.state));
@@ -479,7 +456,7 @@ mod tests {
             "device-1".into(),
         );
 
-        assert!(sessions.sessions.lock().is_empty());
+        assert!(sessions.session_snapshot().sessions.is_empty());
         let dormant = sessions
             .dormant_stream_sessions
             .lock()
@@ -533,9 +510,7 @@ mod tests {
             "device-1".into(),
         );
         let original = sessions
-            .sessions
-            .lock()
-            .get(&endpoint_1)
+            .session_at(endpoint_1)
             .expect("original gateway session")
             .clone();
         assert!(original.udp_stop_handle.lock().is_some());
@@ -549,13 +524,11 @@ mod tests {
 
         sessions.set_gateway_grants(&[grant_2], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
         assert!(original.udp_stop_handle.lock().is_none());
-        assert!(sessions.sessions.lock().contains_key(&endpoint_2));
+        assert!(sessions.contains_endpoint(endpoint_2));
 
         sessions.set_gateway_grants(&[grant_1], Ipv4Addr::new(10, 26, 0, 3), "device-1".into());
         let recreated = sessions
-            .sessions
-            .lock()
-            .get(&endpoint_1)
+            .session_at(endpoint_1)
             .expect("recreated gateway session")
             .clone();
         assert!(!Arc::ptr_eq(
