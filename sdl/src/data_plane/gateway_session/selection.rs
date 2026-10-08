@@ -2,8 +2,8 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::data_plane::route::RouteKey;
 use crate::transport::quic_channel::PacketCallback;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 use super::registry::{GatewayRelaySnapshot, GatewaySessionSnapshot};
@@ -40,12 +40,12 @@ impl GatewaySessions {
     pub fn handle_gateway_probe_pong(
         &self,
         source: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         epoch: u16,
     ) -> bool {
         self.registry
             .lock()
-            .handle_gateway_probe_pong(source, route_key, epoch)
+            .handle_gateway_probe_pong(source, endpoint, epoch)
     }
 
     fn summary_snapshot(&self) -> Vec<GatewaySessionSummary> {

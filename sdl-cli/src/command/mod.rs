@@ -3,7 +3,7 @@ use sdl::data_plane::gateway_session::{GatewayErrorKind, GatewaySessionSummary};
 use sdl::data_plane::route::Route;
 use sdl::data_plane::route_state::RouteKind;
 use sdl::data_plane::use_channel_type::UseChannelType;
-use sdl::transport::connect_protocol::ConnectProtocol;
+use sdl::transport::ConnectProtocol;
 use std::collections::{BTreeSet, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -146,7 +146,7 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
         }
         for route in routes {
             let next_hop = vnt
-                .route_key(&route.route_key)
+                .peer_for_endpoint(&route.endpoint)
                 .map_or(String::new(), |v| v.to_string());
             let metric = route.metric.to_string();
             let rt = if route.rt < 0 {
@@ -157,12 +157,12 @@ pub fn command_route(vnt: &Sdl) -> Vec<RouteItem> {
             let interface = match route.kind {
                 RouteKind::GatewayRelay => gateway_relay_interface(
                     &gateway_summary,
-                    route.transport,
-                    route.addr,
+                    route.endpoint.protocol,
+                    route.endpoint.addr,
                     &server_addr,
                 ),
                 RouteKind::P2p | RouteKind::Relay => {
-                    route_interface(route.transport, route.addr, &server_addr)
+                    route_interface(route.endpoint.protocol, route.endpoint.addr, &server_addr)
                 }
             };
 
@@ -330,7 +330,7 @@ pub fn command_list(sdl: &Sdl) -> Vec<DeviceItem> {
         let peer_active = sdl.is_peer_active(&peer_virtual_ip);
         let next_hop_is_gateway = route
             .as_ref()
-            .and_then(|route| sdl.route_key(&route.route_key()))
+            .and_then(|route| sdl.peer_for_endpoint(&route.endpoint))
             .is_some_and(|next_hop| info.is_gateway_vip(&next_hop));
         let last_path = route_path_label(route.as_ref(), next_hop_is_gateway).unwrap_or_default();
         let (nat_traversal_type, rt) = device_path_label(route, next_hop_is_gateway, peer_active);
@@ -797,7 +797,7 @@ mod tests {
         GatewayErrorKind, GatewaySessionSummary, RouteItem, CONTROL_DESTINATION,
     };
     use sdl::data_plane::route::Route;
-    use sdl::transport::connect_protocol::ConnectProtocol;
+    use sdl::transport::{ConnectProtocol, TransportEndpoint};
     use std::collections::HashMap;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -949,8 +949,10 @@ mod tests {
     #[test]
     fn device_path_label_describes_known_routes() {
         let p2p = Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3000)),
+            ),
             1,
             12,
         );
@@ -960,8 +962,10 @@ mod tests {
         );
 
         let relay = Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3001)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3001)),
+            ),
             2,
             -1,
         );
@@ -974,8 +978,10 @@ mod tests {
     #[test]
     fn last_path_label_retains_route_when_peer_is_idle() {
         let p2p = Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3002)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 3002)),
+            ),
             1,
             12,
         );

@@ -3,10 +3,10 @@
 use std::io;
 use std::net::Ipv4Addr;
 
-use crate::data_plane::route::RouteKey;
 use crate::handle::{now_time, CurrentDeviceInfo};
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, MAX_TTL};
+use crate::transport::TransportEndpoint;
 
 use super::{
     GatewayErrorKind, GatewayRelayHealth, GatewaySession, GatewaySessionState,
@@ -188,10 +188,10 @@ impl GatewaySession {
     pub(super) fn handle_gateway_probe_pong(
         &self,
         source: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         epoch: u16,
     ) -> bool {
-        if !self.matches_addr(route_key.addr) {
+        if !self.matches_addr(endpoint.addr) {
             return false;
         }
         let mut state = self.state.lock();
@@ -228,10 +228,10 @@ mod tests {
     use std::io;
     use std::net::Ipv4Addr;
 
-    use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
     use crate::handle::{now_time, CurrentDeviceInfo};
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
+    use crate::transport::TransportEndpoint;
     use crate::util::DebugWatch;
 
     use super::super::{
@@ -300,7 +300,7 @@ mod tests {
 
         assert!(session.handle_gateway_probe_pong(
             Ipv4Addr::new(10, 26, 0, 1),
-            RouteKey::new(ConnectProtocol::QUIC, endpoint),
+            TransportEndpoint::new(ConnectProtocol::QUIC, endpoint),
             42,
         ));
         let state = session.state.lock();

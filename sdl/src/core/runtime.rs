@@ -15,7 +15,6 @@ use crate::control::ControlSession;
 use crate::core::PeerInfo;
 use crate::core::{ExitNodeRoute, PeerIdentity};
 use crate::data_plane::peer_crypto::PeerCryptoManager;
-use crate::data_plane::route::RouteKey;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteKind;
 use crate::data_plane::runtime::{is_definitive_p2p_path_error, DataPlaneRuntime, PayloadPath};
@@ -24,7 +23,8 @@ use crate::handle::CurrentDeviceInfo;
 use crate::nat::punch::NatInfo;
 use crate::nat::NatTest;
 use crate::protocol::NetPacket;
-use crate::transport::connect_protocol::ConnectProtocol;
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::tun_device::create_device;
 use crate::tun_device::{TunSubsystem, TunTransition};
 use crate::util::DebugWatch;
@@ -407,25 +407,25 @@ impl SdlRuntime {
             self.control_session.request_direct_recovery_for(*vip);
         }
         match route_plan.path {
-            Some(PayloadPath::P2pUdp(route_key)) => {
-                match self.data_plane.send_p2p(packet, route_key) {
+            Some(PayloadPath::P2pUdp(endpoint)) => {
+                match self.data_plane.send_p2p(packet, endpoint) {
                     Ok(()) => Ok(RouteKind::P2p),
                     Err(err) if !is_definitive_p2p_path_error(&err) => {
                         log::debug!(
                             "p2p send failed for {}, preserving route {:?}: {:?}",
                             vip,
-                            route_key,
+                            endpoint,
                             err
                         );
                         Err(err)
                     }
                     Err(err) => {
-                        self.data_plane.mark_p2p_path_failed(vip, route_key);
+                        self.data_plane.mark_p2p_path_failed(vip, endpoint);
                         if !route_plan.allows_gateway_relay {
                             log::warn!(
                             "p2p send failed for {}, removed route {:?}, relay fallback unavailable: {:?}",
                             vip,
-                            route_key,
+                            endpoint,
                             err
                         );
                             return Err(err);
@@ -433,7 +433,7 @@ impl SdlRuntime {
                         log::warn!(
                         "p2p send failed for {}, removed route {:?}, falling back to relay: {:?}",
                         vip,
-                        route_key,
+                        endpoint,
                         err
                     );
                         self.send_peer_relay(*vip, packet)?;
@@ -572,7 +572,7 @@ impl SdlRuntime {
             || self
                 .data_plane
                 .route_manager
-                .has_direct_route_key(&RouteKey::new(ConnectProtocol::UDP, addr))
+                .has_direct_endpoint(&TransportEndpoint::new(ConnectProtocol::UDP, addr))
     }
 
     pub(crate) fn is_suspended(&self) -> bool {

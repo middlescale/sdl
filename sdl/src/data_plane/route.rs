@@ -1,72 +1,32 @@
-use std::net::SocketAddr;
-
-use crate::transport::connect_protocol::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Route {
-    pub(crate) protocol: ConnectProtocol,
-    pub addr: SocketAddr,
-    pub(crate) metric: u8,
+    pub endpoint: TransportEndpoint,
+    pub metric: u8,
     pub rt: i64,
     pub loss_rate: Option<f32>,
-}
-
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub struct RouteSortKey {
-    pub(crate) metric: u8,
-    pub rt: i64,
 }
 
 pub(crate) const DEFAULT_RT: i64 = 9999;
 
 impl Route {
-    pub fn new(protocol: ConnectProtocol, addr: SocketAddr, metric: u8, rt: i64) -> Self {
+    pub fn new(endpoint: TransportEndpoint, metric: u8, rt: i64) -> Self {
         Self {
-            protocol,
-            addr,
+            endpoint,
             metric,
             rt,
             loss_rate: None,
         }
     }
 
-    pub fn from(route_key: RouteKey, metric: u8, rt: i64) -> Self {
-        Self {
-            protocol: route_key.protocol,
-            addr: route_key.addr,
-            metric,
-            rt,
-            loss_rate: None,
-        }
-    }
-
-    pub fn from_default_rt(route_key: RouteKey, metric: u8) -> Self {
-        Self {
-            protocol: route_key.protocol,
-            addr: route_key.addr,
-            metric,
-            rt: DEFAULT_RT,
-            loss_rate: None,
-        }
+    pub fn with_default_rt(endpoint: TransportEndpoint, metric: u8) -> Self {
+        Self::new(endpoint, metric, DEFAULT_RT)
     }
 
     pub fn with_loss_rate(mut self, loss_rate: Option<f32>) -> Self {
         self.loss_rate = loss_rate;
         self
-    }
-
-    pub fn route_key(&self) -> RouteKey {
-        RouteKey {
-            protocol: self.protocol,
-            addr: self.addr,
-        }
-    }
-
-    pub fn sort_key(&self) -> RouteSortKey {
-        RouteSortKey {
-            metric: self.metric,
-            rt: self.rt,
-        }
     }
 
     pub fn is_p2p(&self) -> bool {
@@ -78,28 +38,45 @@ impl Route {
     }
 
     pub fn is_udp(&self) -> bool {
-        self.protocol.is_udp()
+        self.endpoint.protocol.is_udp()
     }
 
     /// Returns a short name for the transport protocol (e.g. "Udp", "Tcp", "Quic").
     pub fn protocol_name(&self) -> String {
-        format!("{:?}", self.protocol)
+        format!("{:?}", self.endpoint.protocol)
     }
 }
 
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub struct RouteKey {
-    protocol: ConnectProtocol,
-    pub addr: SocketAddr,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::ConnectProtocol;
 
-impl RouteKey {
-    pub(crate) const fn new(protocol: ConnectProtocol, addr: SocketAddr) -> Self {
-        Self { protocol, addr }
+    #[test]
+    fn route_constructor_preserves_endpoint_and_measurements() {
+        let endpoint = TransportEndpoint::new(ConnectProtocol::UDP, ([127, 0, 0, 1], 29873).into());
+        let route = Route::new(endpoint, 1, 42);
+
+        assert_eq!(route.endpoint, endpoint);
+        assert_eq!(route.metric, 1);
+        assert_eq!(route.rt, 42);
+        assert!(route.is_p2p());
+        assert!(route.is_udp());
+        assert!(route.has_measured_rt());
+        assert_eq!(route.loss_rate, None);
+        assert_eq!(route.with_loss_rate(Some(0.2)).loss_rate, Some(0.2));
     }
 
-    #[inline]
-    pub fn protocol(&self) -> ConnectProtocol {
-        self.protocol
+    #[test]
+    fn default_rtt_does_not_mark_endpoint_as_measured() {
+        let endpoint = TransportEndpoint::new(ConnectProtocol::QUIC, ([127, 0, 0, 1], 443).into());
+        let route = Route::with_default_rt(endpoint, 2);
+
+        assert_eq!(route.endpoint, endpoint);
+        assert_eq!(route.rt, DEFAULT_RT);
+        assert!(!route.has_measured_rt());
+        assert!(!route.is_p2p());
+        assert!(!route.is_udp());
+        assert_eq!(route.protocol_name(), "QUIC");
     }
 }

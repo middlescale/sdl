@@ -119,12 +119,12 @@ impl GatewaySession {
             GatewayTransport::Quic(channel) => channel.start_named(
                 stop_manager.clone(),
                 &worker_name,
-                move |packet: Vec<u8>, route_key| {
+                move |packet: Vec<u8>, remote_endpoint| {
                     if !session_active.load() {
                         return;
                     }
                     stats.record_transport_down(endpoint.ip(), packet.len());
-                    on_packet(packet, route_key);
+                    on_packet(packet, remote_endpoint);
                 },
             ),
             GatewayTransport::Https(channel) => {
@@ -132,12 +132,12 @@ impl GatewaySession {
                 channel.start_named(
                     stop_manager.clone(),
                     &worker_name,
-                    move |packet: Vec<u8>, route_key| {
+                    move |packet: Vec<u8>, remote_endpoint| {
                         if !session_active.load() {
                             return;
                         }
                         stats.record_transport_down(endpoint.ip(), packet.len());
-                        on_packet(packet, route_key);
+                        on_packet(packet, remote_endpoint);
                     },
                 )
             }
@@ -145,12 +145,12 @@ impl GatewaySession {
                 let runtime_active = Arc::new(AtomicCell::new(true));
                 let callback_runtime_active = runtime_active.clone();
                 let session_active = self.active.clone();
-                let callback: PacketCallback = Arc::new(move |packet: Vec<u8>, route_key| {
+                let callback: PacketCallback = Arc::new(move |packet: Vec<u8>, remote_endpoint| {
                     if !session_active.load() || !callback_runtime_active.load() {
                         return;
                     }
                     stats.record_transport_down(endpoint.ip(), packet.len());
-                    on_packet(packet, route_key);
+                    on_packet(packet, remote_endpoint);
                 });
                 self.start_udp(
                     stop_manager,

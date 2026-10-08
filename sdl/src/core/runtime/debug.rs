@@ -195,8 +195,8 @@ impl SdlRuntime {
                 json!({
                     "peer_ip": state.peer_ip.to_string(),
                     "kind": format!("{:?}", state.kind),
-                    "transport": format!("{:?}", state.transport),
-                    "addr": state.addr.to_string(),
+                    "transport": format!("{:?}", state.endpoint.protocol),
+                    "addr": state.endpoint.addr.to_string(),
                     "metric": state.metric,
                     "rt": state.rt,
                 })

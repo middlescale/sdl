@@ -4,12 +4,13 @@ use std::net::Ipv4Addr;
 use crate::core::PeerIdentity;
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::nat::punch_workers::PunchCoordinator;
 use crate::protocol::NetPacket;
 use crate::transport::udp_channel::UdpChannel;
+use crate::transport::TransportEndpoint;
 
 // Active data-plane components that own transport, path maintenance, or
 // probing behavior. They are kept outside core runtime state so packet
@@ -24,7 +25,7 @@ pub(crate) struct DataPlaneRuntime {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PayloadPath {
-    P2pUdp(RouteKey),
+    P2pUdp(TransportEndpoint),
     GatewayRelay,
 }
 
@@ -69,13 +70,13 @@ impl DataPlaneRuntime {
     pub(crate) fn send_p2p<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> io::Result<()> {
-        self.udp_channel.send_by_key(packet.buffer(), route_key)
+        self.udp_channel.send_to_endpoint(packet.buffer(), endpoint)
     }
 
-    pub(crate) fn mark_p2p_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        self.route_manager.mark_path_failed(vip, route_key);
+    pub(crate) fn mark_p2p_path_failed(&self, vip: &Ipv4Addr, endpoint: TransportEndpoint) {
+        self.route_manager.mark_path_failed(vip, endpoint);
     }
 
     pub(crate) fn send_peer_relay<B: AsRef<[u8]>>(
@@ -101,19 +102,19 @@ impl DataPlaneRuntime {
     pub(crate) fn send_reply_by_route<B: AsRef<[u8]>>(
         &self,
         packet: &NetPacket<B>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> io::Result<bool> {
-        if self.gateway_sessions.is_gateway_addr(route_key.addr) {
+        if self.gateway_sessions.is_gateway_addr(endpoint.addr) {
             self.gateway_sessions
-                .send_relay_to_or_active(route_key.addr, packet)?;
+                .send_relay_to_or_active(endpoint.addr, packet)?;
             Ok(true)
-        } else if route_key.protocol().is_udp() {
-            self.send_p2p(packet, route_key)?;
+        } else if endpoint.protocol.is_udp() {
+            self.send_p2p(packet, endpoint)?;
             Ok(false)
         } else {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                format!("unsupported reply route {route_key:?}"),
+                format!("unsupported reply route {endpoint:?}"),
             ))
         }
     }
@@ -139,9 +140,9 @@ fn select_payload_path(
     }
     match use_channel_type {
         UseChannelType::Relay => Some(PayloadPath::GatewayRelay),
-        UseChannelType::P2p => direct_route.map(|route| PayloadPath::P2pUdp(route.route_key())),
+        UseChannelType::P2p => direct_route.map(|route| PayloadPath::P2pUdp(route.endpoint)),
         UseChannelType::Auto => Some(match direct_route {
-            Some(route) => PayloadPath::P2pUdp(route.route_key()),
+            Some(route) => PayloadPath::P2pUdp(route.endpoint),
             None => PayloadPath::GatewayRelay,
         }),
     }
@@ -154,12 +155,14 @@ mod tests {
     use super::{is_definitive_p2p_path_error, select_payload_path, PayloadPath};
     use crate::data_plane::route::Route;
     use crate::data_plane::use_channel_type::UseChannelType;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::{ConnectProtocol, TransportEndpoint};
 
     fn sample_route() -> Route {
         Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
+            ),
             1,
             10,
         )
@@ -170,7 +173,7 @@ mod tests {
         let route = sample_route();
         assert_eq!(
             select_payload_path(false, UseChannelType::Auto, Some(route)),
-            Some(PayloadPath::P2pUdp(route.route_key()))
+            Some(PayloadPath::P2pUdp(route.endpoint))
         );
     }
 
@@ -190,14 +193,16 @@ mod tests {
     #[test]
     fn auto_policy_keeps_measured_p2p_even_with_high_rt() {
         let route = Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 3000)),
+            ),
             1,
             900,
         );
         assert_eq!(
             select_payload_path(false, UseChannelType::Auto, Some(route)),
-            Some(PayloadPath::P2pUdp(route.route_key()))
+            Some(PayloadPath::P2pUdp(route.endpoint))
         );
     }
 
@@ -206,7 +211,7 @@ mod tests {
         let route = sample_route();
         assert_eq!(
             select_payload_path(false, UseChannelType::Auto, Some(route)),
-            Some(PayloadPath::P2pUdp(route.route_key()))
+            Some(PayloadPath::P2pUdp(route.endpoint))
         );
     }
 

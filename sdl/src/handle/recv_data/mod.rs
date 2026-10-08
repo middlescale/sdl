@@ -4,13 +4,13 @@ use std::sync::OnceLock;
 use std::thread;
 
 use crate::core::SdlRuntime;
-use crate::data_plane::route::RouteKey;
 use crate::handle::callback::SdlCallback;
 use crate::handle::recv_data::client::ClientPacketHandler;
 use crate::handle::recv_data::server::ServerPacketHandler;
 use crate::handle::recv_data::turn::TurnPacketHandler;
 use crate::handle::{CurrentDeviceInfo, SELF_IP};
 use crate::protocol::{NetPacket, HEAD_LEN};
+use crate::transport::TransportEndpoint;
 use crate::tun_device::TunDeviceWriter;
 
 mod client;
@@ -47,13 +47,13 @@ pub(crate) struct RecvDataHandler<Call> {
 }
 
 impl<Call: SdlCallback> RecvDataHandler<Call> {
-    pub(crate) fn handle(&self, buf: &mut [u8], extend: &mut [u8], route_key: RouteKey) {
+    pub(crate) fn handle(&self, buf: &mut [u8], extend: &mut [u8], endpoint: TransportEndpoint) {
         if buf.len() < HEAD_LEN {
             return;
         }
         //判断stun响应包
-        if route_key.protocol().is_udp() {
-            if let Ok(rs) = self.runtime.nat_test.recv_data(route_key.addr, buf) {
+        if endpoint.protocol.is_udp() {
+            if let Ok(rs) = self.runtime.nat_test.recv_data(endpoint.addr, buf) {
                 if rs {
                     if self
                         .runtime
@@ -66,11 +66,11 @@ impl<Call: SdlCallback> RecvDataHandler<Call> {
                 }
             }
         }
-        if let Err(e) = self.handle0(buf, extend, route_key) {
+        if let Err(e) = self.handle0(buf, extend, endpoint) {
             log::error!(
                 "[{}]-{:?}-{:?}",
                 thread::current().name().unwrap_or(""),
-                route_key.addr,
+                endpoint.addr,
                 e
             );
         }
@@ -92,13 +92,13 @@ impl<Call: SdlCallback> RecvDataHandler<Call> {
         &self,
         buf: &mut [u8],
         extend: &mut [u8],
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         let net_packet = NetPacket::new(buf)?;
 
         let extend = NetPacket::unchecked(extend);
         if net_packet.ttl() == 0 || net_packet.origin_ttl() < net_packet.ttl() {
-            log_sampled_stale_drop(net_packet.head(), route_key.addr);
+            log_sampled_stale_drop(net_packet.head(), endpoint.addr);
             return Ok(());
         }
         let current_device = self.runtime.state.current_device.load();
@@ -113,16 +113,16 @@ impl<Call: SdlCallback> RecvDataHandler<Call> {
             if is_control_or_service_packet(&net_packet, &current_device) {
                 //服务端-客户端包
                 self.server
-                    .handle(net_packet, extend, route_key, &current_device)
+                    .handle(net_packet, extend, endpoint, &current_device)
             } else {
                 //客户端-客户端包
                 self.client
-                    .handle(net_packet, extend, route_key, &current_device)
+                    .handle(net_packet, extend, endpoint, &current_device)
             }
         } else {
             //转发包
             self.turn
-                .handle(net_packet, extend, route_key, &current_device)
+                .handle(net_packet, extend, endpoint, &current_device)
         }
     }
 }
@@ -146,7 +146,7 @@ pub trait PacketHandler {
         &self,
         net_packet: NetPacket<&mut [u8]>,
         extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()>;
 }

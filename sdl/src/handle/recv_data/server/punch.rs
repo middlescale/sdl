@@ -611,7 +611,7 @@ pub(super) fn selected_endpoint_for_result(
 
 pub(super) fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
     let mut endpoint = PunchEndpoint::new();
-    match route.addr {
+    match route.endpoint.addr {
         SocketAddr::V4(addr) => {
             endpoint.ip = u32::from(*addr.ip());
             endpoint.port = u32::from(addr.port());
@@ -621,7 +621,7 @@ pub(super) fn punch_endpoint_from_route(route: Route) -> PunchEndpoint {
             endpoint.port = u32::from(addr.port());
         }
     }
-    endpoint.tcp = route.protocol.is_base_tcp() && !route.protocol.is_quic();
+    endpoint.tcp = route.endpoint.protocol.is_base_tcp() && !route.endpoint.protocol.is_quic();
     endpoint
 }
 
@@ -773,7 +773,7 @@ mod tests {
     use super::*;
     use crate::data_plane::route::Route;
     use crate::handle::recv_data::server::test_util::endpoint_fingerprint;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::{ConnectProtocol, TransportEndpoint};
 
     #[test]
     fn build_peer_nat_info_from_punch_start_uses_endpoints() {
@@ -994,8 +994,10 @@ mod tests {
         let endpoint = selected_endpoint_for_result(
             PunchResultCode::PunchResultSuccess,
             Some(Route::new(
-                ConnectProtocol::UDP,
-                "1.2.3.4:51820".parse::<SocketAddr>().unwrap(),
+                TransportEndpoint::new(
+                    ConnectProtocol::UDP,
+                    "1.2.3.4:51820".parse::<SocketAddr>().unwrap(),
+                ),
                 1,
                 1,
             )),
@@ -1009,8 +1011,10 @@ mod tests {
     #[test]
     fn punch_endpoint_from_tcp_route_marks_tcp() {
         let endpoint = punch_endpoint_from_route(Route::new(
-            ConnectProtocol::TCP,
-            "[2001:db8::1]:443".parse::<SocketAddr>().unwrap(),
+            TransportEndpoint::new(
+                ConnectProtocol::TCP,
+                "[2001:db8::1]:443".parse::<SocketAddr>().unwrap(),
+            ),
             1,
             1,
         ));

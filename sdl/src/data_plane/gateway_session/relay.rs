@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use crate::core::PeerIdentity;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
-use crate::data_plane::route::RouteKey;
 use crate::handle::now_time;
 use crate::proto::message::GatewayConnectAck;
 use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, MAX_TTL};
+use crate::transport::TransportEndpoint;
 
 use super::{
     GatewaySession, GatewaySessions, PeerIngressGateway, PeerRelayHealthSummary,
@@ -234,10 +234,10 @@ impl GatewaySessions {
     pub fn handle_peer_relay_probe_pong(
         &self,
         peer_ip: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         epoch: u16,
     ) -> bool {
-        if !self.is_gateway_addr(route_key.addr) {
+        if !self.is_gateway_addr(endpoint.addr) {
             return false;
         }
         let mut probes = self.peer_relay_probes.lock();
@@ -252,8 +252,8 @@ impl GatewaySessions {
         true
     }
 
-    pub fn observe_peer_relay_receive(&self, peer_ip: Ipv4Addr, route_key: RouteKey) {
-        if self.is_gateway_addr(route_key.addr) {
+    pub fn observe_peer_relay_receive(&self, peer_ip: Ipv4Addr, endpoint: TransportEndpoint) {
+        if self.is_gateway_addr(endpoint.addr) {
             self.peer_relay_receives
                 .lock()
                 .insert(peer_ip, now_time() as i64);

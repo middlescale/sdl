@@ -9,13 +9,14 @@ use std::sync::Arc;
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::data_plane::route_table::StaleRouteCandidate;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 use super::RouteManager;
 
-type DirectPath = (Ipv4Addr, RouteKey);
+type DirectPath = (Ipv4Addr, TransportEndpoint);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Revalidation {
@@ -69,9 +70,7 @@ impl RouteManager {
         // A new transition replaces the entire preceding route generation.
         maintenance.pending.clear();
         for (peer, route) in &routes {
-            maintenance
-                .pending
-                .insert((*peer, route.route_key()), pending);
+            maintenance.pending.insert((*peer, route.endpoint), pending);
         }
         drop(maintenance);
         self.wake_maintenance();
@@ -232,7 +231,7 @@ mod tests {
     use super::*;
     use crate::data_plane::route_table::RouteTable;
     use crate::data_plane::use_channel_type::UseChannelType;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
     use parking_lot::Mutex;
     use std::sync::{mpsc, Barrier};
 
@@ -244,7 +243,11 @@ mod tests {
     }
 
     fn direct(port: u16) -> Route {
-        Route::new(ConnectProtocol::UDP, ([127, 0, 0, 1], port).into(), 1, 7)
+        Route::new(
+            TransportEndpoint::new(ConnectProtocol::UDP, ([127, 0, 0, 1], port).into()),
+            1,
+            7,
+        )
     }
 
     fn manager() -> (RouteManager, Arc<Mutex<Vec<Ipv4Addr>>>) {
@@ -260,14 +263,14 @@ mod tests {
         manager.add_path(peer, route);
         manager
             .route_table
-            .update_read_time_at(&peer, &route.route_key(), now);
+            .update_read_time_at(&peer, &route.endpoint, now);
     }
 
     #[test]
     fn only_new_direct_deadlines_need_an_insertion_wake() {
         let (manager, _) = manager();
         let route = direct(1001);
-        let relay = Route::from(route.route_key(), 2, 10);
+        let relay = Route::new(route.endpoint, 2, 10);
         assert!(!manager.route_table.add_route(peer(1), relay));
         // Promoting the same endpoint from relay to direct introduces a timer.
         assert!(manager.route_table.add_route(peer(1), route));
@@ -285,7 +288,7 @@ mod tests {
         add_at(
             &manager,
             peer(1),
-            Route::from(direct(1001).route_key(), 2, 10),
+            Route::new(direct(1001).endpoint, 2, 10),
             now - STALE,
         );
         let snapshot = manager.route_table.maintenance_snapshot_at(now, STALE);
@@ -302,7 +305,7 @@ mod tests {
         let snapshot = manager.route_table.maintenance_snapshot_at(now, STALE);
         assert_eq!(snapshot.expired.len(), 1);
         assert_eq!(snapshot.expired[0].peer_ip, peer(1));
-        assert_eq!(snapshot.expired[0].route.route_key(), route.route_key());
+        assert_eq!(snapshot.expired[0].route.endpoint, route.endpoint);
         assert_eq!(snapshot.next_deadline, Some(now));
     }
 
@@ -326,14 +329,14 @@ mod tests {
         let manager =
             RouteManager::new_detached(Arc::new(RouteTable::new(UseChannelType::Auto, true)));
         let now = Instant::now();
-        let relay = Route::from(direct(1002).route_key(), 2, 10);
+        let relay = Route::new(direct(1002).endpoint, 2, 10);
         add_at(&manager, peer(1), direct(1001), now - STALE);
         add_at(&manager, peer(2), relay, now - STALE);
         manager.maintain_routes_at(now);
         assert!(manager.route_table.get_routes(&peer(1)).is_none());
         let remaining = manager.route_table.get_routes(&peer(2)).unwrap();
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].route_key(), relay.route_key());
+        assert_eq!(remaining[0].endpoint, relay.endpoint);
         manager.activate_peer(&peer(1));
         assert!(manager.take_direct_recovery_request(&peer(1), false));
     }
@@ -357,7 +360,7 @@ mod tests {
         let probes = manager.begin_underlay_revalidation_at(now, GRACE);
         assert_eq!(probes.len(), 1);
         assert_eq!(probes[0].0, peer(1));
-        assert_eq!(probes[0].1.route_key(), route.route_key());
+        assert_eq!(probes[0].1.endpoint, route.endpoint);
         assert_eq!(probes[0].1.rt, -1);
         assert!(manager.measured_direct_route(&peer(1)).is_none());
         manager.maintain_routes_at(now + GRACE);
@@ -438,7 +441,11 @@ mod tests {
         add_at(&manager, peer(1), direct(1002), now);
         manager.begin_underlay_revalidation_at(now, GRACE);
         add_at(&manager, peer(2), direct(1003), now - STALE);
-        let relay = Route::new(ConnectProtocol::UDP, ([127, 0, 0, 1], 1004).into(), 2, 10);
+        let relay = Route::new(
+            TransportEndpoint::new(ConnectProtocol::UDP, ([127, 0, 0, 1], 1004).into()),
+            2,
+            10,
+        );
         add_at(&manager, peer(2), relay, now - STALE);
 
         let batch = manager.collect_maintenance_at(now + GRACE, STALE);
@@ -452,7 +459,7 @@ mod tests {
         assert_eq!(manager.direct_path_count(&peer(1)), 0);
         let surviving = manager.route_table.get_routes(&peer(2)).unwrap();
         assert_eq!(surviving.len(), 1);
-        assert_eq!(surviving[0].route_key(), relay.route_key());
+        assert_eq!(surviving[0].endpoint, relay.endpoint);
         assert_eq!(
             manager.next_maintenance_deadline_at(now + GRACE, STALE),
             None
@@ -471,7 +478,7 @@ mod tests {
         assert_eq!(batch.stale.len(), 1);
         manager
             .route_table
-            .update_read_time_at(&peer(1), &route.route_key(), now);
+            .update_read_time_at(&peer(1), &route.endpoint, now);
         manager.apply_maintenance_batch_at(batch, now, STALE);
         assert_eq!(manager.direct_path_count(&peer(1)), 1);
         assert!(events.lock().is_empty());
@@ -545,9 +552,9 @@ mod tests {
         // Both deadline sources and the synchronous send error target this path.
         assert_eq!(batch.stale.len(), 1);
         assert_eq!(batch.revalidations.len(), 1);
-        manager.mark_path_failed(&peer(1), route.route_key());
+        manager.mark_path_failed(&peer(1), route.endpoint);
         manager.apply_maintenance_batch_at(batch, now + STALE, STALE);
-        manager.mark_path_failed(&peer(1), route.route_key());
+        manager.mark_path_failed(&peer(1), route.endpoint);
         assert_eq!(*events.lock(), vec![peer(1)]);
         // A timeout-only marker must not change the idle display or suppress the
         // first payload activation, but it must suppress a second recovery request.
@@ -555,7 +562,7 @@ mod tests {
         assert!(manager.activate_peer(&peer(1)));
         assert!(!manager.take_direct_recovery_request(&peer(1), false));
         add_at(&manager, peer(1), route, now);
-        manager.mark_path_failed(&peer(1), route.route_key());
+        manager.mark_path_failed(&peer(1), route.endpoint);
         assert_eq!(*events.lock(), vec![peer(1), peer(1)]);
     }
 
@@ -584,7 +591,7 @@ mod tests {
         let gate = barrier.clone();
         let thread = thread::spawn(move || {
             gate.wait();
-            sender.mark_path_failed(&peer(1), route.route_key());
+            sender.mark_path_failed(&peer(1), route.endpoint);
         });
         barrier.wait();
         manager.apply_maintenance_batch_at(batch, now, STALE);

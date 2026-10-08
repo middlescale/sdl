@@ -4,7 +4,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         let ack = DeviceAuthAck::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("DeviceAuthAck {:?}", e)))?;
@@ -29,14 +29,14 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     Ok(true) => {
                         log::warn!(
                                     "device auth challenge expired, retrying auth request with cooldown: route={:?}, reason={}",
-                                    route_key,
+                                    endpoint,
                                     ack.reason
                                 );
                     }
                     Ok(false) => {
                         log::debug!(
                             "device auth retry suppressed by cooldown: route={:?}, reason={}",
-                            route_key,
+                            endpoint,
                             ack.reason
                         );
                     }
@@ -56,7 +56,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             ack.user_id, ack.group, ack.device_id
         );
         self.callback.success();
-        self.register(current_device, route_key, true)?;
+        self.register(current_device, endpoint, true)?;
         Ok(())
     }
 

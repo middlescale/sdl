@@ -65,14 +65,14 @@ fn collect_auto_excludes(runtime: &Sdl, selected_identity: Option<&PeerIdentity>
     for (_peer_ip, routes) in runtime.route_snapshot() {
         for route in routes {
             if route.is_p2p() {
-                add_socket_addr_exclude(&mut excludes, route.addr);
+                add_socket_addr_exclude(&mut excludes, route.endpoint.addr);
             }
         }
     }
     if let Some(peer_ip) = selected_exit_node_peer_ip(runtime, selected_identity) {
         if let Some(route) = runtime.route(&peer_ip) {
             if route.is_p2p() {
-                add_socket_addr_exclude(&mut excludes, route.addr);
+                add_socket_addr_exclude(&mut excludes, route.endpoint.addr);
             }
         }
     }

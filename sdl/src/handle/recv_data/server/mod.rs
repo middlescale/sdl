@@ -26,7 +26,7 @@ use sdl_packet::ip::ipv4::packet::IpV4Packet;
 
 use crate::core::PeerInfo;
 use crate::core::SdlRuntime;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::handle::callback::{ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCallback};
 use crate::handle::recv_data::PacketHandler;
 use crate::handle::{ConnectStatus, CurrentDeviceInfo};
@@ -42,6 +42,7 @@ use crate::proto::message::{
 use crate::protocol::control_packet::ControlPacket;
 use crate::protocol::error_packet::InErrorPacket;
 use crate::protocol::{ip_turn_packet, service_packet, NetPacket, Protocol};
+use crate::transport::TransportEndpoint;
 use crate::tun_device::io::write_full_device;
 use crate::tun_device::TunDeviceWriter;
 use crate::util::icmp_debug::parse_icmp_echo_meta;
@@ -53,7 +54,10 @@ static UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER: OnceLock<
     crate::util::limit::ConcurrentRateLimiter,
 > = OnceLock::new();
 
-fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr: SocketAddr) {
+fn log_sampled_unauthorized_server_source_drop(
+    endpoint: TransportEndpoint,
+    control_addr: SocketAddr,
+) {
     let count = UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if UNAUTHORIZED_SERVER_SOURCE_DROP_LOG_LIMITER
         .get_or_init(|| crate::util::limit::ConcurrentRateLimiter::new(1, 1))
@@ -62,8 +66,8 @@ fn log_sampled_unauthorized_server_source_drop(route_key: RouteKey, control_addr
         let sampled = UNAUTHORIZED_SERVER_SOURCE_DROP_COUNT.swap(0, Ordering::Relaxed);
         let total = sampled.max(count);
         log::debug!(
-            "dropping packets from unauthorized control/gateway source (sample route_key={:?}, control_addr={}, count={})",
-            route_key,
+            "dropping packets from unauthorized control/gateway source (sample endpoint={:?}, control_addr={}, count={})",
+            endpoint,
             control_addr,
             total
         );
@@ -110,25 +114,25 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
         &self,
         mut net_packet: NetPacket<&mut [u8]>,
         _extend: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         current_device: &CurrentDeviceInfo,
     ) -> anyhow::Result<()> {
-        if !self.runtime.control_session.is_control_addr(route_key.addr)
+        if !self.runtime.control_session.is_control_addr(endpoint.addr)
             && !self
                 .runtime
                 .data_plane
                 .gateway_sessions
-                .is_gateway_addr(route_key.addr)
+                .is_gateway_addr(endpoint.addr)
         {
             log_sampled_unauthorized_server_source_drop(
-                route_key,
+                endpoint,
                 self.runtime.control_session.server_addr(),
             );
             return Ok(());
         }
         self.runtime
             .routes()
-            .touch_path(&net_packet.source(), &route_key);
+            .touch_path(&net_packet.source(), &endpoint);
         self.reconcile_punch_sessions(current_device)?;
         if net_packet.protocol() == Protocol::Error
             && net_packet.transport_protocol()
@@ -141,7 +145,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
         {
             let response = HandshakeResponse::parse_from_bytes(net_packet.payload())
                 .map_err(|e| anyhow!("HandshakeResponse {:?}", e))?;
-            log::info!("握手响应:{:?},{}", route_key, response);
+            log::info!("握手响应:{:?},{}", endpoint, response);
             if !response
                 .capabilities
                 .iter()
@@ -159,20 +163,20 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                 HandshakeInfo::new_no_secret(response.version, response.capabilities);
             if self.callback.handshake(handshake_info) {
                 //没有加密，则发送注册请求
-                self.register(current_device, route_key, false)?;
+                self.register(current_device, endpoint, false)?;
             }
 
             return Ok(());
         }
         match net_packet.protocol() {
             Protocol::Service => {
-                self.service(current_device, net_packet, route_key)?;
+                self.service(current_device, net_packet, endpoint)?;
             }
             Protocol::Error => {
                 self.error(net_packet)?;
             }
             Protocol::Control => {
-                self.control(net_packet, route_key)?;
+                self.control(net_packet, endpoint)?;
             }
             Protocol::IpTurn => {
                 match ip_turn_packet::Protocol::from(net_packet.transport_protocol()) {
@@ -183,7 +187,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                             .runtime
                             .data_plane
                             .gateway_sessions
-                            .is_gateway_addr(route_key.addr);
+                            .is_gateway_addr(endpoint.addr);
                         let from_gateway_peer =
                             is_gateway_peer_ipturn_source(source, current_device, from_gateway);
                         if from_gateway_peer {
@@ -191,7 +195,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                 self.runtime
                                     .data_plane
                                     .gateway_sessions
-                                    .remember_peer_ingress_gateway(peer, route_key.addr);
+                                    .remember_peer_ingress_gateway(peer, endpoint.addr);
                             }
                         }
                         let mut gateway_echo_reply = None;
@@ -215,7 +219,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                     self.send_gateway_reply(
                                         &net_packet,
                                         current_device,
-                                        route_key.addr,
+                                        endpoint.addr,
                                     )?;
                                     return Ok(());
                                 }
@@ -237,7 +241,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                 serde_json::json!({
                                     "src": icmp_source.to_string(),
                                     "dst": icmp_destination.to_string(),
-                                    "via": route_key.addr.to_string(),
+                                    "via": endpoint.addr.to_string(),
                                     "bytes": net_packet.payload().len(),
                                     "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
                                     "icmp_id": echo_meta.map(|meta| meta.identifier),
@@ -273,7 +277,7 @@ impl<Call: SdlCallback> PacketHandler for ServerPacketHandler<Call> {
                                     serde_json::json!({
                                         "src": icmp_source.to_string(),
                                         "dst": icmp_destination.to_string(),
-                                        "via": route_key.addr.to_string(),
+                                        "via": endpoint.addr.to_string(),
                                         "bytes": net_packet.payload().len(),
                                         "icmp_kind": echo_meta.map(|meta| meta.kind_label()),
                                         "icmp_id": echo_meta.map(|meta| meta.identifier),
@@ -351,17 +355,17 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         match service_packet::Protocol::from(net_packet.transport_protocol()) {
             service_packet::Protocol::RegistrationResponse => {
-                self.handle_registration_response(current_device, net_packet, route_key)?
+                self.handle_registration_response(current_device, net_packet, endpoint)?
             }
             service_packet::Protocol::PushDeviceList => {
                 self.handle_push_device_list(current_device, net_packet)?
             }
             service_packet::Protocol::DeviceAuthAck => {
-                self.handle_device_auth_ack(current_device, net_packet, route_key)?
+                self.handle_device_auth_ack(current_device, net_packet, endpoint)?
             }
             service_packet::Protocol::DeviceAuthChallenge => {
                 self.handle_device_auth_challenge(net_packet)?
@@ -388,7 +392,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 self.handle_refresh_gateway_grant_response(current_device, net_packet)?
             }
             service_packet::Protocol::GatewayConnectAck => {
-                self.handle_gateway_connect_ack(net_packet, route_key)?
+                self.handle_gateway_connect_ack(net_packet, endpoint)?
             }
             _ => {
                 log::warn!(
@@ -403,7 +407,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     fn register(
         &self,
         current_device: &CurrentDeviceInfo,
-        _route_key: RouteKey,
+        _endpoint: TransportEndpoint,
         allow_ip_change: bool,
     ) -> anyhow::Result<()> {
         if current_device.status.online() {
@@ -438,7 +442,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 }
                 self.runtime.state.peers.crypto.clear_all();
                 self.runtime.control_session.send_handshake()?;
-                // self.register(current_device, runtime, route_key)?;
+                // self.register(current_device, runtime, endpoint)?;
             }
             InErrorPacket::AddressExhausted => {
                 // 地址用尽
@@ -464,7 +468,11 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         Ok(())
     }
 
-    fn control(&self, net_packet: NetPacket<&mut [u8]>, route_key: RouteKey) -> anyhow::Result<()> {
+    fn control(
+        &self,
+        net_packet: NetPacket<&mut [u8]>,
+        endpoint: TransportEndpoint,
+    ) -> anyhow::Result<()> {
         match ControlPacket::new(net_packet.transport_protocol(), net_packet.payload())? {
             ControlPacket::PongPacket(pong_packet) => {
                 // Gateway probes use the virtual gateway as their source, so receive
@@ -475,7 +483,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                     .runtime
                     .data_plane
                     .gateway_sessions
-                    .handle_gateway_probe_pong(net_packet.source(), route_key, pong_packet.epoch())
+                    .handle_gateway_probe_pong(net_packet.source(), endpoint, pong_packet.epoch())
                 {
                     return Ok(());
                 }
@@ -485,19 +493,19 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                 }
                 let metric = net_packet.origin_ttl() - net_packet.ttl() + 1;
                 let from_control_or_gateway =
-                    self.runtime.control_session.is_control_addr(route_key.addr)
+                    self.runtime.control_session.is_control_addr(endpoint.addr)
                         || self
                             .runtime
                             .data_plane
                             .gateway_sessions
-                            .is_gateway_addr(route_key.addr);
+                            .is_gateway_addr(endpoint.addr);
                 let learned_metric = if from_control_or_gateway {
                     metric.max(2)
                 } else {
                     metric
                 };
                 let rt = (current_time - pong_packet.time()) as i64;
-                let route = Route::from(route_key, learned_metric, rt);
+                let route = Route::new(endpoint, learned_metric, rt);
                 self.runtime.routes().add_path(net_packet.source(), route);
                 let epoch = self.runtime.state.peers.epoch();
                 if pong_packet.epoch() != epoch {
@@ -601,7 +609,7 @@ pub(super) mod test_util {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
     use sdl_packet::icmp::icmp::IcmpPacket;
 
     #[test]
@@ -625,7 +633,7 @@ mod tests {
     #[test]
     fn unauthorized_server_source_drop_logger_is_callable() {
         log_sampled_unauthorized_server_source_drop(
-            RouteKey::new(ConnectProtocol::UDP, "198.51.100.10:29901".parse().unwrap()),
+            TransportEndpoint::new(ConnectProtocol::UDP, "198.51.100.10:29901".parse().unwrap()),
             "203.0.113.10:4242".parse().unwrap(),
         );
     }

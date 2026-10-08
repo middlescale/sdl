@@ -20,7 +20,7 @@ use crate::core::{
 use crate::core::{PeerIdentity, PeerInfo};
 use crate::data_plane::gateway_session::GatewaySessions;
 use crate::data_plane::peer_crypto::PeerCryptoManager;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::data_plane::route_manager::RouteManager;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::runtime::DataPlaneRuntime;
@@ -32,6 +32,7 @@ use crate::nat::punch_workers::{spawn_punch_workers, PunchCoordinator};
 use crate::nat::NatTest;
 use crate::transport::http3_channel::Http3Channel;
 use crate::transport::udp_channel::UdpChannel;
+use crate::transport::TransportEndpoint;
 use crate::tun_device::TunSubsystem;
 use crate::util::{load_or_create_device_signing_key, DebugWatch, StopManager};
 use crate::{ensure_rustls_crypto_provider, nat, DnsProfile, SdlCallback};
@@ -268,9 +269,9 @@ impl Sdl {
         let control_handler = handler.clone();
         {
             let handler = handler.clone();
-            gateway_sessions.start(stop_manager.clone(), move |mut packet, route_key| {
+            gateway_sessions.start(stop_manager.clone(), move |mut packet, endpoint| {
                 let mut extend = [0u8; crate::protocol::BUFFER_SIZE];
-                handler.handle(&mut packet, &mut extend, route_key);
+                handler.handle(&mut packet, &mut extend, endpoint);
             })?;
         }
 
@@ -279,7 +280,7 @@ impl Sdl {
             stop_manager.clone(),
             {
                 let handler = handler.clone();
-                move |buf, extend, route_key| handler.handle(buf, extend, route_key)
+                move |buf, extend, endpoint| handler.handle(buf, extend, endpoint)
             },
             {
                 let runtime = runtime.clone();
@@ -317,12 +318,12 @@ impl Sdl {
                         if let Err(err) = route_manager.send_immediate_heartbeat(
                             current,
                             *peer_ip,
-                            route.route_key(),
+                            route.endpoint,
                         ) {
                             log::debug!(
                                 "underlay direct route revalidation heartbeat failed peer={} route={:?}: {:?}",
                                 peer_ip,
-                                route.route_key(),
+                                route.endpoint,
                                 err
                             );
                         }
@@ -364,9 +365,9 @@ impl Sdl {
             .control_session
             .start(stop_manager.clone(), callback.clone(), {
                 let handler = control_handler;
-                move |mut packet, route_key| {
+                move |mut packet, endpoint| {
                     let mut extend = [0u8; crate::protocol::BUFFER_SIZE];
-                    handler.handle(&mut packet, &mut extend, route_key);
+                    handler.handle(&mut packet, &mut extend, endpoint);
                 }
             })?;
         {
@@ -431,8 +432,8 @@ impl Sdl {
     pub fn is_gateway(&self, ip: &Ipv4Addr) -> bool {
         self.runtime.state.current_device.load().is_gateway_vip(ip)
     }
-    pub fn route_key(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        self.runtime.routes().peer_for_direct_route(route_key)
+    pub fn peer_for_endpoint(&self, endpoint: &TransportEndpoint) -> Option<Ipv4Addr> {
+        self.runtime.routes().peer_for_direct_route(endpoint)
     }
     pub(crate) fn route_snapshot(&self) -> Vec<(Ipv4Addr, Vec<Route>)> {
         self.runtime.routes().snapshot_routes()

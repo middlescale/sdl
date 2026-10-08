@@ -59,14 +59,14 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
     pub(super) fn handle_gateway_connect_ack(
         &self,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         let ack = GatewayConnectAck::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("GatewayConnectAck {:?}", e)))?;
         self.runtime
             .data_plane
             .gateway_sessions
-            .handle_connect_ack(route_key.addr, &ack);
+            .handle_connect_ack(endpoint.addr, &ack);
         Ok(())
     }
 
@@ -144,7 +144,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
 }
 
 pub(super) fn observed_udp_port_from_registration(
-    protocol: crate::transport::connect_protocol::ConnectProtocol,
+    protocol: crate::transport::ConnectProtocol,
     public_port: u16,
 ) -> u16 {
     if protocol.is_udp() {
@@ -224,7 +224,7 @@ mod tests {
     use super::*;
     use crate::handle::CurrentDeviceInfo;
     use crate::proto::message::GatewayAccessGrant;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
 
     #[test]
     fn gateway_peer_ipturn_source_only_matches_non_gateway_peer_packets() {

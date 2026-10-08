@@ -20,10 +20,10 @@ use tokio_rustls::TlsConnector;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
-use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::quic_channel::{consume_pending_frames, frame_packet, PacketCallback};
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 enum Http2Command {
@@ -91,7 +91,7 @@ impl Http2Channel {
 
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
     {
         self.start_named(stop_manager, "gatewayHttp2", on_packet)
     }
@@ -103,7 +103,7 @@ impl Http2Channel {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
             return Ok(());
@@ -530,14 +530,14 @@ async fn connect(
     }
     let recv = response.into_body();
     let callback = on_packet.clone();
-    let route_key = RouteKey::new(ConnectProtocol::TCP, addr);
+    let endpoint = TransportEndpoint::new(ConnectProtocol::TCP, addr);
     let read_health = healthy.clone();
     let read_generation = active_generation.clone();
     let read_task = tokio::spawn(async move {
-        if let Err(e) = read_h2_packets(recv, idle_timeout_ms, route_key, callback).await {
-            log::warn!("gateway http2 read failed {:?}: {:?}", route_key.addr, e);
+        if let Err(e) = read_h2_packets(recv, idle_timeout_ms, endpoint, callback).await {
+            log::warn!("gateway http2 read failed {:?}: {:?}", endpoint.addr, e);
         } else {
-            log::debug!("gateway http2 downlink closed {:?}", route_key.addr);
+            log::debug!("gateway http2 downlink closed {:?}", endpoint.addr);
         }
         read_health.store(false, Ordering::Relaxed);
         let _ =
@@ -711,7 +711,7 @@ fn drop_active_connection(active: &mut Option<ActiveConnection>) {
 async fn read_h2_packets(
     mut recv: RecvStream,
     idle_timeout_ms: Arc<AtomicU64>,
-    route_key: RouteKey,
+    endpoint: TransportEndpoint,
     on_packet: PacketCallback,
 ) -> anyhow::Result<()> {
     let mut flow_control = recv.flow_control().clone();
@@ -736,7 +736,7 @@ async fn read_h2_packets(
         let _ = flow_control.release_capacity(bytes.len());
         consume_pending_frames(&mut pending, &mut |packet| {
             log::debug!("gateway http2 recv framed packet bytes={}", packet.len());
-            on_packet(packet, route_key)
+            on_packet(packet, endpoint)
         })?;
     }
     Ok(())

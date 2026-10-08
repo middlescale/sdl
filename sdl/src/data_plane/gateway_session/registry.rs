@@ -3,9 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 
-use crate::data_plane::route::RouteKey;
 use crate::handle::now_time;
 use crate::transport::quic_channel::PacketCallback;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 use super::selection::{gateway_summary_is_clearly_better, gateway_summary_sort_key};
@@ -295,12 +295,12 @@ impl GatewaySessionRegistry {
     pub(super) fn handle_gateway_probe_pong(
         &self,
         source: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         epoch: u16,
     ) -> bool {
         self.entries
-            .get(&route_key.addr)
-            .is_some_and(|session| session.handle_gateway_probe_pong(source, route_key, epoch))
+            .get(&endpoint.addr)
+            .is_some_and(|session| session.handle_gateway_probe_pong(source, endpoint, epoch))
     }
 }
 

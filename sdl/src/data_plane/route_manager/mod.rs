@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::cipher::Cipher;
 use crate::core::{runtime::PeerSubsystem, Config};
 use crate::data_plane::peer_crypto::PeerCryptoManager;
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
 use crate::data_plane::use_channel_type::UseChannelType;
@@ -19,6 +19,7 @@ use crate::protocol::body::ENCRYPTION_RESERVED;
 use crate::protocol::control_packet::PingPacket;
 use crate::protocol::{NetPacket, Protocol, HEAD_LEN};
 use crate::transport::udp_channel::UdpChannel;
+use crate::transport::TransportEndpoint;
 use crate::util::{PeerProbeTracker, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
@@ -185,8 +186,8 @@ impl RouteManager {
             .ok_or_else(|| anyhow::anyhow!("missing peer identity for {}", vip))
     }
 
-    pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
-        self.route_table.has_direct_path(vip, route_key)
+    pub fn has_direct_path(&self, vip: &Ipv4Addr, endpoint: &TransportEndpoint) -> bool {
+        self.route_table.has_direct_path(vip, endpoint)
     }
 
     pub fn best_route(&self, vip: &Ipv4Addr) -> Option<Route> {
@@ -207,12 +208,12 @@ impl RouteManager {
             .payload_route_read(vip, self.stale_direct_timeout)
     }
 
-    pub fn peer_for_direct_route(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
-        self.route_table.get_one_p2p_ip(route_key)
+    pub fn peer_for_direct_route(&self, endpoint: &TransportEndpoint) -> Option<Ipv4Addr> {
+        self.route_table.get_one_p2p_ip(endpoint)
     }
 
-    pub fn has_direct_route_key(&self, route_key: &RouteKey) -> bool {
-        self.route_table.has_direct_route_key(route_key)
+    pub fn has_direct_endpoint(&self, endpoint: &TransportEndpoint) -> bool {
+        self.route_table.has_direct_endpoint(endpoint)
     }
 
     pub fn direct_path_count(&self, vip: &Ipv4Addr) -> usize {
@@ -299,8 +300,8 @@ impl RouteManager {
             .collect()
     }
 
-    pub fn remove_path(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        self.route_table.remove_route(vip, route_key);
+    pub fn remove_path(&self, vip: &Ipv4Addr, endpoint: TransportEndpoint) {
+        self.route_table.remove_route(vip, endpoint);
         self.wake_maintenance();
     }
 
@@ -322,16 +323,16 @@ impl RouteManager {
         affected_peers.len()
     }
 
-    pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        if self.route_table.remove_route(vip, route_key) {
+    pub fn mark_path_failed(&self, vip: &Ipv4Addr, endpoint: TransportEndpoint) {
+        if self.route_table.remove_route(vip, endpoint) {
             self.notify_direct_route_update(*vip);
             self.fire_direct_route_timeout_if_last(*vip);
         }
         self.wake_maintenance();
     }
 
-    pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
-        self.route_table.update_read_time(vip, route_key)
+    pub fn touch_path(&self, vip: &Ipv4Addr, endpoint: &TransportEndpoint) {
+        self.route_table.update_read_time(vip, endpoint)
     }
 
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
@@ -365,10 +366,8 @@ impl RouteManager {
                 if !route.is_p2p() {
                     continue;
                 }
-                let route_key = route.route_key();
-                let epoch = self
-                    .peer_probe_tracker
-                    .record_ping_probe(dest_ip, route_key);
+                let endpoint = route.endpoint;
+                let epoch = self.peer_probe_tracker.record_ping_probe(dest_ip, endpoint);
                 let net_packets = match self.heartbeat_packets_for_peer(src_ip, dest_ip, epoch) {
                     Ok(net_packets) if !net_packets.is_empty() => net_packets,
                     Ok(_) => continue,
@@ -378,7 +377,7 @@ impl RouteManager {
                     }
                 };
                 for net_packet in &net_packets {
-                    if let Err(e) = self.send_by_key(sender, net_packet, route_key) {
+                    if let Err(e) = self.send_to_endpoint(sender, net_packet, endpoint) {
                         log::warn!("heartbeat err={:?}", e)
                     }
                 }
@@ -390,7 +389,7 @@ impl RouteManager {
         &self,
         current_device: CurrentDeviceInfo,
         dest_ip: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         let Some(sender) = &self.sender else {
             return Ok(());
@@ -400,14 +399,14 @@ impl RouteManager {
         }
         let Some(epoch) = self
             .peer_probe_tracker
-            .try_record_ping_probe(dest_ip, route_key)
+            .try_record_ping_probe(dest_ip, endpoint)
         else {
             return Ok(());
         };
         let net_packets =
             self.heartbeat_packets_for_peer(current_device.virtual_ip, dest_ip, epoch)?;
         for net_packet in &net_packets {
-            self.send_by_key(sender, net_packet, route_key)?;
+            self.send_to_endpoint(sender, net_packet, endpoint)?;
         }
         Ok(())
     }
@@ -505,13 +504,13 @@ impl RouteManager {
         Ok(())
     }
 
-    fn send_by_key<B: AsRef<[u8]>>(
+    fn send_to_endpoint<B: AsRef<[u8]>>(
         &self,
         sender: &RouteSender,
         buf: &NetPacket<B>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> io::Result<()> {
-        sender.udp_channel.send_by_key(buf.buffer(), route_key)
+        sender.udp_channel.send_to_endpoint(buf.buffer(), endpoint)
     }
 }
 
@@ -569,7 +568,7 @@ mod tests {
     use crate::data_plane::route_table::RouteTable;
     use crate::data_plane::use_channel_type::UseChannelType;
     use crate::protocol::Protocol;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::{ConnectProtocol, TransportEndpoint};
     use parking_lot::Mutex;
     use parking_lot::RwLock;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -577,8 +576,10 @@ mod tests {
 
     fn route(metric: u8, port: u16) -> Route {
         Route::new(
-            ConnectProtocol::UDP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
+            TransportEndpoint::new(
+                ConnectProtocol::UDP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)),
+            ),
             metric,
             10,
         )
@@ -618,7 +619,7 @@ mod tests {
         }
         table.add_route(peer, failed_route);
 
-        manager.mark_path_failed(&peer, failed_route.route_key());
+        manager.mark_path_failed(&peer, failed_route.endpoint);
 
         assert!(table.get_routes(&peer).is_none());
         assert_eq!(*timeouts.lock(), vec![peer]);
@@ -641,7 +642,7 @@ mod tests {
         table.add_route(peer, first_route);
         table.add_route(peer, second_route);
 
-        manager.mark_path_failed(&peer, first_route.route_key());
+        manager.mark_path_failed(&peer, first_route.endpoint);
 
         assert_eq!(manager.direct_path_count(&peer), 1);
         assert!(timeouts.lock().is_empty());
@@ -652,10 +653,7 @@ mod tests {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 9);
-        table.add_route(
-            peer,
-            Route::new(route(2, 2010).protocol, route(2, 2010).addr, 2, 1),
-        );
+        table.add_route(peer, Route::new(route(2, 2010).endpoint, 2, 1));
         table.add_route(peer, route(1, 2011));
         let targets = manager.heartbeat_targets();
 
@@ -670,10 +668,7 @@ mod tests {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
         let peer = Ipv4Addr::new(10, 0, 0, 20);
-        table.add_route(
-            peer,
-            Route::new(ConnectProtocol::UDP, route(1, 2021).addr, 1, -1),
-        );
+        table.add_route(peer, Route::new(route(1, 2021).endpoint, 1, -1));
 
         let targets = manager.heartbeat_targets();
         assert_eq!(targets.len(), 1);

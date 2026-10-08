@@ -5,8 +5,8 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use crate::data_plane::route::RouteKey;
 use crate::handle::{now_time, CurrentDeviceInfo};
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 use super::{
@@ -119,7 +119,7 @@ impl GatewaySession {
 impl GatewaySessions {
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
     {
         let _ = self
             .runtime

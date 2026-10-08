@@ -238,7 +238,7 @@ impl ControlSession {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, crate::data_plane::route::RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, crate::transport::TransportEndpoint) + Send + Sync + 'static,
     {
         // Wrap on_packet so every packet received on the control channel
         // automatically updates the liveness timestamp — no address-based
@@ -246,11 +246,11 @@ impl ControlSession {
         let last_ts = self.last_control_packet_at_ms.clone();
         let unanswered = self.unanswered_heartbeats.clone();
         let reconnect_failure_count = self.reconnect_failure_count.clone();
-        let wrapped = move |data: Vec<u8>, route_key: crate::data_plane::route::RouteKey| {
+        let wrapped = move |data: Vec<u8>, endpoint: crate::transport::TransportEndpoint| {
             last_ts.store(crate::handle::now_time() as u64, Ordering::Relaxed);
             unanswered.store(0, Ordering::Relaxed);
             reconnect_failure_count.store(0, Ordering::Relaxed);
-            on_packet(data, route_key);
+            on_packet(data, endpoint);
         };
         let control_session = self.clone();
         self.channel

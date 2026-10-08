@@ -16,11 +16,11 @@ use tokio::sync::mpsc::{channel, unbounded_channel, Receiver, Sender, UnboundedS
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
-use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::control_addr::parse_control_address;
 use crate::transport::quic_channel::{consume_pending_frames, frame_packet, PacketCallback};
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
@@ -83,7 +83,7 @@ impl Http3Channel {
         on_transport_error: E,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
         E: Fn(String) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
@@ -251,14 +251,14 @@ async fn run_http3_worker(
                                         request_sender,
                                         mut send,
                                         recv,
-                                        route_key,
+                                        remote_endpoint,
                                     } = connection;
                                     let connection_id = next_connection_id;
                                     next_connection_id = next_connection_id.wrapping_add(1);
                                     spawn_h3_reader(
                                         connection_id,
                                         recv,
-                                        route_key,
+                                        remote_endpoint,
                                         on_packet.clone(),
                                         read_event_sender.clone(),
                                     );
@@ -325,13 +325,19 @@ fn register_active_connection(
     *next_connection_id = next_connection_id.wrapping_add(1);
     let Http3ClientConnection {
         addr,
-        route_key,
+        remote_endpoint,
         endpoint,
         request_sender,
         send,
         recv,
     } = connection;
-    spawn_h3_reader(connection_id, recv, route_key, on_packet, read_event_sender);
+    spawn_h3_reader(
+        connection_id,
+        recv,
+        remote_endpoint,
+        on_packet,
+        read_event_sender,
+    );
     ActiveConnection {
         connection_id,
         addr,
@@ -345,17 +351,20 @@ fn register_active_connection(
 fn spawn_h3_reader(
     connection_id: u64,
     recv: RequestStream<H3RecvStream, Bytes>,
-    route_key: RouteKey,
+    remote_endpoint: TransportEndpoint,
     on_packet: PacketCallback,
     read_event_sender: UnboundedSender<Http3ReadEvent>,
 ) {
     tokio::spawn(async move {
-        let reason = match read_h3_packets(recv, route_key, on_packet).await {
+        let reason = match read_h3_packets(recv, remote_endpoint, on_packet).await {
             Ok(()) => format!(
                 "control http3 read loop ended unexpectedly {}",
-                route_key.addr
+                remote_endpoint.addr
             ),
-            Err(e) => format!("control http3 read failed {}: {:?}", route_key.addr, e),
+            Err(e) => format!(
+                "control http3 read failed {}: {:?}",
+                remote_endpoint.addr, e
+            ),
         };
         let _ = read_event_sender.send(Http3ReadEvent::Closed {
             connection_id,
@@ -387,7 +396,7 @@ fn handle_read_event(
 
 struct Http3ClientConnection {
     addr: SocketAddr,
-    route_key: RouteKey,
+    remote_endpoint: TransportEndpoint,
     endpoint: quinn::Endpoint,
     request_sender: SendRequest<h3_quinn::OpenStreams, Bytes>,
     send: RequestStream<H3SendStream<Bytes>, Bytes>,
@@ -483,7 +492,7 @@ async fn connect(
     let conn = tokio::time::timeout(CONTROL_HTTP3_CONNECT_TIMEOUT, connecting)
         .await
         .map_err(|_| timeout_anyhow_error("quic_connect", CONTROL_HTTP3_CONNECT_TIMEOUT))??;
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
+    let remote_endpoint = TransportEndpoint::new(ConnectProtocol::QUIC, addr);
 
     let (request_sender, send, recv) =
         tokio::time::timeout(CONTROL_HTTP3_SETUP_TIMEOUT, async move {
@@ -514,7 +523,7 @@ async fn connect(
 
     Ok(Http3ClientConnection {
         addr,
-        route_key,
+        remote_endpoint,
         endpoint,
         request_sender,
         send,
@@ -524,7 +533,7 @@ async fn connect(
 
 async fn read_h3_packets(
     mut recv: RequestStream<H3RecvStream, Bytes>,
-    route_key: RouteKey,
+    remote_endpoint: TransportEndpoint,
     on_packet: PacketCallback,
 ) -> anyhow::Result<()> {
     let mut pending = Vec::new();
@@ -534,7 +543,9 @@ async fn read_h3_packets(
         };
         let bytes = chunk.copy_to_bytes(chunk.remaining());
         pending.extend_from_slice(bytes.as_ref());
-        consume_pending_frames(&mut pending, &mut |packet| on_packet(packet, route_key))?;
+        consume_pending_frames(&mut pending, &mut |packet| {
+            on_packet(packet, remote_endpoint)
+        })?;
     }
 }
 

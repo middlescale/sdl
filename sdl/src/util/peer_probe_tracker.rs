@@ -1,4 +1,4 @@
-use crate::data_plane::route::RouteKey;
+use crate::transport::TransportEndpoint;
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ const MAX_PING_PROBE_STATS_SAMPLES: u32 = 64;
 
 #[derive(Clone, Debug)]
 struct PendingPingProbe {
-    route_key: RouteKey,
+    endpoint: TransportEndpoint,
     epoch: u16,
     expires_at: Instant,
 }
@@ -58,7 +58,7 @@ pub struct PeerProbeTracker {
     last_cleanup_at: AtomicCell<Instant>,
     pending_pings: Mutex<HashMap<Ipv4Addr, Vec<PendingPingProbe>>>,
     pending_punches: Mutex<HashMap<Ipv4Addr, Vec<PendingPunchProbe>>>,
-    ping_probe_stats: Mutex<HashMap<(Ipv4Addr, RouteKey), PingProbeStats>>,
+    ping_probe_stats: Mutex<HashMap<(Ipv4Addr, TransportEndpoint), PingProbeStats>>,
 }
 
 impl PeerProbeTracker {
@@ -72,32 +72,36 @@ impl PeerProbeTracker {
         }
     }
 
-    pub fn record_ping_probe(&self, peer_ip: Ipv4Addr, route_key: RouteKey) -> u16 {
+    pub fn record_ping_probe(&self, peer_ip: Ipv4Addr, endpoint: TransportEndpoint) -> u16 {
         self.maybe_cleanup();
         let epoch = {
             let mut pending = self.pending_pings.lock();
-            self.record_ping_probe_locked(&mut pending, peer_ip, route_key)
+            self.record_ping_probe_locked(&mut pending, peer_ip, endpoint)
         };
-        self.record_ping_probe_sent(peer_ip, route_key);
+        self.record_ping_probe_sent(peer_ip, endpoint);
         epoch
     }
 
     /// Registers a ping probe only when the same peer and route do not already
     /// have an outstanding measurement.
-    pub fn try_record_ping_probe(&self, peer_ip: Ipv4Addr, route_key: RouteKey) -> Option<u16> {
+    pub fn try_record_ping_probe(
+        &self,
+        peer_ip: Ipv4Addr,
+        endpoint: TransportEndpoint,
+    ) -> Option<u16> {
         self.maybe_cleanup();
         let epoch = {
             let mut pending = self.pending_pings.lock();
             if pending.get(&peer_ip).is_some_and(|probes| {
                 probes
                     .iter()
-                    .any(|probe| probe.route_key == route_key && probe.expires_at > Instant::now())
+                    .any(|probe| probe.endpoint == endpoint && probe.expires_at > Instant::now())
             }) {
                 return None;
             }
-            self.record_ping_probe_locked(&mut pending, peer_ip, route_key)
+            self.record_ping_probe_locked(&mut pending, peer_ip, endpoint)
         };
-        self.record_ping_probe_sent(peer_ip, route_key);
+        self.record_ping_probe_sent(peer_ip, endpoint);
         Some(epoch)
     }
 
@@ -105,16 +109,16 @@ impl PeerProbeTracker {
         &self,
         pending: &mut HashMap<Ipv4Addr, Vec<PendingPingProbe>>,
         peer_ip: Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> u16 {
         let epoch = self.next_probe_epoch();
         let probes = pending.entry(peer_ip).or_default();
         probes.retain(|probe| {
             probe.expires_at > Instant::now()
-                && !(probe.route_key == route_key && probe.epoch == epoch)
+                && !(probe.endpoint == endpoint && probe.epoch == epoch)
         });
         probes.push(PendingPingProbe {
-            route_key,
+            endpoint,
             epoch,
             expires_at: Instant::now() + PING_PROBE_TTL,
         });
@@ -125,15 +129,20 @@ impl PeerProbeTracker {
         epoch
     }
 
-    fn record_ping_probe_sent(&self, peer_ip: Ipv4Addr, route_key: RouteKey) {
+    fn record_ping_probe_sent(&self, peer_ip: Ipv4Addr, endpoint: TransportEndpoint) {
         self.ping_probe_stats
             .lock()
-            .entry((peer_ip, route_key))
+            .entry((peer_ip, endpoint))
             .or_default()
             .record_sent();
     }
 
-    pub fn match_ping_response(&self, peer_ip: Ipv4Addr, route_key: RouteKey, epoch: u16) -> bool {
+    pub fn match_ping_response(
+        &self,
+        peer_ip: Ipv4Addr,
+        endpoint: TransportEndpoint,
+        epoch: u16,
+    ) -> bool {
         if epoch == 0 {
             return false;
         }
@@ -146,7 +155,7 @@ impl PeerProbeTracker {
             probes.retain(|probe| probe.expires_at > Instant::now());
             if let Some(index) = probes
                 .iter()
-                .position(|probe| probe.route_key == route_key && probe.epoch == epoch)
+                .position(|probe| probe.endpoint == endpoint && probe.epoch == epoch)
             {
                 probes.swap_remove(index);
                 if probes.is_empty() {
@@ -160,17 +169,17 @@ impl PeerProbeTracker {
         if matched {
             self.ping_probe_stats
                 .lock()
-                .entry((peer_ip, route_key))
+                .entry((peer_ip, endpoint))
                 .or_default()
                 .record_acked();
         }
         matched
     }
 
-    pub fn ping_loss_rate(&self, peer_ip: Ipv4Addr, route_key: RouteKey) -> Option<f32> {
+    pub fn ping_loss_rate(&self, peer_ip: Ipv4Addr, endpoint: TransportEndpoint) -> Option<f32> {
         self.ping_probe_stats
             .lock()
-            .get(&(peer_ip, route_key))
+            .get(&(peer_ip, endpoint))
             .and_then(PingProbeStats::loss_rate)
     }
 
@@ -243,55 +252,55 @@ impl PeerProbeTracker {
 #[cfg(test)]
 mod tests {
     use super::PeerProbeTracker;
-    use crate::data_plane::route::RouteKey;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
+    use crate::transport::TransportEndpoint;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     #[test]
     fn ping_probe_must_match_epoch_and_route() {
         let tracker = PeerProbeTracker::new(4);
         let peer = Ipv4Addr::new(10, 0, 0, 2);
-        let route_key = RouteKey::new(
+        let endpoint = TransportEndpoint::new(
             ConnectProtocol::UDP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 2), 3000)),
         );
-        let epoch = tracker.record_ping_probe(peer, route_key);
+        let epoch = tracker.record_ping_probe(peer, endpoint);
 
-        assert!(!tracker.match_ping_response(peer, route_key, epoch.wrapping_add(1)));
-        assert!(tracker.match_ping_response(peer, route_key, epoch));
-        assert!(!tracker.match_ping_response(peer, route_key, epoch));
+        assert!(!tracker.match_ping_response(peer, endpoint, epoch.wrapping_add(1)));
+        assert!(tracker.match_ping_response(peer, endpoint, epoch));
+        assert!(!tracker.match_ping_response(peer, endpoint, epoch));
     }
 
     #[test]
     fn immediate_ping_probe_is_deduplicated_by_peer_and_route() {
         let tracker = PeerProbeTracker::new(4);
         let peer = Ipv4Addr::new(10, 0, 0, 2);
-        let route_key = RouteKey::new(
+        let endpoint = TransportEndpoint::new(
             ConnectProtocol::UDP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 2), 3000)),
         );
 
-        assert!(tracker.try_record_ping_probe(peer, route_key).is_some());
-        assert!(tracker.try_record_ping_probe(peer, route_key).is_none());
+        assert!(tracker.try_record_ping_probe(peer, endpoint).is_some());
+        assert!(tracker.try_record_ping_probe(peer, endpoint).is_none());
     }
 
     #[test]
     fn ping_loss_rate_uses_recent_ping_probe_results() {
         let tracker = PeerProbeTracker::new(4);
         let peer = Ipv4Addr::new(10, 0, 0, 2);
-        let route_key = RouteKey::new(
+        let endpoint = TransportEndpoint::new(
             ConnectProtocol::UDP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 2), 3000)),
         );
         for i in 0..5 {
-            let epoch = tracker.record_ping_probe(peer, route_key);
+            let epoch = tracker.record_ping_probe(peer, endpoint);
             if i < 3 {
-                assert!(tracker.match_ping_response(peer, route_key, epoch));
+                assert!(tracker.match_ping_response(peer, endpoint, epoch));
             }
         }
 
         let loss = tracker
-            .ping_loss_rate(peer, route_key)
+            .ping_loss_rate(peer, endpoint)
             .expect("loss rate after enough samples");
         assert!((loss - 0.4).abs() < f32::EPSILON);
     }

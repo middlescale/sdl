@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::Config;
-use crate::data_plane::route::RouteKey;
 use crate::data_plane::stats::DataPlaneStats;
 use crate::nat::looks_like_stun_response;
 use crate::protocol::{Protocol, Version, BUFFER_SIZE, HEAD_LEN, MAX_TTL};
-use crate::transport::connect_protocol::ConnectProtocol;
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 const NOTIFY: Token = Token(0);
@@ -278,14 +278,14 @@ impl UdpChannel {
         Ok(())
     }
 
-    pub fn send_by_key(&self, buf: &[u8], route_key: RouteKey) -> io::Result<()> {
-        if !route_key.protocol().is_udp() {
+    pub fn send_to_endpoint(&self, buf: &[u8], endpoint: TransportEndpoint) -> io::Result<()> {
+        if !endpoint.protocol.is_udp() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("not udp route: {:?}", route_key.protocol()),
+                format!("not udp route: {:?}", endpoint.protocol),
             ));
         }
-        self.send_to(buf, route_key.addr)
+        self.send_to(buf, endpoint.addr)
     }
 
     pub fn start<H, K>(
@@ -295,7 +295,7 @@ impl UdpChannel {
         known_source: K,
     ) -> anyhow::Result<()>
     where
-        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     {
         self.start_main_listener(stop_manager, recv_handler, known_source)
@@ -361,7 +361,7 @@ impl UdpChannel {
         known_source: K,
     ) -> anyhow::Result<()>
     where
-        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     {
         let poll = Poll::new()?;
@@ -426,7 +426,7 @@ fn main_listener_loop<H, K>(
     known_source: K,
 ) -> io::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
 {
     let mut udp = Some(main_listener_socket(&channel)?);
@@ -556,7 +556,7 @@ impl UdpSocketDriver {
         down_traffic_hook: D,
     ) -> anyhow::Result<()>
     where
-        H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+        H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
         K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
         A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
         D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
@@ -607,7 +607,7 @@ fn listen<H, K, A, D>(
     down_traffic_hook: D,
 ) -> anyhow::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
@@ -647,7 +647,7 @@ fn listen_loop<H, K, A, D>(
     down_traffic_hook: D,
 ) -> io::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey) + Clone + Send + Sync + 'static,
+    H: Fn(&mut [u8], &mut [u8], TransportEndpoint) + Clone + Send + Sync + 'static,
     K: Fn(SocketAddr) -> bool + Clone + Send + Sync + 'static,
     A: Fn(&[u8]) -> bool + Clone + Send + Sync + 'static,
     D: Fn(usize, SocketAddr) + Clone + Send + Sync + 'static,
@@ -705,7 +705,7 @@ fn drain_udp_datagrams<H, K, A, D>(
     unknown_limiter: &mut UnknownUdpIngressLimiter,
 ) -> io::Result<()>
 where
-    H: Fn(&mut [u8], &mut [u8], RouteKey),
+    H: Fn(&mut [u8], &mut [u8], TransportEndpoint),
     K: Fn(SocketAddr) -> bool,
     A: Fn(&[u8]) -> bool,
     D: Fn(usize, SocketAddr),
@@ -774,7 +774,11 @@ where
                     continue;
                 }
                 down_traffic_hook(len, addr);
-                recv_handler(packet, extend, RouteKey::new(ConnectProtocol::UDP, addr));
+                recv_handler(
+                    packet,
+                    extend,
+                    TransportEndpoint::new(ConnectProtocol::UDP, addr),
+                );
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
             Err(err) => {
@@ -833,9 +837,9 @@ mod tests {
         should_accept_udp_ingress_frame, UdpChannel, UdpChannelState, UdpSocketDriver,
         UnknownUdpIngressLimiter, UnknownUdpLimitDecision,
     };
-    use crate::data_plane::route::RouteKey;
     use crate::data_plane::stats::DataPlaneStats;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
+    use crate::transport::TransportEndpoint;
     use crate::util::StopManager;
     use parking_lot::{Mutex, RwLock};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
@@ -940,14 +944,14 @@ mod tests {
     }
 
     #[test]
-    fn send_by_key_rejects_non_udp_route() {
+    fn send_to_endpoint_rejects_non_udp_route() {
         let channel = test_channel(UdpSocket::bind("127.0.0.1:0").unwrap(), false, false);
-        let route_key = RouteKey::new(
+        let endpoint = TransportEndpoint::new(
             ConnectProtocol::QUIC,
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 3000, 0, 0)),
         );
 
-        let err = channel.send_by_key(b"nope", route_key).unwrap_err();
+        let err = channel.send_to_endpoint(b"nope", endpoint).unwrap_err();
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }

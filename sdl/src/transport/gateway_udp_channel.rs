@@ -7,9 +7,7 @@ use curve25519_dalek::montgomery::MontgomeryPoint;
 use parking_lot::Mutex;
 use rand::RngCore;
 
-use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
-use crate::transport::connect_protocol::ConnectProtocol;
 use crate::transport::gateway_udp_envelope::{
     derive_gateway_udp_header_key, derive_gateway_udp_shared_secret, gateway_udp_payload_hash,
     open_gateway_udp_header, seal_gateway_udp_header, GatewayUdpEnvelopeHeader, GatewayUdpPacket,
@@ -17,6 +15,8 @@ use crate::transport::gateway_udp_envelope::{
 };
 use crate::transport::quic_channel::PacketCallback;
 use crate::transport::udp_channel::UdpSocketDriver;
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,8 +78,8 @@ impl GatewayUdpChannel {
         self.driver.start_named(
             stop_manager,
             worker_name,
-            move |buf, _extend, route_key| {
-                let from = route_key.addr;
+            move |buf, _extend, endpoint| {
+                let from = endpoint.addr;
                 let expected = *server_addr.lock();
                 if from != expected {
                     log::debug!(
@@ -144,7 +144,7 @@ impl GatewayUdpChannel {
                 }
                 crypto_guard.last_recv_sequence = packet.sequence;
                 drop(crypto_guard);
-                on_packet(packet.payload, RouteKey::new(ConnectProtocol::UDP, from));
+                on_packet(packet.payload, TransportEndpoint::new(ConnectProtocol::UDP, from));
             },
             |_| true,
             |_| true,

@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::RwLock;
 
-use crate::data_plane::route::{Route, RouteKey};
+use crate::data_plane::route::Route;
 use crate::data_plane::use_channel_type::UseChannelType;
+use crate::transport::TransportEndpoint;
 
 type RouteLiveness = AtomicCell<Instant>;
 type RouteMap = FnvHashMap<Ipv4Addr, Vec<(Route, RouteLiveness)>>;
@@ -21,7 +22,7 @@ const PEER_ACTIVITY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration:
 pub(crate) struct RouteTable {
     routes: RwLock<RouteMap>,
     peer_activity: RwLock<PeerActivityMap>,
-    direct_route_keys: RwLock<FnvHashSet<RouteKey>>,
+    direct_endpoints: RwLock<FnvHashSet<TransportEndpoint>>,
     latency_first: bool,
     use_channel_type: AtomicCell<UseChannelType>,
 }
@@ -61,7 +62,7 @@ impl RouteTable {
                 64,
                 Default::default(),
             )),
-            direct_route_keys: RwLock::new(FnvHashSet::with_capacity_and_hasher(
+            direct_endpoints: RwLock::new(FnvHashSet::with_capacity_and_hasher(
                 64,
                 Default::default(),
             )),
@@ -121,7 +122,7 @@ impl RouteTable {
             });
         }
         route_table.retain(|_, routes| !routes.is_empty());
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&route_table, &mut self.direct_endpoints.write());
         // Admission checks in add_route_ hold the same lock. Publish the new
         // mode only after incompatible routes have been removed.
         self.use_channel_type.store(use_channel_type);
@@ -146,7 +147,7 @@ impl RouteTable {
             UseChannelType::P2p if !route.is_p2p() => return false,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::Auto => {}
         }
-        let key = route.route_key();
+        let key = route.endpoint;
         let list = route_table
             .entry(vip)
             .or_insert_with(|| Vec::with_capacity(4));
@@ -156,7 +157,7 @@ impl RouteTable {
             if x.metric < route.metric && !self.latency_first {
                 return false;
             }
-            if x.route_key() == key {
+            if x.endpoint == key {
                 if only_if_absent {
                     return false;
                 }
@@ -178,7 +179,7 @@ impl RouteTable {
             list.sort_by_key(|(k, _)| k.rt);
             list.push((route, AtomicCell::new(Instant::now())));
         }
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&route_table, &mut self.direct_endpoints.write());
         if route.is_p2p() {
             self.reset_direct_recovery_request(&vip);
         }
@@ -257,11 +258,11 @@ impl RouteTable {
         (measured_direct, has_direct)
     }
 
-    pub fn get_one_p2p_ip(&self, route_key: &RouteKey) -> Option<Ipv4Addr> {
+    pub fn get_one_p2p_ip(&self, endpoint: &TransportEndpoint) -> Option<Ipv4Addr> {
         let table = self.routes.read();
         for (k, v) in table.iter() {
             for (route, _) in v {
-                if &route.route_key() == route_key && route.is_p2p() {
+                if &route.endpoint == endpoint && route.is_p2p() {
                     return Some(*k);
                 }
             }
@@ -269,18 +270,18 @@ impl RouteTable {
         None
     }
 
-    pub fn has_direct_route_key(&self, route_key: &RouteKey) -> bool {
-        self.direct_route_keys.read().contains(route_key)
+    pub fn has_direct_endpoint(&self, endpoint: &TransportEndpoint) -> bool {
+        self.direct_endpoints.read().contains(endpoint)
     }
 
-    pub fn has_direct_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) -> bool {
+    pub fn has_direct_path(&self, vip: &Ipv4Addr, endpoint: &TransportEndpoint) -> bool {
         self.routes
             .read()
             .get(vip)
             .map(|routes| {
                 routes
                     .iter()
-                    .any(|(route, _)| route.is_p2p() && &route.route_key() == route_key)
+                    .any(|(route, _)| route.is_p2p() && &route.endpoint == endpoint)
             })
             .unwrap_or(false)
     }
@@ -419,21 +420,21 @@ impl RouteTable {
         }
     }
 
-    pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
-        self.remove_route_if(vip, route_key, |_, _| true)
+    pub fn remove_route(&self, vip: &Ipv4Addr, endpoint: TransportEndpoint) -> bool {
+        self.remove_route_if(vip, endpoint, |_, _| true)
     }
 
     fn remove_route_if(
         &self,
         vip: &Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         should_remove: impl Fn(&Route, Instant) -> bool,
     ) -> bool {
         let mut write_guard = self.routes.write();
         let mut removed_direct = false;
         if let Some(routes) = write_guard.get_mut(vip) {
             routes.retain(|(route, time)| {
-                if route.route_key() == route_key && should_remove(route, time.load()) {
+                if route.endpoint == endpoint && should_remove(route, time.load()) {
                     removed_direct |= route.is_p2p();
                     false
                 } else {
@@ -444,20 +445,25 @@ impl RouteTable {
                 write_guard.remove(vip);
             }
         }
-        Self::rebuild_direct_route_keys(&write_guard, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&write_guard, &mut self.direct_endpoints.write());
         // Removing paths never rearms recovery. Only learning a direct route
         // begins a new recovery cycle; concurrent expiry sources share one claim.
         removed_direct
     }
 
-    pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
-        self.update_read_time_at(vip, route_key, Instant::now());
+    pub fn update_read_time(&self, vip: &Ipv4Addr, endpoint: &TransportEndpoint) {
+        self.update_read_time_at(vip, endpoint, Instant::now());
     }
 
-    pub(super) fn update_read_time_at(&self, vip: &Ipv4Addr, route_key: &RouteKey, now: Instant) {
+    pub(super) fn update_read_time_at(
+        &self,
+        vip: &Ipv4Addr,
+        endpoint: &TransportEndpoint,
+        now: Instant,
+    ) {
         if let Some(routes) = self.routes.read().get(vip) {
             for (route, time) in routes {
-                if &route.route_key() == route_key {
+                if &route.endpoint == endpoint {
                     time.store(now);
                     break;
                 }
@@ -505,17 +511,21 @@ impl RouteTable {
     /// measurement. A Pong may have refreshed it while its grace timer was
     /// pending, in which case the route is preserved.
     #[cfg(test)]
-    pub fn remove_unmeasured_direct_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
-        self.remove_route_if(vip, route_key, |route, _| route.is_p2p() && route.rt < 0)
+    pub fn remove_unmeasured_direct_route(
+        &self,
+        vip: &Ipv4Addr,
+        endpoint: TransportEndpoint,
+    ) -> bool {
+        self.remove_route_if(vip, endpoint, |route, _| route.is_p2p() && route.rt < 0)
     }
 
     pub(super) fn remove_revalidation_route(
         &self,
         vip: &Ipv4Addr,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
         started_at: Instant,
     ) -> bool {
-        self.remove_route_if(vip, route_key, |route, last_read| {
+        self.remove_route_if(vip, endpoint, |route, last_read| {
             route.is_p2p() && route.rt < 0 && last_read == started_at
         })
     }
@@ -530,7 +540,7 @@ impl RouteTable {
     ) -> bool {
         self.remove_route_if(
             &candidate.peer_ip,
-            candidate.route.route_key(),
+            candidate.route.endpoint,
             |route, last_read| {
                 route.is_p2p() && last_read == candidate.last_read && last_read + read_idle <= now
             },
@@ -540,14 +550,14 @@ impl RouteTable {
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
         let mut route_table = self.routes.write();
         route_table.remove(vip);
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&route_table, &mut self.direct_endpoints.write());
         drop(route_table);
         self.peer_activity.write().remove(vip);
     }
 
     pub fn clear_all(&self) {
         self.routes.write().clear();
-        self.direct_route_keys.write().clear();
+        self.direct_endpoints.write().clear();
         self.peer_activity.write().clear();
     }
 
@@ -564,29 +574,29 @@ impl RouteTable {
             }
             !routes.is_empty()
         });
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&route_table, &mut self.direct_endpoints.write());
         affected_peers
     }
 
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
         let mut route_table = self.routes.write();
         route_table.retain(|vip, _| valid_peers.contains(vip));
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
+        Self::rebuild_direct_endpoints(&route_table, &mut self.direct_endpoints.write());
         drop(route_table);
         self.peer_activity
             .write()
             .retain(|vip, _| valid_peers.contains(vip));
     }
 
-    fn rebuild_direct_route_keys(
+    fn rebuild_direct_endpoints(
         route_table: &RouteMap,
-        direct_route_keys: &mut FnvHashSet<RouteKey>,
+        direct_endpoints: &mut FnvHashSet<TransportEndpoint>,
     ) {
-        direct_route_keys.clear();
+        direct_endpoints.clear();
         for routes in route_table.values() {
             for (route, _) in routes {
                 if route.is_p2p() {
-                    direct_route_keys.insert(route.route_key());
+                    direct_endpoints.insert(route.endpoint);
                 }
             }
         }
@@ -596,17 +606,18 @@ impl RouteTable {
 #[cfg(test)]
 mod tests {
     use super::RouteTable;
-    use crate::data_plane::route::{Route, RouteKey};
+    use crate::data_plane::route::Route;
     use crate::data_plane::use_channel_type::UseChannelType;
-    use crate::transport::connect_protocol::ConnectProtocol;
+    use crate::transport::ConnectProtocol;
+    use crate::transport::TransportEndpoint;
     use std::collections::HashSet;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
 
-    fn route_key(port: u16) -> RouteKey {
-        RouteKey::new(
+    fn endpoint(port: u16) -> TransportEndpoint {
+        TransportEndpoint::new(
             ConnectProtocol::UDP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port)),
         )
@@ -616,7 +627,7 @@ mod tests {
     fn relay_mode_rejects_direct_routes() {
         let table = RouteTable::new(UseChannelType::Relay, false);
         let vip = Ipv4Addr::new(10, 0, 0, 2);
-        table.add_route(vip, Route::from_default_rt(route_key(1000), 1));
+        table.add_route(vip, Route::with_default_rt(endpoint(1000), 1));
         assert!(table.get_first_route(&vip).is_none());
     }
 
@@ -624,7 +635,7 @@ mod tests {
     fn p2p_mode_rejects_relay_routes() {
         let table = RouteTable::new(UseChannelType::P2p, false);
         let vip = Ipv4Addr::new(10, 0, 0, 3);
-        table.add_route(vip, Route::from_default_rt(route_key(1001), 2));
+        table.add_route(vip, Route::with_default_rt(endpoint(1001), 2));
         assert!(table.get_first_route(&vip).is_none());
     }
 
@@ -632,8 +643,8 @@ mod tests {
     fn direct_routes_replace_relay_routes_when_not_latency_first() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
-        table.add_route(vip, Route::from_default_rt(route_key(1002), 2));
-        table.add_route(vip, Route::from_default_rt(route_key(1003), 1));
+        table.add_route(vip, Route::with_default_rt(endpoint(1002), 2));
+        table.add_route(vip, Route::with_default_rt(endpoint(1003), 1));
 
         let routes = table.get_routes(&vip).unwrap();
         assert_eq!(routes.len(), 1);
@@ -644,12 +655,12 @@ mod tests {
     fn measured_p2p_route_excludes_default_rt_routes() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 4);
-        let default_rt = route_key(1003);
-        table.add_route(vip, Route::from_default_rt(default_rt, 1));
+        let default_rt = endpoint(1003);
+        table.add_route(vip, Route::with_default_rt(default_rt, 1));
         assert!(table.get_one_p2p_route(&vip).is_some());
         assert!(table.get_one_measured_p2p_route(&vip).is_none());
 
-        table.add_route(vip, Route::from(default_rt, 1, 42));
+        table.add_route(vip, Route::new(default_rt, 1, 42));
         assert_eq!(table.get_one_measured_p2p_route(&vip).unwrap().rt, 42);
     }
 
@@ -657,10 +668,7 @@ mod tests {
     fn payload_route_read_treats_stale_direct_routes_as_absent() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 22);
-        table.add_route(
-            vip,
-            Route::new(ConnectProtocol::UDP, route_key(2022).addr, 1, 7),
-        );
+        table.add_route(vip, Route::new(endpoint(2022), 1, 7));
 
         assert!(table
             .payload_route_read(&vip, Duration::from_secs(1))
@@ -676,10 +684,12 @@ mod tests {
     fn live_route_view_falls_back_when_direct_route_is_stale() {
         let table = RouteTable::new(UseChannelType::Auto, true);
         let vip = Ipv4Addr::new(10, 0, 0, 23);
-        let direct = Route::new(ConnectProtocol::UDP, route_key(2023).addr, 1, 1);
+        let direct = Route::new(endpoint(2023), 1, 1);
         let relay = Route::new(
-            ConnectProtocol::TCP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2024)),
+            TransportEndpoint::new(
+                ConnectProtocol::TCP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2024)),
+            ),
             2,
             10,
         );
@@ -691,8 +701,8 @@ mod tests {
             table
                 .get_first_live_route(&vip, Duration::from_millis(1))
                 .unwrap()
-                .route_key(),
-            relay.route_key()
+                .endpoint,
+            relay.endpoint
         );
     }
 
@@ -701,8 +711,8 @@ mod tests {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip1 = Ipv4Addr::new(10, 0, 0, 4);
         let vip2 = Ipv4Addr::new(10, 0, 0, 5);
-        table.add_route(vip1, Route::from_default_rt(route_key(1002), 2));
-        table.add_route(vip2, Route::from_default_rt(route_key(1003), 2));
+        table.add_route(vip1, Route::with_default_rt(endpoint(1002), 2));
+        table.add_route(vip2, Route::with_default_rt(endpoint(1003), 2));
 
         table.retain_peers(&HashSet::from([vip2]));
 
@@ -711,37 +721,37 @@ mod tests {
     }
 
     #[test]
-    fn direct_route_key_index_tracks_route_lifecycle() {
+    fn direct_endpoint_index_tracks_route_lifecycle() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 6);
-        let direct = route_key(1006);
-        let relay = RouteKey::new(
+        let direct = endpoint(1006);
+        let relay = TransportEndpoint::new(
             ConnectProtocol::TCP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 2006)),
         );
 
-        table.add_route(vip, Route::from_default_rt(direct, 1));
-        table.add_route(vip, Route::from_default_rt(relay, 2));
-        assert!(table.has_direct_route_key(&direct));
-        assert!(!table.has_direct_route_key(&relay));
+        table.add_route(vip, Route::with_default_rt(direct, 1));
+        table.add_route(vip, Route::with_default_rt(relay, 2));
+        assert!(table.has_direct_endpoint(&direct));
+        assert!(!table.has_direct_endpoint(&relay));
 
         table.set_use_channel_type(UseChannelType::Relay);
-        assert!(!table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_endpoint(&direct));
 
         table.set_use_channel_type(UseChannelType::Auto);
-        table.add_route(vip, Route::from_default_rt(direct, 1));
-        assert!(table.has_direct_route_key(&direct));
+        table.add_route(vip, Route::with_default_rt(direct, 1));
+        assert!(table.has_direct_endpoint(&direct));
 
         table.remove_route(&vip, direct);
-        assert!(!table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_endpoint(&direct));
     }
 
     #[test]
     fn channel_mode_is_published_only_after_route_pruning() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let vip = Ipv4Addr::new(10, 0, 0, 24);
-        let direct = route_key(1024);
-        table.add_route(vip, Route::from_default_rt(direct, 1));
+        let direct = endpoint(1024);
+        table.add_route(vip, Route::with_default_rt(direct, 1));
 
         let write_guard = table.routes.write();
         let start = Arc::new(Barrier::new(2));
@@ -762,16 +772,16 @@ mod tests {
         setter.join().unwrap();
 
         assert_eq!(table.use_channel_type(), UseChannelType::Relay);
-        assert!(!table.has_direct_route_key(&direct));
-        table.add_route(vip, Route::from_default_rt(direct, 1));
-        assert!(!table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_endpoint(&direct));
+        table.add_route(vip, Route::with_default_rt(direct, 1));
+        assert!(!table.has_direct_endpoint(&direct));
     }
 
     #[test]
     fn concurrent_mode_switch_and_route_add_leave_no_disallowed_route() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let vip = Ipv4Addr::new(10, 0, 0, 25);
-        let direct = route_key(1025);
+        let direct = endpoint(1025);
         let start = Arc::new(Barrier::new(3));
         let setter = {
             let table = table.clone();
@@ -786,7 +796,7 @@ mod tests {
             let start = start.clone();
             thread::spawn(move || {
                 start.wait();
-                table.add_route(vip, Route::from_default_rt(direct, 1));
+                table.add_route(vip, Route::with_default_rt(direct, 1));
             })
         };
         start.wait();
@@ -794,7 +804,7 @@ mod tests {
         adder.join().unwrap();
 
         assert_eq!(table.use_channel_type(), UseChannelType::Relay);
-        assert!(!table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_endpoint(&direct));
         assert!(table.get_routes(&vip).is_none());
     }
 
@@ -802,16 +812,16 @@ mod tests {
     fn clear_all_drops_routes_and_direct_route_index() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 7);
-        let direct = route_key(1007);
+        let direct = endpoint(1007);
 
-        table.add_route(vip, Route::from_default_rt(direct, 1));
+        table.add_route(vip, Route::with_default_rt(direct, 1));
         assert!(table.get_first_route(&vip).is_some());
-        assert!(table.has_direct_route_key(&direct));
+        assert!(table.has_direct_endpoint(&direct));
 
         table.clear_all();
 
         assert!(table.get_first_route(&vip).is_none());
-        assert!(!table.has_direct_route_key(&direct));
+        assert!(!table.has_direct_endpoint(&direct));
         assert!(table.snapshot_routes().is_empty());
     }
 
@@ -819,29 +829,31 @@ mod tests {
     fn clear_direct_routes_preserves_relay_fallback() {
         let table = RouteTable::new(UseChannelType::Auto, true);
         let vip = Ipv4Addr::new(10, 0, 0, 8);
-        let direct = route_key(1008);
-        let relay = RouteKey::new(
+        let direct = endpoint(1008);
+        let relay = TransportEndpoint::new(
             ConnectProtocol::TCP,
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 2008)),
         );
-        table.add_route(vip, Route::from_default_rt(direct, 1));
-        table.add_route(vip, Route::from_default_rt(relay, 2));
+        table.add_route(vip, Route::with_default_rt(direct, 1));
+        table.add_route(vip, Route::with_default_rt(relay, 2));
 
         assert_eq!(table.clear_direct_routes(), vec![vip]);
 
         assert!(table.get_one_p2p_route(&vip).is_none());
-        assert_eq!(table.get_first_route(&vip).unwrap().route_key(), relay);
-        assert!(!table.has_direct_route_key(&direct));
+        assert_eq!(table.get_first_route(&vip).unwrap().endpoint, relay);
+        assert!(!table.has_direct_endpoint(&direct));
     }
 
     #[test]
     fn unmeasured_direct_route_does_not_outrank_relay() {
         let table = RouteTable::new(UseChannelType::Auto, true);
         let vip = Ipv4Addr::new(10, 0, 0, 13);
-        let direct = Route::new(ConnectProtocol::UDP, route_key(1013).addr, 1, -1);
+        let direct = Route::new(endpoint(1013), 1, -1);
         let relay = Route::new(
-            ConnectProtocol::TCP,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2013)),
+            TransportEndpoint::new(
+                ConnectProtocol::TCP,
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 2013)),
+            ),
             2,
             10,
         );
@@ -849,8 +861,8 @@ mod tests {
         table.add_route(vip, relay);
 
         assert_eq!(
-            table.get_first_route(&vip).unwrap().route_key(),
-            relay.route_key()
+            table.get_first_route(&vip).unwrap().endpoint,
+            relay.endpoint
         );
     }
 
@@ -858,14 +870,13 @@ mod tests {
     fn underlay_revalidation_keeps_the_direct_endpoint_but_requires_a_new_measurement() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 14);
-        let direct =
-            Route::new(ConnectProtocol::UDP, route_key(1014).addr, 1, 42).with_loss_rate(Some(0.2));
+        let direct = Route::new(endpoint(1014), 1, 42).with_loss_rate(Some(0.2));
         table.add_route(vip, direct);
 
         let routes_to_probe = table.invalidate_direct_routes_for_revalidation();
         assert_eq!(routes_to_probe.len(), 1);
         assert_eq!(routes_to_probe[0].0, vip);
-        assert_eq!(routes_to_probe[0].1.route_key(), direct.route_key());
+        assert_eq!(routes_to_probe[0].1.endpoint, direct.endpoint);
         let (measured, has_direct) = table.payload_route_read(&vip, Duration::from_secs(1));
         assert!(measured.is_none());
         assert!(has_direct);
@@ -880,10 +891,10 @@ mod tests {
     fn revalidation_expiry_never_removes_a_route_that_a_pong_refreshed() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 15);
-        let key = route_key(1015);
-        table.add_route(vip, Route::from(key, 1, 42));
+        let key = endpoint(1015);
+        table.add_route(vip, Route::new(key, 1, 42));
         table.invalidate_direct_routes_for_revalidation();
-        table.add_route(vip, Route::from(key, 1, 12));
+        table.add_route(vip, Route::new(key, 1, 12));
 
         assert!(!table.remove_unmeasured_direct_route(&vip, key));
         assert_eq!(table.get_one_measured_p2p_route(&vip).unwrap().rt, 12);
@@ -893,7 +904,7 @@ mod tests {
     fn learning_a_direct_route_does_not_mark_the_peer_active() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 9);
-        table.add_route(vip, Route::from_default_rt(route_key(1009), 1));
+        table.add_route(vip, Route::with_default_rt(endpoint(1009), 1));
 
         assert!(!table.is_peer_active(&vip, Duration::from_secs(30)));
     }
@@ -902,7 +913,7 @@ mod tests {
     fn peer_activity_reactivation_preserves_route_measurement() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 10);
-        let direct = Route::new(ConnectProtocol::UDP, route_key(1010).addr, 1, 42);
+        let direct = Route::new(endpoint(1010), 1, 42);
         table.add_route(vip, direct);
         assert!(table.get_one_measured_p2p_route(&vip).is_some());
 
@@ -915,8 +926,8 @@ mod tests {
         assert!(!table.is_peer_active(&vip, Duration::from_millis(1)));
         assert!(table.activate_peer(&vip, Duration::from_millis(1)));
         assert_eq!(
-            table.get_one_measured_p2p_route(&vip).unwrap().route_key(),
-            direct.route_key()
+            table.get_one_measured_p2p_route(&vip).unwrap().endpoint,
+            direct.endpoint
         );
     }
 
@@ -924,7 +935,7 @@ mod tests {
     fn concurrent_peer_activity_reactivation_reports_one_activation() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let vip = Ipv4Addr::new(10, 0, 0, 11);
-        table.add_route(vip, Route::from_default_rt(route_key(1011), 1));
+        table.add_route(vip, Route::with_default_rt(endpoint(1011), 1));
         let _ = table.activate_peer(&vip, Duration::from_millis(1));
         thread::sleep(Duration::from_millis(5));
 
@@ -954,7 +965,7 @@ mod tests {
     fn traffic_after_direct_routes_are_cleared_requests_one_recovery() {
         let table = RouteTable::new(UseChannelType::Auto, false);
         let vip = Ipv4Addr::new(10, 0, 0, 12);
-        let direct = Route::from_default_rt(route_key(1012), 1);
+        let direct = Route::with_default_rt(endpoint(1012), 1);
         table.add_route(vip, direct);
         let _ = table.activate_peer(&vip, Duration::from_secs(30));
 
@@ -964,7 +975,7 @@ mod tests {
         assert!(!table.take_direct_recovery_request(&vip, false));
 
         table.add_route(vip, direct);
-        table.remove_route(&vip, direct.route_key());
+        table.remove_route(&vip, direct.endpoint);
         assert!(table.take_direct_recovery_request(&vip, false));
     }
 }

@@ -5,7 +5,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
         &self,
         current_device: &CurrentDeviceInfo,
         net_packet: NetPacket<&mut [u8]>,
-        route_key: RouteKey,
+        endpoint: TransportEndpoint,
     ) -> anyhow::Result<()> {
         let response = RegistrationResponse::parse_from_bytes(net_packet.payload())
             .map_err(|e| io::Error::other(format!("RegistrationResponse {:?}", e)))?;
@@ -42,7 +42,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                         log::warn!(
                                     "registration rejected due to stale/missing handshake state, requesting fresh handshake before retry: code={}, route={:?}, reason={}",
                                     response.error_code,
-                                    route_key,
+                                    endpoint,
                                     reason
                                 );
                     }
@@ -50,7 +50,7 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
                         log::debug!(
                                     "registration reject recovery handshake suppressed by cooldown: code={}, route={:?}, reason={}",
                                     response.error_code,
-                                    route_key,
+                                    endpoint,
                                     reason
                                 );
                     }
@@ -94,14 +94,14 @@ impl<Call: SdlCallback> ServerPacketHandler<Call> {
             peer_name_domain: profile.peer_name_domain.clone(),
         });
         if self.callback.register(register_info) {
-            let route = Route::from_default_rt(route_key, 1);
+            let route = Route::with_default_rt(endpoint, 1);
             self.runtime
                 .routes()
                 .add_path_if_absent(virtual_gateway, route);
             let public_ip = response.public_ip.into();
             let public_port = response.public_port as u16;
             let observed_udp_port =
-                observed_udp_port_from_registration(route_key.protocol(), public_port);
+                observed_udp_port_from_registration(endpoint.protocol, public_port);
             // For QUIC/TCP control, the observed remote port belongs to the control-plane
             // connection, not the data-plane UDP socket used for punching.
             self.runtime

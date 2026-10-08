@@ -13,13 +13,13 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::Mutex;
 
-use crate::data_plane::route::RouteKey;
 use crate::protocol::NetPacket;
 use crate::protocol::BUFFER_SIZE;
-use crate::transport::connect_protocol::ConnectProtocol;
+use crate::transport::ConnectProtocol;
+use crate::transport::TransportEndpoint;
 use crate::util::StopManager;
 
-pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, RouteKey) + Send + Sync + 'static>;
+pub(crate) type PacketCallback = Arc<dyn Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static>;
 type TransportErrorCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 enum QuicCommand {
@@ -72,7 +72,7 @@ impl QuicChannel {
 
     pub fn start<F>(&self, stop_manager: StopManager, on_packet: F) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
     {
         self.start_named_with_transport_error(stop_manager, "controlQuic", on_packet, |_| {})
     }
@@ -84,7 +84,7 @@ impl QuicChannel {
         on_packet: F,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
     {
         self.start_named_with_transport_error(stop_manager, worker_name, on_packet, |_| {})
     }
@@ -96,7 +96,7 @@ impl QuicChannel {
         on_transport_error: E,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
         E: Fn(String) + Send + Sync + 'static,
     {
         self.start_named_with_transport_error(
@@ -115,7 +115,7 @@ impl QuicChannel {
         on_transport_error: E,
     ) -> anyhow::Result<()>
     where
-        F: Fn(Vec<u8>, RouteKey) + Send + Sync + 'static,
+        F: Fn(Vec<u8>, TransportEndpoint) + Send + Sync + 'static,
         E: Fn(String) + Send + Sync + 'static,
     {
         let Some(receiver) = self.receiver.lock().take() else {
@@ -287,7 +287,7 @@ async fn run_quic_worker(
                                     next_connection_id = next_connection_id.wrapping_add(1);
                                     let QuicClientConnection {
                                         addr,
-                                        route_key,
+                                        remote_endpoint,
                                         endpoint,
                                         mut send,
                                         recv,
@@ -296,7 +296,7 @@ async fn run_quic_worker(
                                     spawn_quic_reader(
                                         connection_id,
                                         recv,
-                                        route_key,
+                                        remote_endpoint,
                                         on_packet.clone(),
                                         read_event_sender.clone(),
                                         active_generation.clone(),
@@ -354,7 +354,7 @@ fn register_active_connection(
     *next_connection_id = next_connection_id.wrapping_add(1);
     let QuicClientConnection {
         addr,
-        route_key,
+        remote_endpoint,
         endpoint,
         send,
         recv,
@@ -363,7 +363,7 @@ fn register_active_connection(
     spawn_quic_reader(
         connection_id,
         recv,
-        route_key,
+        remote_endpoint,
         on_packet,
         read_event_sender,
         active_generation,
@@ -380,18 +380,18 @@ fn register_active_connection(
 fn spawn_quic_reader(
     connection_id: u64,
     mut recv: RecvStream,
-    route_key: RouteKey,
+    remote_endpoint: TransportEndpoint,
     on_packet: PacketCallback,
     read_event_sender: Sender<QuicReadEvent>,
     active_generation: Arc<AtomicU64>,
 ) {
     tokio::spawn(async move {
-        let reason = match read_framed_packets(&mut recv, route_key, on_packet).await {
+        let reason = match read_framed_packets(&mut recv, remote_endpoint, on_packet).await {
             Ok(()) => format!(
                 "control quic read loop ended unexpectedly {}",
-                route_key.addr
+                remote_endpoint.addr
             ),
-            Err(e) => format!("control quic read failed {}: {:?}", route_key.addr, e),
+            Err(e) => format!("control quic read failed {}: {:?}", remote_endpoint.addr, e),
         };
         clear_active_generation(&active_generation, connection_id);
         let _ = read_event_sender
@@ -432,7 +432,7 @@ fn clear_active_generation(active_generation: &AtomicU64, generation: u64) {
 
 pub(crate) struct QuicClientConnection {
     pub addr: SocketAddr,
-    pub route_key: RouteKey,
+    pub remote_endpoint: TransportEndpoint,
     pub endpoint: Endpoint,
     pub send: SendStream,
     pub recv: RecvStream,
@@ -458,11 +458,11 @@ async fn connect(
 
     let connecting = endpoint.connect(addr, &server_name)?;
     let conn = tokio::time::timeout(Duration::from_secs(5), connecting).await??;
-    let route_key = RouteKey::new(ConnectProtocol::QUIC, addr);
+    let remote_endpoint = TransportEndpoint::new(ConnectProtocol::QUIC, addr);
     let (send, recv) = conn.open_bi().await?;
     Ok(QuicClientConnection {
         addr,
-        route_key,
+        remote_endpoint,
         endpoint,
         send,
         recv,
@@ -510,10 +510,10 @@ pub fn extract_server_name(addr: &str) -> String {
 
 pub(crate) async fn read_framed_packets(
     recv: &mut RecvStream,
-    route_key: RouteKey,
+    remote_endpoint: TransportEndpoint,
     on_packet: PacketCallback,
 ) -> anyhow::Result<()> {
-    read_framed_packets_with(recv, move |packet| on_packet(packet, route_key)).await
+    read_framed_packets_with(recv, move |packet| on_packet(packet, remote_endpoint)).await
 }
 
 pub(crate) async fn read_framed_packets_with<F>(
