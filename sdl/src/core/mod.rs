@@ -83,7 +83,7 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn simple_new_config(
+    pub fn with_defaults(
         device_id: String,
         token: String,
         server_address_str: String,

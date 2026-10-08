@@ -26,21 +26,28 @@ pub(crate) struct RouteTable {
     use_channel_type: AtomicCell<UseChannelType>,
 }
 
-pub enum StaleDirectRoute {
-    Timeout(Ipv4Addr, Route),
-    Sleep(Duration),
-    None,
+pub(super) struct StaleRouteCandidate {
+    pub peer_ip: Ipv4Addr,
+    pub route: Route,
+    last_read: Instant,
+}
+
+pub(super) struct RouteMaintenanceSnapshot {
+    pub expired: Vec<StaleRouteCandidate>,
+    pub next_deadline: Option<Instant>,
 }
 
 struct PeerActivity {
-    last_payload: AtomicCell<Instant>,
+    // A timeout may claim recovery before the peer has ever carried payload.
+    // Such a marker must not make the peer appear active in the UI.
+    last_payload: AtomicCell<Option<Instant>>,
     direct_recovery_requested: AtomicCell<bool>,
 }
 
 impl PeerActivity {
-    fn new(now: Instant) -> Self {
+    fn new(last_payload: Option<Instant>) -> Self {
         Self {
-            last_payload: AtomicCell::new(now),
+            last_payload: AtomicCell::new(last_payload),
             direct_recovery_requested: AtomicCell::new(false),
         }
     }
@@ -71,28 +78,37 @@ impl RouteTable {
         self.latency_first
     }
 
-    pub fn next_stale_direct_route(&self, read_idle: Duration) -> StaleDirectRoute {
-        let mut max = Duration::ZERO;
+    pub(super) fn maintenance_snapshot_at(
+        &self,
+        now: Instant,
+        read_idle: Duration,
+    ) -> RouteMaintenanceSnapshot {
+        let mut expired = Vec::new();
+        let mut next_deadline = None;
         let routes = self.routes.read();
-        let mut has_p2p = false;
         for (ip, paths) in routes.iter() {
             for (route, time) in paths {
                 if !route.is_p2p() {
                     continue;
                 }
-                has_p2p = true;
-                let last_read = time.load().elapsed();
-                if last_read >= read_idle {
-                    return StaleDirectRoute::Timeout(*ip, *route);
-                } else if max < last_read {
-                    max = last_read;
+                let last_read = time.load();
+                let deadline = last_read + read_idle;
+                if deadline <= now {
+                    expired.push(StaleRouteCandidate {
+                        peer_ip: *ip,
+                        route: *route,
+                        last_read,
+                    });
                 }
+                next_deadline = Some(
+                    next_deadline.map_or(deadline, |previous: Instant| previous.min(deadline)),
+                );
             }
         }
-        if !has_p2p {
-            return StaleDirectRoute::None;
+        RouteMaintenanceSnapshot {
+            expired,
+            next_deadline,
         }
-        StaleDirectRoute::Sleep(read_idle.checked_sub(max).unwrap_or_default())
     }
 
     pub fn set_use_channel_type(&self, use_channel_type: UseChannelType) {
@@ -111,21 +127,23 @@ impl RouteTable {
         self.use_channel_type.store(use_channel_type);
     }
 
-    pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) {
+    /// Returns whether a new direct-path deadline was introduced. Refreshing
+    /// existing liveness only postpones expiry and need not wake maintenance.
+    pub fn add_route_if_absent(&self, vip: Ipv4Addr, route: Route) -> bool {
         self.add_route_(vip, route, true)
     }
 
-    pub fn add_route(&self, vip: Ipv4Addr, route: Route) {
+    pub fn add_route(&self, vip: Ipv4Addr, route: Route) -> bool {
         self.add_route_(vip, route, false)
     }
 
-    fn add_route_(&self, vip: Ipv4Addr, route: Route, only_if_absent: bool) {
+    fn add_route_(&self, vip: Ipv4Addr, route: Route, only_if_absent: bool) -> bool {
         let mut route_table = self.routes.write();
         // Keep the mode check and insertion in one critical section with
         // set_use_channel_type, so an old-mode route cannot arrive after pruning.
         match self.use_channel_type() {
-            UseChannelType::Relay if route.is_p2p() => return,
-            UseChannelType::P2p if !route.is_p2p() => return,
+            UseChannelType::Relay if route.is_p2p() => return false,
+            UseChannelType::P2p if !route.is_p2p() => return false,
             UseChannelType::Relay | UseChannelType::P2p | UseChannelType::Auto => {}
         }
         let key = route.route_key();
@@ -133,14 +151,16 @@ impl RouteTable {
             .entry(vip)
             .or_insert_with(|| Vec::with_capacity(4));
         let mut exist = false;
+        let mut new_direct_deadline = route.is_p2p();
         for (x, time) in list.iter_mut() {
             if x.metric < route.metric && !self.latency_first {
-                return;
+                return false;
             }
             if x.route_key() == key {
                 if only_if_absent {
-                    return;
+                    return false;
                 }
+                new_direct_deadline &= !x.is_p2p();
                 x.metric = route.metric;
                 x.rt = route.rt;
                 x.loss_rate = route.loss_rate;
@@ -159,10 +179,10 @@ impl RouteTable {
             list.push((route, AtomicCell::new(Instant::now())));
         }
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
-        drop(route_table);
         if route.is_p2p() {
             self.reset_direct_recovery_request(&vip);
         }
+        new_direct_deadline
     }
 
     #[cfg(test)]
@@ -310,19 +330,19 @@ impl RouteTable {
         let now = Instant::now();
         if let Some(activity) = self.peer_activity.read().get(vip) {
             let previous = activity.last_payload.load();
-            let elapsed = now.saturating_duration_since(previous);
-            if elapsed >= idle_timeout {
+            let elapsed = previous.map(|previous| now.saturating_duration_since(previous));
+            if elapsed.is_none_or(|elapsed| elapsed >= idle_timeout) {
                 if activity
                     .last_payload
-                    .compare_exchange(previous, now)
+                    .compare_exchange(previous, Some(now))
                     .is_ok()
                 {
                     return true;
                 }
                 return false;
             }
-            if elapsed >= PEER_ACTIVITY_REFRESH_INTERVAL {
-                let _ = activity.last_payload.compare_exchange(previous, now);
+            if elapsed.is_some_and(|elapsed| elapsed >= PEER_ACTIVITY_REFRESH_INTERVAL) {
+                let _ = activity.last_payload.compare_exchange(previous, Some(now));
             }
             return false;
         }
@@ -330,19 +350,27 @@ impl RouteTable {
         // Only the thread that inserts this first activity marker reports the
         // first activation. Concurrent payload handlers see the marker.
         let mut activity = self.peer_activity.write();
-        if activity.contains_key(vip) {
-            return false;
+        if let Some(activity) = activity.get(vip) {
+            // Timeout recovery can insert an idle-only marker between our
+            // read and write guards. Record this first payload even in that
+            // race; an actual concurrent payload activation already has Some.
+            return activity
+                .last_payload
+                .compare_exchange(None, Some(now))
+                .is_ok();
         }
-        activity.insert(*vip, PeerActivity::new(now));
+        activity.insert(*vip, PeerActivity::new(Some(now)));
         drop(activity);
         true
     }
 
     pub fn is_peer_active(&self, vip: &Ipv4Addr, idle_timeout: std::time::Duration) -> bool {
-        self.peer_activity
-            .read()
-            .get(vip)
-            .is_some_and(|activity| activity.last_payload.load().elapsed() < idle_timeout)
+        self.peer_activity.read().get(vip).is_some_and(|activity| {
+            activity
+                .last_payload
+                .load()
+                .is_some_and(|last| last.elapsed() < idle_timeout)
+        })
     }
 
     /// Claims the one immediate control-plane recovery request permitted while
@@ -359,35 +387,78 @@ impl RouteTable {
         })
     }
 
+    /// Shares the payload recovery latch. Holding the route read guard through
+    /// the claim serializes it with insertion/reset without invoking callbacks
+    /// under either table lock. A timeout alone does not count as payload.
+    pub(super) fn take_direct_timeout_request(&self, vip: &Ipv4Addr) -> bool {
+        let routes = self.routes.read();
+        if routes
+            .get(vip)
+            .is_some_and(|paths| paths.iter().any(|(route, _)| route.is_p2p()))
+        {
+            return false;
+        }
+        if let Some(activity) = self.peer_activity.read().get(vip) {
+            return activity
+                .direct_recovery_requested
+                .compare_exchange(false, true)
+                .is_ok();
+        }
+        self.peer_activity
+            .write()
+            .entry(*vip)
+            .or_insert_with(|| PeerActivity::new(None))
+            .direct_recovery_requested
+            .compare_exchange(false, true)
+            .is_ok()
+    }
+
     fn reset_direct_recovery_request(&self, vip: &Ipv4Addr) {
         if let Some(activity) = self.peer_activity.read().get(vip) {
             activity.direct_recovery_requested.store(false);
         }
     }
 
-    pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) {
+    pub fn remove_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
+        self.remove_route_if(vip, route_key, |_, _| true)
+    }
+
+    fn remove_route_if(
+        &self,
+        vip: &Ipv4Addr,
+        route_key: RouteKey,
+        should_remove: impl Fn(&Route, Instant) -> bool,
+    ) -> bool {
         let mut write_guard = self.routes.write();
+        let mut removed_direct = false;
         if let Some(routes) = write_guard.get_mut(vip) {
-            routes.retain(|(x, _)| x.route_key() != route_key);
+            routes.retain(|(route, time)| {
+                if route.route_key() == route_key && should_remove(route, time.load()) {
+                    removed_direct |= route.is_p2p();
+                    false
+                } else {
+                    true
+                }
+            });
             if routes.is_empty() {
                 write_guard.remove(vip);
             }
         }
         Self::rebuild_direct_route_keys(&write_guard, &mut self.direct_route_keys.write());
-        let has_direct_route = write_guard
-            .get(vip)
-            .is_some_and(|routes| routes.iter().any(|(route, _)| route.is_p2p()));
-        drop(write_guard);
-        if !has_direct_route {
-            self.reset_direct_recovery_request(vip);
-        }
+        // Removing paths never rearms recovery. Only learning a direct route
+        // begins a new recovery cycle; concurrent expiry sources share one claim.
+        removed_direct
     }
 
     pub fn update_read_time(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
+        self.update_read_time_at(vip, route_key, Instant::now());
+    }
+
+    pub(super) fn update_read_time_at(&self, vip: &Ipv4Addr, route_key: &RouteKey, now: Instant) {
         if let Some(routes) = self.routes.read().get(vip) {
             for (route, time) in routes {
                 if &route.route_key() == route_key {
-                    time.store(Instant::now());
+                    time.store(now);
                     break;
                 }
             }
@@ -398,8 +469,15 @@ impl RouteTable {
     /// ineligible for payload selection until a fresh heartbeat measures them.
     /// Their liveness is reset so stale cleanup cannot race the revalidation
     /// window.
+    #[cfg(test)]
     pub fn invalidate_direct_routes_for_revalidation(&self) -> Vec<(Ipv4Addr, Route)> {
-        let now = Instant::now();
+        self.invalidate_direct_routes_for_revalidation_at(Instant::now())
+    }
+
+    pub(super) fn invalidate_direct_routes_for_revalidation_at(
+        &self,
+        now: Instant,
+    ) -> Vec<(Ipv4Addr, Route)> {
         let mut route_table = self.routes.write();
         let mut routes_to_probe = Vec::new();
         for (vip, routes) in route_table.iter_mut() {
@@ -426,31 +504,37 @@ impl RouteTable {
     /// Removes a direct route only when it is still awaiting a post-resume
     /// measurement. A Pong may have refreshed it while its grace timer was
     /// pending, in which case the route is preserved.
+    #[cfg(test)]
     pub fn remove_unmeasured_direct_route(&self, vip: &Ipv4Addr, route_key: RouteKey) -> bool {
-        let mut route_table = self.routes.write();
-        let mut removed = false;
-        if let Some(routes) = route_table.get_mut(vip) {
-            let before = routes.len();
-            routes.retain(|(route, _)| {
-                !(route.is_p2p() && route.route_key() == route_key && route.rt < 0)
-            });
-            removed = routes.len() != before;
-            if routes.is_empty() {
-                route_table.remove(vip);
-            }
-        }
-        if !removed {
-            return false;
-        }
-        Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
-        let has_direct_route = route_table
-            .get(vip)
-            .is_some_and(|routes| routes.iter().any(|(route, _)| route.is_p2p()));
-        drop(route_table);
-        if !has_direct_route {
-            self.reset_direct_recovery_request(vip);
-        }
-        true
+        self.remove_route_if(vip, route_key, |route, _| route.is_p2p() && route.rt < 0)
+    }
+
+    pub(super) fn remove_revalidation_route(
+        &self,
+        vip: &Ipv4Addr,
+        route_key: RouteKey,
+        started_at: Instant,
+    ) -> bool {
+        self.remove_route_if(vip, route_key, |route, last_read| {
+            route.is_p2p() && route.rt < 0 && last_read == started_at
+        })
+    }
+
+    /// Scan results are hints. Recheck the observed liveness under the write
+    /// guard so a Pong or a new underlay generation wins over an old scan.
+    pub(super) fn remove_stale_direct_route_at(
+        &self,
+        candidate: &StaleRouteCandidate,
+        now: Instant,
+        read_idle: Duration,
+    ) -> bool {
+        self.remove_route_if(
+            &candidate.peer_ip,
+            candidate.route.route_key(),
+            |route, last_read| {
+                route.is_p2p() && last_read == candidate.last_read && last_read + read_idle <= now
+            },
+        )
     }
 
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
@@ -481,10 +565,6 @@ impl RouteTable {
             !routes.is_empty()
         });
         Self::rebuild_direct_route_keys(&route_table, &mut self.direct_route_keys.write());
-        drop(route_table);
-        for vip in &affected_peers {
-            self.reset_direct_recovery_request(vip);
-        }
         affected_peers
     }
 

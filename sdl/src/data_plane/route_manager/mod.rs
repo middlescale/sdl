@@ -1,16 +1,18 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use crate::cipher::Cipher;
+use crate::core::{runtime::PeerSubsystem, Config};
 use crate::data_plane::peer_crypto::PeerCryptoManager;
 use crate::data_plane::route::{Route, RouteKey};
 use crate::data_plane::route_state::RouteState;
 use crate::data_plane::route_table::RouteTable;
-pub use crate::data_plane::route_table::StaleDirectRoute;
 use crate::data_plane::use_channel_type::UseChannelType;
 use crate::handle::CurrentDeviceInfo;
 use crate::protocol::body::ENCRYPTION_RESERVED;
@@ -21,20 +23,25 @@ use crate::util::{PeerProbeTracker, StopManager};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 
-const ROUTE_MAINTENANCE_START_DELAY: Duration = Duration::from_secs(3);
+mod maintenance;
+use maintenance::RouteMaintenance;
+
+const HEARTBEAT_START_DELAY: Duration = Duration::from_secs(3);
+
+type DirectRouteHandler = Arc<dyn Fn(Ipv4Addr) + Send + Sync>;
 
 #[derive(Clone)]
 pub struct RouteManager {
     route_table: Arc<RouteTable>,
     peer_crypto: Arc<PeerCryptoManager>,
     peer_probe_tracker: Arc<PeerProbeTracker>,
-    peer_encrypt: bool,
+    started: Arc<AtomicBool>,
     sender: Option<RouteSender>,
-    direct_route_timeout_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
-    direct_route_update_handler: Arc<Mutex<Option<Arc<dyn Fn(Ipv4Addr) + Send + Sync>>>>,
+    direct_route_timeout_handler: Arc<Mutex<Option<DirectRouteHandler>>>,
+    direct_route_update_handler: Arc<Mutex<Option<DirectRouteHandler>>>,
     heartbeat_interval: Duration,
     stale_direct_timeout: Duration,
-    underlay_revalidations: Arc<Mutex<HashMap<(Ipv4Addr, RouteKey), std::time::Instant>>>,
+    maintenance: Arc<Mutex<RouteMaintenance>>,
     pub(crate) peer_table: Option<Arc<RwLock<crate::core::PeerTable>>>,
 }
 
@@ -43,41 +50,47 @@ struct RouteSender {
     udp_channel: UdpChannel,
 }
 
-pub struct StaleDirectRouteCleanup {
-    pub delay: Duration,
-}
-
 impl RouteManager {
-    pub(crate) fn new(
-        use_channel_type: UseChannelType,
-        latency_first: bool,
-        udp_channel: UdpChannel,
-        stop_manager: StopManager,
-        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
-        peer_crypto: Arc<PeerCryptoManager>,
-        peer_probe_tracker: Arc<PeerProbeTracker>,
-        peer_encrypt: bool,
-        heartbeat_interval: Duration,
-        stale_direct_timeout: Duration,
-        peer_table: Arc<RwLock<crate::core::PeerTable>>,
-    ) -> anyhow::Result<Self> {
-        let route_table = Arc::new(RouteTable::new(use_channel_type, latency_first));
-        let manager = Self {
-            route_table,
-            peer_crypto,
-            peer_probe_tracker,
-            peer_encrypt,
+    pub(crate) fn new(config: &Config, udp_channel: UdpChannel, peers: &PeerSubsystem) -> Self {
+        Self {
+            route_table: Arc::new(RouteTable::new(
+                config.use_channel_type,
+                config.latency_first,
+            )),
+            peer_crypto: peers.crypto.clone(),
+            peer_probe_tracker: peers.probe_tracker.clone(),
+            started: Arc::new(AtomicBool::new(false)),
             sender: Some(RouteSender { udp_channel }),
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
             direct_route_update_handler: Arc::new(Mutex::new(None)),
-            heartbeat_interval,
-            stale_direct_timeout,
-            underlay_revalidations: Arc::new(Mutex::new(HashMap::new())),
-            peer_table: Some(peer_table),
-        };
-        manager.start_heartbeat_loop(stop_manager.clone(), current_device.clone())?;
-        manager.start_stale_direct_route_cleanup_loop(stop_manager)?;
-        Ok(manager)
+            heartbeat_interval: Duration::from_secs(config.p2p_heartbeat_interval_sec),
+            stale_direct_timeout: Duration::from_secs(config.p2p_route_idle_timeout_sec),
+            maintenance: Arc::new(Mutex::new(RouteMaintenance::default())),
+            peer_table: Some(peers.table.clone()),
+        }
+    }
+
+    /// Start once, after installing route handlers. Clones share the claim.
+    /// Startup failure is terminal: stop the associated runtime to cancel any
+    /// worker already launched, and keep the claim set to prevent partial retry.
+    pub(crate) fn start(
+        &self,
+        stop_manager: StopManager,
+        current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
+            "route manager start already attempted"
+        );
+        let result = self
+            .start_heartbeat_loop(stop_manager.clone(), current_device)
+            .and_then(|()| self.start_route_maintenance_loop(stop_manager.clone()));
+        if result.is_err() {
+            stop_manager.stop();
+        }
+        result
     }
 
     #[cfg(test)]
@@ -86,22 +99,22 @@ impl RouteManager {
             route_table,
             peer_crypto: Arc::new(PeerCryptoManager::new(0)),
             peer_probe_tracker: Arc::new(PeerProbeTracker::new(0)),
-            peer_encrypt: true,
+            started: Arc::new(AtomicBool::new(false)),
             sender: None,
             direct_route_timeout_handler: Arc::new(Mutex::new(None)),
             direct_route_update_handler: Arc::new(Mutex::new(None)),
             heartbeat_interval: Duration::from_secs(10),
             stale_direct_timeout: Duration::from_secs(30),
-            underlay_revalidations: Arc::new(Mutex::new(HashMap::new())),
+            maintenance: Arc::new(Mutex::new(RouteMaintenance::default())),
             peer_table: None,
         }
     }
 
-    pub fn set_direct_route_timeout_handler(&self, handler: Arc<dyn Fn(Ipv4Addr) + Send + Sync>) {
+    pub fn set_direct_route_timeout_handler(&self, handler: DirectRouteHandler) {
         *self.direct_route_timeout_handler.lock() = Some(handler);
     }
 
-    pub fn set_direct_route_update_handler(&self, handler: Arc<dyn Fn(Ipv4Addr) + Send + Sync>) {
+    pub fn set_direct_route_update_handler(&self, handler: DirectRouteHandler) {
         *self.direct_route_update_handler.lock() = Some(handler);
     }
 
@@ -111,6 +124,7 @@ impl RouteManager {
 
     pub fn set_use_channel_type(&self, use_channel_type: UseChannelType) {
         self.route_table.set_use_channel_type(use_channel_type);
+        self.wake_maintenance();
     }
 
     pub fn latency_first(&self) -> bool {
@@ -121,7 +135,9 @@ impl RouteManager {
         if self.should_suppress_p2p(&vip, &route) {
             return;
         }
-        self.route_table.add_route_if_absent(vip, route);
+        if self.route_table.add_route_if_absent(vip, route) {
+            self.wake_maintenance();
+        }
         if route.is_p2p() {
             self.notify_direct_route_update(vip);
         }
@@ -131,14 +147,17 @@ impl RouteManager {
         if self.should_suppress_p2p(&vip, &route) {
             return;
         }
-        self.route_table.add_route(vip, route);
+        if self.route_table.add_route(vip, route) {
+            self.wake_maintenance();
+        }
         if route.is_p2p() {
             self.notify_direct_route_update(vip);
         }
     }
 
     fn notify_direct_route_update(&self, vip: Ipv4Addr) {
-        if let Some(handler) = self.direct_route_update_handler.lock().clone() {
+        let handler = self.direct_route_update_handler.lock().clone();
+        if let Some(handler) = handler {
             handler(vip);
         }
     }
@@ -281,92 +300,34 @@ impl RouteManager {
     }
 
     pub fn remove_path(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        self.route_table.remove_route(vip, route_key)
+        self.route_table.remove_route(vip, route_key);
+        self.wake_maintenance();
     }
 
     pub fn clear_all_paths(&self) {
         self.route_table.clear_all();
+        self.wake_maintenance();
     }
 
     /// Invalidates P2P routes after a suspend/resume or local underlay change.
     /// Relay paths remain available while control coordinates fresh punching.
+    /// Clearing routes does not rearm an already claimed recovery request;
+    /// learning a direct route starts the next recovery cycle.
     pub fn clear_direct_paths(&self) -> usize {
         let affected_peers = self.route_table.clear_direct_routes();
+        self.wake_maintenance();
         for peer_ip in &affected_peers {
             self.notify_direct_route_update(*peer_ip);
         }
         affected_peers.len()
     }
 
-    /// Preserves old direct endpoints across an underlay transition while
-    /// requiring a fresh heartbeat before payload selection can use them.
-    pub fn begin_underlay_revalidation(&self, timeout: Duration) -> Vec<(Ipv4Addr, Route)> {
-        let routes = self.route_table.invalidate_direct_routes_for_revalidation();
-        if routes.is_empty() {
-            return routes;
-        }
-        let deadline = std::time::Instant::now() + timeout;
-        let mut pending = self.underlay_revalidations.lock();
-        let mut affected_peers = HashSet::new();
-        for (peer_ip, route) in &routes {
-            pending.insert((*peer_ip, route.route_key()), deadline);
-            affected_peers.insert(*peer_ip);
-        }
-        drop(pending);
-        for peer_ip in affected_peers {
-            self.notify_direct_route_update(peer_ip);
-        }
-        routes
-    }
-
-    /// Drops only routes which failed the post-resume heartbeat grace period.
-    /// Returns peers that lost their final direct route and have requested the
-    /// normal direct-route timeout recovery callback.
-    pub fn expire_underlay_revalidations(&self) -> Vec<Ipv4Addr> {
-        let now = std::time::Instant::now();
-        let expired: Vec<_> = {
-            let mut pending = self.underlay_revalidations.lock();
-            let expired = pending
-                .iter()
-                .filter_map(|(key, deadline)| (*deadline <= now).then_some(*key))
-                .collect();
-            pending.retain(|_, deadline| *deadline > now);
-            expired
-        };
-        if expired.is_empty() {
-            return Vec::new();
-        }
-
-        let mut changed_peers = HashSet::new();
-        for (peer_ip, route_key) in expired {
-            if self
-                .route_table
-                .remove_unmeasured_direct_route(&peer_ip, route_key)
-            {
-                changed_peers.insert(peer_ip);
-            }
-        }
-        let mut recovery_peers = Vec::new();
-        for peer_ip in changed_peers {
-            self.notify_direct_route_update(peer_ip);
-            if self.direct_path_count(&peer_ip) == 0 {
-                if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
-                    handler(peer_ip);
-                }
-                recovery_peers.push(peer_ip);
-            }
-        }
-        recovery_peers
-    }
-
     pub fn mark_path_failed(&self, vip: &Ipv4Addr, route_key: RouteKey) {
-        let direct_before = self.direct_path_count(vip);
-        self.remove_path(vip, route_key);
-        if direct_before > 0 && self.direct_path_count(vip) == 0 {
-            if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
-                handler(*vip);
-            }
+        if self.route_table.remove_route(vip, route_key) {
+            self.notify_direct_route_update(*vip);
+            self.fire_direct_route_timeout_if_last(*vip);
         }
+        self.wake_maintenance();
     }
 
     pub fn touch_path(&self, vip: &Ipv4Addr, route_key: &RouteKey) {
@@ -374,15 +335,13 @@ impl RouteManager {
     }
 
     pub fn clear_peer(&self, vip: &Ipv4Addr) {
-        self.route_table.clear_peer(vip)
+        self.route_table.clear_peer(vip);
+        self.wake_maintenance();
     }
 
     pub fn retain_peers(&self, valid_peers: &HashSet<Ipv4Addr>) {
-        self.route_table.retain_peers(valid_peers)
-    }
-
-    pub fn next_stale_direct_route(&self, read_idle: Duration) -> StaleDirectRoute {
-        self.route_table.next_stale_direct_route(read_idle)
+        self.route_table.retain_peers(valid_peers);
+        self.wake_maintenance();
     }
 
     pub fn send_heartbeats(&self, current_device: CurrentDeviceInfo) {
@@ -453,36 +412,12 @@ impl RouteManager {
         Ok(())
     }
 
-    pub fn cleanup_stale_direct_routes(&self, read_idle: Duration) -> StaleDirectRouteCleanup {
-        match self.next_stale_direct_route(read_idle) {
-            StaleDirectRoute::Timeout(ip, route) => {
-                log::info!("route Timeout {:?},{:?}", ip, route);
-                self.remove_path(&ip, route.route_key());
-                if self.direct_path_count(&ip) == 0 {
-                    if let Some(handler) = self.direct_route_timeout_handler.lock().clone() {
-                        handler(ip);
-                    }
-                }
-                StaleDirectRouteCleanup {
-                    delay: Duration::from_millis(100),
-                }
-            }
-            StaleDirectRoute::Sleep(duration) => StaleDirectRouteCleanup { delay: duration },
-            StaleDirectRoute::None => StaleDirectRouteCleanup {
-                delay: Duration::from_millis(3000),
-            },
-        }
-    }
-
     fn heartbeat_packets_for_peer(
         &self,
         src_ip: Ipv4Addr,
         dest_ip: Ipv4Addr,
         epoch: u16,
     ) -> anyhow::Result<Vec<NetPacket<Vec<u8>>>> {
-        if !self.peer_encrypt {
-            return Ok(vec![heartbeat_packet_client(None, src_ip, dest_ip, epoch)?]);
-        }
         let mut packets = Vec::with_capacity(2);
         let peer_identity = match self.peer_identity(&dest_ip) {
             Ok(peer_identity) => peer_identity,
@@ -547,66 +482,25 @@ impl RouteManager {
         stop_manager: StopManager,
         current_device: Arc<AtomicCell<CurrentDeviceInfo>>,
     ) -> anyhow::Result<()> {
+        let (stop_sender, stop_receiver) = mpsc::channel();
+        // Register synchronously so start reports listener failures and stop
+        // can interrupt even the initial wait, before the thread has started.
+        let worker = stop_manager.add_listener("routeHeartbeat".into(), move || {
+            let _ = stop_sender.send(());
+        })?;
         let route_manager = self.clone();
         thread::Builder::new()
             .name("routeHeartbeat".into())
             .spawn(move || {
-                let current = thread::current();
-                let worker = match stop_manager.add_listener("routeHeartbeat".into(), move || {
-                    current.unpark();
-                }) {
-                    Ok(worker) => worker,
-                    Err(e) => {
-                        log::error!("{:?}", e);
-                        return;
-                    }
-                };
-                if wait_for_stop(&stop_manager, ROUTE_MAINTENANCE_START_DELAY) {
-                    worker.stop_all();
-                    return;
-                }
-                while !stop_manager.is_stopped() {
+                let mut delay = HEARTBEAT_START_DELAY;
+                while matches!(
+                    stop_receiver.recv_timeout(delay),
+                    Err(RecvTimeoutError::Timeout)
+                ) {
                     route_manager.send_heartbeats(current_device.load());
-                    if wait_for_stop(&stop_manager, route_manager.heartbeat_interval) {
-                        break;
-                    }
+                    delay = route_manager.heartbeat_interval;
                 }
-                worker.stop_all();
-            })?;
-        Ok(())
-    }
-
-    fn start_stale_direct_route_cleanup_loop(
-        &self,
-        stop_manager: StopManager,
-    ) -> anyhow::Result<()> {
-        let route_manager = self.clone();
-        thread::Builder::new()
-            .name("routeStaleDirectCleanup".into())
-            .spawn(move || {
-                let current = thread::current();
-                let worker =
-                    match stop_manager.add_listener("routeStaleDirectCleanup".into(), move || {
-                        current.unpark();
-                    }) {
-                        Ok(worker) => worker,
-                        Err(e) => {
-                            log::error!("{:?}", e);
-                            return;
-                        }
-                    };
-                if wait_for_stop(&stop_manager, ROUTE_MAINTENANCE_START_DELAY) {
-                    worker.stop_all();
-                    return;
-                }
-                while !stop_manager.is_stopped() {
-                    let result = route_manager
-                        .cleanup_stale_direct_routes(route_manager.stale_direct_timeout);
-                    if wait_for_stop(&stop_manager, result.delay) {
-                        break;
-                    }
-                }
-                worker.stop_all();
+                worker.stop_self();
             })?;
         Ok(())
     }
@@ -619,14 +513,6 @@ impl RouteManager {
     ) -> io::Result<()> {
         sender.udp_channel.send_by_key(buf.buffer(), route_key)
     }
-}
-
-fn wait_for_stop(stop_manager: &StopManager, duration: Duration) -> bool {
-    if stop_manager.is_stopped() {
-        return true;
-    }
-    thread::park_timeout(duration);
-    stop_manager.is_stopped()
 }
 
 fn heartbeat_packet(
@@ -676,7 +562,7 @@ fn heartbeat_packet_client(
 
 #[cfg(test)]
 mod tests {
-    use super::{RouteManager, StaleDirectRoute};
+    use super::RouteManager;
     use crate::cipher::Cipher;
     use crate::core::{PeerInfo, PeerTable};
     use crate::data_plane::route::Route;
@@ -688,8 +574,6 @@ mod tests {
     use parking_lot::RwLock;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::Arc;
-    use std::thread;
-    use std::time::Duration;
 
     fn route(metric: u8, port: u16) -> Route {
         Route::new(
@@ -720,95 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn next_stale_direct_route_ignores_stale_relay_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        table.add_route(Ipv4Addr::new(10, 0, 0, 2), route(2, 2000));
-        thread::sleep(Duration::from_millis(15));
-
-        assert!(matches!(
-            manager.next_stale_direct_route(Duration::from_millis(5)),
-            StaleDirectRoute::None
-        ));
-    }
-
-    #[test]
-    fn next_stale_direct_route_times_out_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 3);
-        let route = route(1, 2001);
-        table.add_route(peer, route);
-        let _ = manager.activate_peer(&peer);
-        thread::sleep(Duration::from_millis(15));
-
-        match manager.next_stale_direct_route(Duration::from_millis(5)) {
-            StaleDirectRoute::Timeout(ip, timed_out) => {
-                assert_eq!(ip, peer);
-                assert_eq!(timed_out.route_key(), route.route_key());
-            }
-            other => panic!("expected timeout, got {:?}", kind_name(&other)),
-        }
-    }
-
-    #[test]
-    fn inactive_peer_does_not_protect_a_stale_route_from_cleanup() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 18);
-        table.add_route(peer, route(1, 2019));
-        let _ = table.activate_peer(&peer, Duration::from_millis(5));
-        thread::sleep(Duration::from_millis(60));
-
-        assert!(table.activate_peer(&peer, Duration::from_millis(5)));
-        assert!(matches!(
-            manager.next_stale_direct_route(Duration::from_millis(50)),
-            StaleDirectRoute::Timeout(_, _)
-        ));
-    }
-
-    #[test]
-    fn cleanup_stale_direct_routes_only_removes_stale_p2p_routes() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let relay_peer = Ipv4Addr::new(10, 0, 0, 4);
-        let p2p_peer = Ipv4Addr::new(10, 0, 0, 5);
-        let relay = route(2, 2002);
-        let p2p = route(1, 2003);
-        table.add_route(relay_peer, relay);
-        table.add_route(p2p_peer, p2p);
-        let _ = manager.activate_peer(&p2p_peer);
-        thread::sleep(Duration::from_millis(15));
-
-        let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
-        assert!(table.get_routes(&p2p_peer).is_none());
-        let relay_routes = table.get_routes(&relay_peer).expect("relay routes");
-        assert_eq!(relay_routes.len(), 1);
-        assert_eq!(relay_routes[0].route_key(), relay.route_key());
-    }
-
-    #[test]
-    fn cleanup_stale_direct_routes_triggers_handler_when_last_direct_route_expires() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 6);
-        let timeouts = Arc::new(Mutex::new(Vec::new()));
-        {
-            let timeouts = timeouts.clone();
-            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
-                timeouts.lock().push(ip);
-            }));
-        }
-        table.add_route(peer, route(1, 2004));
-        let _ = manager.activate_peer(&peer);
-        thread::sleep(Duration::from_millis(15));
-
-        let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
-
-        assert_eq!(*timeouts.lock(), vec![peer]);
-    }
-
-    #[test]
     fn mark_path_failed_triggers_handler_when_last_direct_route_is_removed() {
         let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
         let manager = RouteManager::new_detached(table.clone());
@@ -827,44 +622,6 @@ mod tests {
 
         assert!(table.get_routes(&peer).is_none());
         assert_eq!(*timeouts.lock(), vec![peer]);
-    }
-
-    #[test]
-    fn underlay_revalidation_expires_only_unconfirmed_routes_and_triggers_recovery() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 19);
-        let direct = route(1, 2019);
-        let timeouts = Arc::new(Mutex::new(Vec::new()));
-        {
-            let timeouts = timeouts.clone();
-            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
-                timeouts.lock().push(ip);
-            }));
-        }
-        table.add_route(peer, direct);
-
-        let routes_to_probe = manager.begin_underlay_revalidation(Duration::ZERO);
-        assert_eq!(routes_to_probe.len(), 1);
-        assert_eq!(routes_to_probe[0].0, peer);
-        assert_eq!(routes_to_probe[0].1.route_key(), direct.route_key());
-        assert_eq!(manager.expire_underlay_revalidations(), vec![peer]);
-        assert!(table.get_routes(&peer).is_none());
-        assert_eq!(*timeouts.lock(), vec![peer]);
-    }
-
-    #[test]
-    fn underlay_revalidation_preserves_route_when_a_pong_arrives_during_grace() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, false));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 21);
-        let direct = route(1, 2021);
-        table.add_route(peer, direct);
-        manager.begin_underlay_revalidation(Duration::ZERO);
-        manager.add_path(peer, Route::from(direct.route_key(), 1, 7));
-
-        assert!(manager.expire_underlay_revalidations().is_empty());
-        assert_eq!(manager.measured_direct_route(&peer).unwrap().rt, 7);
     }
 
     #[test]
@@ -888,30 +645,6 @@ mod tests {
 
         assert_eq!(manager.direct_path_count(&peer), 1);
         assert!(timeouts.lock().is_empty());
-    }
-
-    #[test]
-    fn cleanup_stale_direct_routes_does_not_trigger_handler_when_other_direct_route_remains() {
-        let table = Arc::new(RouteTable::new(UseChannelType::Auto, true));
-        let manager = RouteManager::new_detached(table.clone());
-        let peer = Ipv4Addr::new(10, 0, 0, 7);
-        let timeouts = Arc::new(Mutex::new(Vec::new()));
-        {
-            let timeouts = timeouts.clone();
-            manager.set_direct_route_timeout_handler(Arc::new(move |ip| {
-                timeouts.lock().push(ip);
-            }));
-        }
-        table.add_route(peer, route(1, 2005));
-        table.add_route(peer, route(1, 2006));
-        let _ = manager.activate_peer(&peer);
-        table.update_read_time(&peer, &route(1, 2006).route_key());
-        thread::sleep(Duration::from_millis(15));
-
-        let _ = manager.cleanup_stale_direct_routes(Duration::from_millis(5));
-
-        assert!(timeouts.lock().is_empty());
-        assert_eq!(manager.direct_path_count(&peer), 1);
     }
 
     #[test]
@@ -1032,13 +765,5 @@ mod tests {
         // Try to add a relay route (metric = 2)
         manager.add_path(peer, route(2, 1011));
         assert!(table.get_first_route(&peer).is_some());
-    }
-
-    fn kind_name(idle: &StaleDirectRoute) -> &'static str {
-        match idle {
-            StaleDirectRoute::Timeout(_, _) => "timeout",
-            StaleDirectRoute::Sleep(_) => "sleep",
-            StaleDirectRoute::None => "none",
-        }
     }
 }

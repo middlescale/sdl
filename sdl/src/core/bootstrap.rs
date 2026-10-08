@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use crossbeam_utils::atomic::AtomicCell;
@@ -64,9 +63,6 @@ impl Sdl {
         let device_pub_key = device_signing_key.verifying_key().to_bytes().to_vec();
         //当前设备信息
         let current_device = Arc::new(AtomicCell::new(CurrentDeviceInfo::new0()));
-        //设备列表
-        let peer_table: Arc<RwLock<crate::core::PeerTable>> =
-            Arc::new(RwLock::new(Default::default()));
         let local_ipv4 = if let Some(local_ipv4) = config.local_ipv4 {
             Some(local_ipv4)
         } else {
@@ -123,25 +119,15 @@ impl Sdl {
             debug_watch.clone(),
             data_plane_stats.clone(),
         );
-        let peer_crypto = Arc::new(PeerCryptoManager::new(16));
-        let peer_probe_tracker = Arc::new(crate::util::PeerProbeTracker::new(16));
-        let peer_nat_info_map: Arc<RwLock<HashMap<Ipv4Addr, NatInfo>>> =
-            Arc::new(RwLock::new(HashMap::with_capacity(16)));
+        let peers = PeerSubsystem {
+            table: Arc::new(RwLock::new(Default::default())),
+            nat_info_map: Arc::new(RwLock::new(HashMap::with_capacity(16))),
+            crypto: Arc::new(PeerCryptoManager::new(16)),
+            probe_tracker: Arc::new(crate::util::PeerProbeTracker::new(16)),
+        };
         let negotiated_capabilities = Arc::new(RwLock::new(HashSet::new()));
         let gateway_grant_policy_rev = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let route_manager = RouteManager::new(
-            config.use_channel_type,
-            config.latency_first,
-            udp_channel.clone(),
-            stop_manager.clone(),
-            current_device.clone(),
-            peer_crypto.clone(),
-            peer_probe_tracker.clone(),
-            true,
-            std::time::Duration::from_secs(config.p2p_heartbeat_interval_sec),
-            std::time::Duration::from_secs(config.p2p_route_idle_timeout_sec),
-            peer_table.clone(),
-        )?;
+        let route_manager = RouteManager::new(&config, udp_channel.clone(), &peers);
         let control_session = ControlSession::new(
             Http3Channel::new(config.server_address, &config.server_address_str)?,
             runtime_config.clone(),
@@ -149,8 +135,8 @@ impl Sdl {
             exit_node_state.clone(),
             crate::control::SharedDataPlane {
                 current_device: current_device.clone(),
-                peer_crypto: peer_crypto.clone(),
-                peer_table: peer_table.clone(),
+                peer_crypto: peers.crypto.clone(),
+                peer_table: peers.table.clone(),
                 gateway_sessions: gateway_sessions.clone(),
                 gateway_grant_policy_rev: gateway_grant_policy_rev.clone(),
                 route_manager: route_manager.clone(),
@@ -209,6 +195,7 @@ impl Sdl {
                 callback.direct_route_changed(peer_ip);
             }));
         }
+        route_manager.start(stop_manager.clone(), current_device.clone())?;
         let runtime = Arc::new_cyclic(|weak_runtime| {
             let tun = TunSubsystem::new(
                 stop_manager.clone(),
@@ -219,12 +206,7 @@ impl Sdl {
                 config: runtime_config.clone(),
                 state: SdlNodeState {
                     auth_request: auth_request.clone(),
-                    peers: PeerSubsystem {
-                        table: peer_table.clone(),
-                        nat_info_map: peer_nat_info_map.clone(),
-                        crypto: peer_crypto.clone(),
-                        probe_tracker: peer_probe_tracker.clone(),
-                    },
+                    peers: peers.clone(),
                     gateway_grant_policy_rev: gateway_grant_policy_rev.clone(),
                     dns: DnsSubsystem {
                         profile: Arc::new(RwLock::new(None::<DnsProfile>)),
@@ -306,7 +288,7 @@ impl Sdl {
         )?;
         {
             let route_manager = route_manager.clone();
-            let peer_probe_tracker = peer_probe_tracker.clone();
+            let probe_tracker = peers.probe_tracker.clone();
             let control_session = control_session.clone();
             let gateway_sessions = gateway_sessions.clone();
             let udp_channel = udp_channel.clone();
@@ -320,7 +302,7 @@ impl Sdl {
                     // A suspend/resume may preserve both Wi-Fi and the old NAT
                     // mapping. Keep the direct endpoints, but require a fresh
                     // Ping/Pong before any payload can select them again.
-                    peer_probe_tracker.clear();
+                    probe_tracker.clear();
                     let routes_to_probe =
                         route_manager.begin_underlay_revalidation(revalidation_timeout);
                     match udp_channel.rebind() {
@@ -350,22 +332,8 @@ impl Sdl {
                         routes_to_probe.len(),
                         revalidation_timeout
                     );
-                    if !routes_to_probe.is_empty() {
-                        let route_manager = route_manager.clone();
-                        thread::Builder::new()
-                            .name("underlayRouteRevalidation".into())
-                            .spawn(move || {
-                                thread::sleep(revalidation_timeout);
-                                let expired = route_manager.expire_underlay_revalidations();
-                                if !expired.is_empty() {
-                                    log::info!(
-                                        "underlay revalidation expired direct routes for peers {:?}",
-                                        expired
-                                    );
-                                }
-                            })
-                            .expect("underlay route revalidation");
-                    }
+                    // RouteManager's deadline-driven maintenance worker owns
+                    // revalidation expiry; no per-transition timer is needed.
                     // Refresh the control-plane NAT view without proactively
                     // coordinating peers. The next payload requests direct
                     // recovery on demand while relay remains available.
@@ -382,12 +350,12 @@ impl Sdl {
             config.punch_model,
             nat_test.clone(),
             current_device.clone(),
-            peer_probe_tracker.clone(),
+            peers.probe_tracker.clone(),
         );
         spawn_punch_workers(
             current_device.clone(),
-            peer_table.clone(),
-            peer_crypto.clone(),
+            peers.table.clone(),
+            peers.crypto.clone(),
             true,
             punch_coordinator.clone(),
             punch.clone(),
