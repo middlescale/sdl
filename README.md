@@ -173,10 +173,51 @@ currently depends on systemd-resolved (`resolvectl`).
 On Windows, bypass verification currently looks for an exact route prefix;
 when only a broader route exists it reports `unknown`, rather than proving
 which interface Windows would actually use.
-On Linux, automatic recovery recreates missing bypasses but does not replace an
-existing bypass whose ownership or next-hop validity cannot be established. A
-stale route left behind after an underlay gateway change may require manual
-inspection; a configured route does not prove that its next hop is reachable.
+When SDL detects an underlay network change, it disables the client exit-node
+selection and attempts to remove its exit-node routes and restore DNS. Once
+cleanup succeeds, traffic follows the system's normal routing; SDL does not automatically
+re-enable the exit node. After connectivity returns, run `sdl exit-node use
+<target>` to select it again. If cleanup fails, `sdl exit-node status` reports
+`cleanup_required`; retry `sdl exit-node clear` and inspect the system routes
+and DNS before continuing. This is not a kill switch: traffic may use the
+ordinary network after exit-node mode is disabled.
+
+Linux, macOS and Windows poll for IPv4 default-route changes; Linux and macOS
+also inspect addresses on the default interface. Brief interruptions between
+polls may be missed. Suspend/time-jump detection is best-effort.
+An explicit `sdl suspend` followed by `sdl resume` retains the selection when
+no underlay-change event is detected; restarting the service clears it.
+
+Current limitations:
+
+- Network changes may take up to the polling interval to detect; an outage
+  that begins and ends between polls can be missed. IPv6-only default-route
+  changes are not monitored, and platform-specific route parsing can fail.
+  On macOS, a failed `route` query is treated as unknown, including when the
+  command fails because no default route exists; a temporary outage followed
+  by the same default route can therefore be missed.
+  A down/up sequence can be detected as two changes; re-enabling the exit
+  node before the later event is observed can disable it again.
+- Once cleanup succeeds, traffic can leave through the local network. This
+  fail-open behavior can reveal the local public IP and is unsuitable when all
+  traffic must always go through the exit node.
+- On Linux, bypass routes do not have reliable ownership markers. Cleanup uses
+  the saved destination prefixes and can affect a same-prefix route subsequently
+  installed by another VPN or administrator. Existing cleanup commands also
+  suppress some route deletion errors, so `disabled` does not prove that every
+  kernel route was removed. Inspect `ip route` and DNS if cleanup is uncertain.
+- Active exit-node sessions still use the existing missing-bypass maintenance;
+  an explicit suspend/resume may reapply the selected configuration when no
+  underlay-change event is detected. Existing stale bypasses with an invalid
+  next hop are not safely identified or automatically replaced.
+- The status reports that the selection is disabled but does not persist a
+  dedicated reason for the automatic reset. Check the service logs for the
+  underlay-change message.
+- After an underlay event SDL waits at most 15 seconds for exit-node cleanup
+  before continuing network recovery. On timeout cleanup can still be running,
+  and existing routes can temporarily interfere with reconnection; check the
+  service logs and `sdl exit-node status`. Individual configuration commands
+  have a 10-second timeout.
 
 ## Build
 

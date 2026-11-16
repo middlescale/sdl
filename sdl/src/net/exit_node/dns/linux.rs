@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 
 /// `None` means the host does not provide resolvectl, so DNS cannot be verified.
 pub fn client_exit_dns_active(tun_name: &str, dns_ip: Ipv4Addr) -> anyhow::Result<Option<bool>> {
-    if !command_available("resolvectl") {
+    if !command_available("resolvectl")? {
         return Ok(None);
     }
     let servers = command_stdout("resolvectl", &["dns", tun_name])?;
@@ -50,7 +50,7 @@ pub(super) fn setup_client_dns_platform(
     dns_service_ip: Ipv4Addr,
     _previous_state: Option<&ClientDnsState>,
 ) -> anyhow::Result<(Option<ClientDnsState>, String)> {
-    if !command_available("resolvectl") {
+    if !command_available("resolvectl")? {
         return Ok((
             None,
             "exit-node DNS unchanged: resolvectl is not available".to_string(),
@@ -79,7 +79,7 @@ pub(super) fn setup_client_dns_platform(
 pub(super) fn teardown_client_dns_platform(
     state: Option<&ClientDnsState>,
 ) -> anyhow::Result<String> {
-    if !command_available("resolvectl") {
+    if !command_available("resolvectl")? {
         return Ok("exit-node DNS unchanged: resolvectl is not available".to_string());
     }
     let service = state
@@ -87,9 +87,6 @@ pub(super) fn teardown_client_dns_platform(
         .map(|state| state.service.as_str())
         .filter(|value| !value.is_empty())
         .unwrap_or("sdl-tun");
-    run_command("resolvectl", &["revert", service]).or_else(|err| {
-        log::warn!("failed to revert {} DNS: {:?}", service, err);
-        Ok::<(), anyhow::Error>(())
-    })?;
+    run_command("resolvectl", &["revert", service])?;
     Ok(format!("exit-node DNS reverted on {}", service))
 }

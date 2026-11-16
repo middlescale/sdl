@@ -131,11 +131,13 @@ pub(super) fn active_remote_management_ipv4s() -> Vec<Ipv4Addr> {
 }
 
 fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("netstat -rn -f inet 2>/dev/null || true")
-        .output()
-        .context("failed to query macOS route table")?;
+    let output = crate::net::command_timeout::output(
+        Command::new("sh")
+            .arg("-c")
+            .arg("netstat -rn -f inet 2>/dev/null || true"),
+        crate::net::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .context("failed to query macOS route table")?;
     let route_table = String::from_utf8_lossy(&output.stdout);
     for target in ["0/1", "0.0.0.0/1", "128.0/1", "128.0.0.0/1"] {
         if let Some(iface) = macos_netstat_route_iface(&route_table, target) {
@@ -150,11 +152,13 @@ fn preflight_client_routing(tun_name: &str) -> anyhow::Result<()> {
             }
         }
     }
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("route -n get default 2>/dev/null || true")
-        .output()
-        .context("failed to query macOS default route")?;
+    let output = crate::net::command_timeout::output(
+        Command::new("sh")
+            .arg("-c")
+            .arg("route -n get default 2>/dev/null || true"),
+        crate::net::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .context("failed to query macOS default route")?;
     let default_route = String::from_utf8_lossy(&output.stdout);
     if let Some(iface) = macos_route_interface(&default_route) {
         validate_default_route_interface(tun_name, iface)?;
@@ -182,11 +186,13 @@ fn macos_netstat_route_iface<'a>(route_table: &'a str, destination: &str) -> Opt
 }
 
 fn macos_default_gateway() -> anyhow::Result<String> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("route -n get default | awk '/gateway:/{print $2; exit}'")
-        .output()
-        .context("failed to query macOS default gateway")?;
+    let output = crate::net::command_timeout::output(
+        Command::new("sh")
+            .arg("-c")
+            .arg("route -n get default | awk '/gateway:/{print $2; exit}'"),
+        crate::net::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .context("failed to query macOS default gateway")?;
     if !output.status.success() {
         anyhow::bail!(
             "route -n get default failed: {}{}",

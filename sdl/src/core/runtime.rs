@@ -31,6 +31,70 @@ use crate::util::DebugWatch;
 use crate::{DeviceConfig, SdlCallback};
 use crate::{DnsProfile, ErrorInfo, ErrorType};
 
+#[cfg(target_os = "linux")]
+fn clear_exit_dns_then_restore(
+    clear: impl FnOnce() -> anyhow::Result<String>,
+    restore: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<String> {
+    let cleared = clear();
+    let restored = restore();
+    match (cleared, restored) {
+        (Ok(note), Ok(true)) => Ok(format!("{note}; split DNS restored")),
+        (Ok(note), Ok(false)) => Ok(note),
+        (Err(clear), Ok(_)) => Err(clear),
+        (Ok(_), Err(restore)) => Err(restore),
+        (Err(clear), Err(restore)) => Err(anyhow::anyhow!(
+            "exit DNS cleanup failed: {clear:#}; split DNS restoration failed: {restore:#}"
+        )),
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod exit_dns_restore_tests {
+    use super::clear_exit_dns_then_restore;
+    use std::cell::RefCell;
+
+    #[test]
+    fn clear_restores_split_dns_in_order() {
+        let calls = RefCell::new(Vec::new());
+        let result = clear_exit_dns_then_restore(
+            || {
+                calls.borrow_mut().push("clear");
+                Ok("cleared".into())
+            },
+            || {
+                calls.borrow_mut().push("restore");
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert_eq!(*calls.borrow(), ["clear", "restore"]);
+        assert!(result.contains("split DNS restored"));
+    }
+
+    #[test]
+    fn restoration_is_attempted_after_cleanup_failure_and_errors_propagate() {
+        let called = std::cell::Cell::new(false);
+        let error = clear_exit_dns_then_restore(
+            || anyhow::bail!("cleanup failure"),
+            || {
+                called.set(true);
+                anyhow::bail!("restore failure")
+            },
+        )
+        .unwrap_err();
+        assert!(called.get());
+        assert!(format!("{error:#}").contains("cleanup failure"));
+        assert!(format!("{error:#}").contains("restore failure"));
+    }
+
+    #[test]
+    fn inactive_runtime_can_skip_restoration() {
+        let note = clear_exit_dns_then_restore(|| Ok("cleared".into()), || Ok(false)).unwrap();
+        assert_eq!(note, "cleared");
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AuthRequestConfig {
     pub user_id: Option<String>,
@@ -702,11 +766,16 @@ impl SdlRuntime {
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn revert_dns_on_shutdown(&self) {
+        let _tun = self.state.tun.transition();
         self.clear_applied_dns_profile();
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, callback: &Call) {
+        let tun = self.state.tun.transition();
+        if tun.is_suspended() {
+            return;
+        }
         let interface_name = self
             .state
             .dns
@@ -721,4 +790,41 @@ impl SdlRuntime {
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     pub(crate) fn force_apply_dns_profile<Call: SdlCallback>(&self, _callback: &Call) {}
+
+    /// Serialize exit-node DNS teardown with TUN recreation and split DNS updates.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn clear_exit_dns_and_restore_split(
+        &self,
+        state: Option<&crate::net::exit_node::ClientDnsState>,
+        restore_split: bool,
+        is_stopped: impl Fn() -> bool,
+    ) -> anyhow::Result<String> {
+        let tun = self.state.tun.transition();
+        clear_exit_dns_then_restore(
+            || crate::net::exit_node::teardown_client_dns(state),
+            || {
+                if !restore_split || tun.is_suspended() || is_stopped() {
+                    return Ok(false);
+                }
+                let Some(interface) = self.state.tun.device_name() else {
+                    return Ok(false);
+                };
+                let Some(profile) = self.state.dns.profile.read().clone() else {
+                    return Ok(false);
+                };
+                if profile.servers.is_empty() || profile.match_domains.is_empty() {
+                    return Ok(false);
+                }
+                let previous = self.state.dns.applied_profile.lock().clone();
+                crate::net::dns::platform::apply_split_dns(&interface, previous.as_ref(), &profile)
+                    .map_err(|err| {
+                        anyhow::anyhow!("failed to restore split DNS on {interface}: {err}")
+                    })?;
+                *self.state.dns.last_interface.lock() = Some(interface.clone());
+                *self.state.dns.applied_interface.lock() = Some(interface);
+                *self.state.dns.applied_profile.lock() = Some(profile);
+                Ok(true)
+            },
+        )
+    }
 }

@@ -53,10 +53,11 @@ fn validate_iface_name(value: &str, label: &str) -> anyhow::Result<()> {
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn run_command(program: &str, args: &[&str]) -> anyhow::Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute {program}"))?;
+    let output = super::command_timeout::output(
+        Command::new(program).args(args),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .with_context(|| format!("failed to execute {program}"))?;
     if output.status.success() {
         return Ok(());
     }
@@ -76,10 +77,11 @@ fn run_shell(command: &str) -> anyhow::Result<()> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn command_stdout(program: &str, args: &[&str]) -> anyhow::Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute {program}"))?;
+    let output = super::command_timeout::output(
+        Command::new(program).args(args),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .with_context(|| format!("failed to execute {program}"))?;
     if !output.status.success() {
         anyhow::bail!(
             "{} {} failed: {}{}",
@@ -93,24 +95,24 @@ fn command_stdout(program: &str, args: &[&str]) -> anyhow::Result<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn command_available(program: &str) -> bool {
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!(
+fn command_available(program: &str) -> std::io::Result<bool> {
+    super::command_timeout::output(
+        Command::new("sh").arg("-c").arg(format!(
             "command -v {} >/dev/null 2>&1",
             shell_quote(program)
-        ))
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        )),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .map(|output| output.status.success())
 }
 
 #[cfg(target_os = "windows")]
 fn run_powershell(command: &str) -> anyhow::Result<String> {
-    let output = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", command])
-        .output()
-        .with_context(|| format!("failed to execute PowerShell command: {command}"))?;
+    let output = super::command_timeout::output(
+        Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", command]),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .with_context(|| format!("failed to execute PowerShell command: {command}"))?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
     }

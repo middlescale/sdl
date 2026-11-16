@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+pub(crate) mod command_timeout;
 pub(crate) mod dns;
 pub mod exit_node;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]

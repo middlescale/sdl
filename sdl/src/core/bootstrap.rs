@@ -401,6 +401,17 @@ impl Sdl {
     pub fn tun_device_name(&self) -> Option<String> {
         self.runtime.state.tun.device_name()
     }
+    #[cfg(target_os = "linux")]
+    pub fn clear_exit_dns_and_restore_split(
+        &self,
+        state: Option<&crate::net::exit_node::ClientDnsState>,
+        restore_split: bool,
+    ) -> anyhow::Result<String> {
+        self.runtime
+            .clear_exit_dns_and_restore_split(state, restore_split, || {
+                self.stop_manager.is_stopping()
+            })
+    }
     pub fn control_server_addr(&self) -> std::net::SocketAddr {
         self.runtime.control_session.server_addr()
     }

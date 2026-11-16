@@ -39,6 +39,10 @@ impl StopManager {
     pub fn is_stopped(&self) -> bool {
         self.inner.is_stopped()
     }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn is_stopping(&self) -> bool {
+        self.inner.state.load(Ordering::Acquire)
+    }
 }
 
 struct StopManagerInner {

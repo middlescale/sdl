@@ -45,7 +45,10 @@ fn exec_powershell(script: &str) -> io::Result<()> {
     {
         command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     }
-    let out = command.output()?;
+    let out = super::super::command_timeout::output(
+        &mut command,
+        super::super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(io::Error::other(format!(

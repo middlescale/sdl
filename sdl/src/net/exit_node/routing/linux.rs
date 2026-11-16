@@ -270,7 +270,7 @@ fn enable_ipv4_forwarding() -> anyhow::Result<String> {
 }
 
 pub(super) fn active_remote_management_ipv4s() -> Vec<Ipv4Addr> {
-    if command_available("ss") {
+    if command_available("ss").unwrap_or(false) {
         match command_stdout("ss", &["-Htn", "state", "established"]) {
             Ok(output) => return parse_tcp_connection_remote_ipv4s(&output),
             Err(err) => log::warn!(

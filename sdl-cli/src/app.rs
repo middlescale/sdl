@@ -38,10 +38,24 @@ fn teardown_exit_node_with(
     Ok((dns_result?, route_result?))
 }
 
+const UNDERLAY_CLEANUP_WAIT: Duration = Duration::from_secs(15);
+
+fn wait_for_underlay_cleanup(
+    cleanup: impl FnOnce() -> anyhow::Result<Option<String>> + Send + 'static,
+    timeout: Duration,
+) -> Result<anyhow::Result<Option<String>>, std::sync::mpsc::RecvTimeoutError> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(cleanup());
+    });
+    receiver.recv_timeout(timeout)
+}
+
 #[cfg(test)]
 mod teardown_tests {
-    use super::teardown_exit_node_with;
+    use super::{teardown_exit_node_with, wait_for_underlay_cleanup};
     use std::cell::Cell;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn route_cleanup_is_attempted_even_if_dns_cleanup_fails() {
@@ -55,6 +69,28 @@ mod teardown_tests {
         );
         assert!(called.get());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn underlay_recovery_waits_for_cleanup_but_is_bounded() {
+        let completed =
+            wait_for_underlay_cleanup(|| Ok(Some("done".into())), Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
+        assert_eq!(completed.as_deref(), Some("done"));
+        let start = Instant::now();
+        let result = wait_for_underlay_cleanup(
+            || {
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(None)
+            },
+            Duration::from_millis(30),
+        );
+        assert!(matches!(
+            result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
 
@@ -403,7 +439,7 @@ impl ServiceManager {
     /// Repair bypasses before waiting for control: control and gateways must not
     /// be routed through the tunnel they are needed to reconnect.
     #[cfg(target_os = "linux")]
-    fn reconcile_exit_node_after_underlay_change(&self, refresh_dns: bool) -> anyhow::Result<bool> {
+    fn reconcile_exit_node_client_state(&self, refresh_dns: bool) -> anyhow::Result<bool> {
         let _guard = self.exit_node_client_route_lock.lock().unwrap();
         let saved = self.saved_config.lock().unwrap().clone();
         if !saved.exit_node.client_active {
@@ -478,7 +514,7 @@ impl ServiceManager {
                     retry_generation = Some(generation);
                     retry_delay = Duration::from_secs(5);
                 }
-                match manager.reconcile_exit_node_after_underlay_change(
+                match manager.reconcile_exit_node_client_state(
                     last_reconciled_generation != Some(generation),
                 ) {
                     Ok(done) => {
@@ -736,7 +772,7 @@ impl ServiceManager {
         let result = (|| {
             let config = self.current_config();
             let callback = ServiceCallback::new(Arc::downgrade(self));
-            match self.cleanup_exit_node_client_state() {
+            match self.cleanup_exit_node_client_state(false) {
                 Ok(Some(note)) => log::info!(
                     "reset exit-node client state before runtime start: {}",
                     note
@@ -837,7 +873,10 @@ impl ServiceManager {
         Ok(())
     }
 
-    fn cleanup_exit_node_client_state(&self) -> anyhow::Result<Option<String>> {
+    fn cleanup_exit_node_client_state(
+        &self,
+        restore_split: bool,
+    ) -> anyhow::Result<Option<String>> {
         let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let saved_config = {
             let mut saved = self.saved_config.lock().unwrap();
@@ -862,7 +901,7 @@ impl ServiceManager {
         let tun_name = Self::saved_exit_node_tun_name(&saved_config);
         let dns_state = Self::saved_client_dns_state(&saved_config);
         let (dns_result, setup_result) = teardown_exit_node_with(
-            || exit_node::teardown_client_dns(dns_state.as_ref()),
+            || self.teardown_exit_node_dns(dns_state.as_ref(), restore_split),
             || {
                 exit_node::teardown_client_routing(
                     &tun_name,
@@ -881,8 +920,21 @@ impl ServiceManager {
         Ok(Some(format!("{}; {}", setup_result, dns_result)))
     }
 
+    fn teardown_exit_node_dns(
+        &self,
+        state: Option<&exit_node::ClientDnsState>,
+        restore_split: bool,
+    ) -> anyhow::Result<String> {
+        #[cfg(target_os = "linux")]
+        if let Ok(runtime) = self.current_runtime() {
+            return runtime.clear_exit_dns_and_restore_split(state, restore_split);
+        }
+        let _ = restore_split;
+        exit_node::teardown_client_dns(state)
+    }
+
     fn block_data_plane_for_auth_pending(&self, message: &str) {
-        match self.cleanup_exit_node_client_state() {
+        match self.cleanup_exit_node_client_state(true) {
             Ok(Some(note)) => log::info!(
                 "reset exit-node client state while auth is pending: {}",
                 note
@@ -1245,7 +1297,7 @@ impl ServiceManager {
             runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
         }
         let (dns_result, setup_result) = teardown_exit_node_with(
-            || exit_node::teardown_client_dns(dns_state.as_ref()),
+            || self.teardown_exit_node_dns(dns_state.as_ref(), true),
             || exit_node::teardown_client_routing(&tun_name, &effective_excludes),
         )?;
         {
@@ -1311,7 +1363,7 @@ impl ServiceManager {
     }
 
     fn stop_service_runtime(&self) -> anyhow::Result<String> {
-        match self.cleanup_exit_node_client_state() {
+        match self.cleanup_exit_node_client_state(false) {
             Ok(Some(note)) => {
                 log::info!("reset exit-node client state before runtime stop: {}", note)
             }
@@ -1777,9 +1829,26 @@ impl SdlCallback for ServiceCallback {
     }
 
     fn underlay_changed(&self) {
-        #[cfg(target_os = "linux")]
         if let Some(manager) = self.manager.upgrade() {
-            manager.request_exit_node_recovery();
+            let result = wait_for_underlay_cleanup(
+                move || {
+                    let result = manager.cleanup_exit_node_client_state(true);
+                    if let Err(err) = &result {
+                        log::warn!("underlay exit-node cleanup failed: {err:#}");
+                    }
+                    if let Ok(runtime) = manager.current_runtime() {
+                        runtime.set_exit_node_state(manager.exit_node_state_from_saved_config());
+                    }
+                    result
+                },
+                UNDERLAY_CLEANUP_WAIT,
+            );
+            match result {
+                Ok(Ok(Some(note))) => log::warn!("underlay changed; exit-node selection disabled: {note}; select an exit node again after the network reconnects"),
+                Ok(Ok(None)) => {}
+                Ok(Err(err)) => log::warn!("underlay changed; exit-node disabled but cleanup is incomplete: {err:#}"),
+                Err(err) => log::warn!("underlay exit-node cleanup did not finish within {UNDERLAY_CLEANUP_WAIT:?}: {err}; network recovery will continue and cleanup may still be running"),
+            }
         }
     }
 

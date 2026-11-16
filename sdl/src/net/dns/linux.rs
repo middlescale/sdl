@@ -23,7 +23,7 @@ pub(crate) fn apply_split_dns(
     if let Err(err) = reconcile_dns_routes(interface_name, previous_profile, Some(profile)) {
         return rollback_apply_failure(interface_name, previous_profile, profile, err);
     }
-    if !resolvectl_available() {
+    if !resolvectl_available()? {
         return Ok(());
     }
     if let Err(err) = exe_cmd(&build_apply_command(interface_name, profile)) {
@@ -37,7 +37,7 @@ pub(crate) fn revert_split_dns(
     previous_profile: Option<&DnsProfile>,
 ) -> io::Result<()> {
     reconcile_dns_routes(interface_name, previous_profile, None)?;
-    if !resolvectl_available() {
+    if !resolvectl_available()? {
         return Ok(());
     }
     exe_cmd(&build_revert_command(interface_name))?;
@@ -137,13 +137,14 @@ fn interface_is_up(interface_name: &str) -> io::Result<bool> {
     Ok(flags & 0x1 != 0)
 }
 
-fn resolvectl_available() -> bool {
-    std::process::Command::new("sh")
-        .arg("-lc")
-        .arg("command -v resolvectl >/dev/null 2>&1")
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+fn resolvectl_available() -> io::Result<bool> {
+    super::super::command_timeout::output(
+        std::process::Command::new("sh")
+            .arg("-lc")
+            .arg("command -v resolvectl >/dev/null 2>&1"),
+        super::super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .map(|output| output.status.success())
 }
 
 fn build_apply_command(interface_name: &str, profile: &DnsProfile) -> String {

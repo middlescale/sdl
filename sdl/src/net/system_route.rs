@@ -20,11 +20,13 @@ pub(crate) fn exe_cmd(cmd: &str) -> io::Result<()> {
     use std::os::windows::process::CommandExt;
 
     println!("exe cmd: {}", cmd);
-    let out = std::process::Command::new("cmd")
-        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
-        .arg("/C")
-        .arg(&cmd)
-        .output()?;
+    let out = super::command_timeout::output(
+        std::process::Command::new("cmd")
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+            .arg("/C")
+            .arg(&cmd),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )?;
     if !out.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
@@ -79,13 +81,15 @@ pub(crate) fn delete_route(name: &str, address: Ipv4Addr, netmask: Ipv4Addr) -> 
         format!("{address}/{prefix_len}")
     };
     println!("exe cmd: ip route del {} dev {}", route_target, name);
-    let out = Command::new("ip")
-        .arg("route")
-        .arg("del")
-        .arg(&route_target)
-        .arg("dev")
-        .arg(name)
-        .output()?;
+    let out = super::command_timeout::output(
+        Command::new("ip")
+            .arg("route")
+            .arg("del")
+            .arg(&route_target)
+            .arg("dev")
+            .arg(name),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )?;
     if !out.status.success() {
         let fallback_cmd = if netmask.is_broadcast() {
             format!("route del -host {:?} {}", address, name)
@@ -110,13 +114,15 @@ fn exe_linux_ip_route_cmd(name: &str, route_target: &str) -> io::Result<()> {
     use std::process::Command;
 
     println!("exe cmd: ip route replace {} dev {}", route_target, name);
-    let out = Command::new("ip")
-        .arg("route")
-        .arg("replace")
-        .arg(route_target)
-        .arg("dev")
-        .arg(name)
-        .output()?;
+    let out = super::command_timeout::output(
+        Command::new("ip")
+            .arg("route")
+            .arg("replace")
+            .arg(route_target)
+            .arg("dev")
+            .arg(name),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )?;
     if !out.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
@@ -132,11 +138,10 @@ fn exe_linux_ip_route_cmd(name: &str, route_target: &str) -> io::Result<()> {
 pub(crate) fn exe_cmd(cmd: &str) -> io::Result<std::process::Output> {
     use std::process::Command;
     println!("exe cmd: {}", cmd);
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-        .expect("sh exec error!");
+    let out = super::command_timeout::output(
+        Command::new("sh").arg("-c").arg(cmd),
+        super::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )?;
     if !out.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,

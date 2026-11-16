@@ -80,11 +80,13 @@ pub(super) fn teardown_client_dns_platform(
 }
 
 fn macos_default_interface() -> anyhow::Result<String> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("route -n get default | awk '/interface:/{print $2; exit}'")
-        .output()
-        .context("failed to query macOS default interface")?;
+    let output = crate::net::command_timeout::output(
+        Command::new("sh")
+            .arg("-c")
+            .arg("route -n get default | awk '/interface:/{print $2; exit}'"),
+        crate::net::command_timeout::NETWORK_COMMAND_TIMEOUT,
+    )
+    .context("failed to query macOS default interface")?;
     if !output.status.success() {
         anyhow::bail!(
             "route -n get default failed: {}{}",
