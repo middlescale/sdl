@@ -9,12 +9,18 @@ mod excludes;
 mod routing;
 mod selection;
 
+#[cfg(target_os = "linux")]
+pub use dns::client_exit_dns_active;
 pub use dns::{setup_client_dns, teardown_client_dns, ClientDnsServiceState, ClientDnsState};
 pub use excludes::merge_excludes;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+pub use routing::{client_bypasses_active, client_routing_active};
 pub use routing::{
     refresh_client_routing_excludes, setup_client_routing, setup_server_routing,
     teardown_client_routing, teardown_server_routing,
 };
+#[cfg(target_os = "linux")]
+pub use routing::{repair_client_routing_excludes, restore_client_split_routes};
 pub use selection::{
     apply_client_route_dns_selection, refresh_client_route_excludes, ClientRouteDnsApplyError,
     ClientRouteDnsApplyResult, ClientRouteDnsSelection, ClientRouteDnsSnapshot,

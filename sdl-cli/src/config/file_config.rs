@@ -65,6 +65,8 @@ pub struct ExitNodeFileConfig {
     pub enabled: bool,
     pub egress_interface: Option<String>,
     pub client_active: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub cleanup_pending: bool,
     /// Stable device public-key fingerprint. `selected_device_id` is accepted
     /// only as an on-read legacy alias and normalized when the selection is
     /// next successfully applied.
@@ -74,6 +76,10 @@ pub struct ExitNodeFileConfig {
     pub route_excludes: Vec<String>,
     pub applied_route_excludes: Vec<String>,
     pub original_dns: Vec<OriginalDnsServiceFileConfig>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -414,6 +420,25 @@ mod tests {
         DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER, FILE_CONFIG_VERSION,
     };
     use std::fs;
+
+    #[test]
+    fn cleanup_pending_is_persisted_only_when_needed() {
+        let mut state = super::ExitNodeFileConfig::default();
+        let inactive = serde_yaml::to_string(&state).unwrap();
+        assert!(!inactive.contains("cleanup_pending"));
+        state.cleanup_pending = true;
+        let pending = serde_yaml::to_string(&state).unwrap();
+        assert!(
+            serde_yaml::from_str::<super::ExitNodeFileConfig>(&pending)
+                .unwrap()
+                .cleanup_pending
+        );
+        assert!(
+            !serde_yaml::from_str::<super::ExitNodeFileConfig>(&inactive)
+                .unwrap()
+                .cleanup_pending
+        );
+    }
 
     fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(

@@ -28,13 +28,14 @@ use windows::active_remote_management_ipv4s;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    refresh_client_routing_excludes, setup_client_routing, setup_server_routing,
-    teardown_client_routing, teardown_server_routing,
+    client_bypasses_active, client_routing_active, refresh_client_routing_excludes,
+    repair_client_routing_excludes, restore_client_split_routes, setup_client_routing,
+    setup_server_routing, teardown_client_routing, teardown_server_routing,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
-    refresh_client_routing_excludes, setup_client_routing, setup_server_routing,
-    teardown_client_routing, teardown_server_routing,
+    client_bypasses_active, client_routing_active, refresh_client_routing_excludes,
+    setup_client_routing, setup_server_routing, teardown_client_routing, teardown_server_routing,
 };
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub use unsupported::{
@@ -43,8 +44,8 @@ pub use unsupported::{
 };
 #[cfg(target_os = "windows")]
 pub use windows::{
-    refresh_client_routing_excludes, setup_client_routing, setup_server_routing,
-    teardown_client_routing, teardown_server_routing,
+    client_bypasses_active, client_routing_active, refresh_client_routing_excludes,
+    setup_client_routing, setup_server_routing, teardown_client_routing, teardown_server_routing,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

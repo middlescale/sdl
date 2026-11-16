@@ -80,6 +80,12 @@ pub struct ExitNodeStatus {
     pub egress_interface: String,
     #[serde(default)]
     pub client_active: bool,
+    #[serde(default)]
+    pub client_requested: bool,
+    #[serde(default)]
+    pub client_route_status: String,
+    #[serde(default)]
+    pub client_route_error: Option<String>,
     pub selected_identity: String,
     pub selected_name: String,
     pub selected_virtual_ip: String,

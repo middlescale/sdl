@@ -12,6 +12,8 @@ mod unsupported;
 mod windows;
 
 #[cfg(target_os = "linux")]
+pub use linux::client_exit_dns_active;
+#[cfg(target_os = "linux")]
 use linux::{setup_client_dns_platform, teardown_client_dns_platform};
 #[cfg(target_os = "macos")]
 use macos::{setup_client_dns_platform, teardown_client_dns_platform};

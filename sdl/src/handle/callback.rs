@@ -271,6 +271,8 @@ pub trait SdlCallback: Clone + Send + Sync + 'static {
     fn device_renamed(&self, _new_name: String) {}
     /// 直连 P2P 路由新增或更新
     fn direct_route_changed(&self, _peer_ip: Ipv4Addr) {}
+    /// A suspend gap or physical network change requires route reconciliation.
+    fn underlay_changed(&self) {}
     /// 异常信息
     fn error(&self, _info: ErrorInfo) {}
     /// 服务停止

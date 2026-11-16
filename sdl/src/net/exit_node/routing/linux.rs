@@ -11,6 +11,139 @@ use super::{
 };
 use std::net::Ipv4Addr;
 
+/// Check kernel routes, not the persisted list of routes SDL previously installed.
+pub fn client_routing_active(tun_name: &str) -> anyhow::Result<bool> {
+    validate_iface_name(tun_name, "tun name")?;
+    for target in ["0.0.0.0/1", "128.0.0.0/1"] {
+        let route = command_stdout("ip", &["-4", "route", "show", "exact", target])?;
+        if !split_route_matches(&route, target, tun_name) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn split_route_matches(routes: &str, target: &str, tun_name: &str) -> bool {
+    routes.lines().next().is_some_and(|line| {
+        line.split_whitespace().next() == Some(target) && linux_route_iface(line) == Some(tun_name)
+    })
+}
+
+pub fn client_bypasses_active(tun_name: &str, excludes: &[String]) -> anyhow::Result<bool> {
+    validate_iface_name(tun_name, "tun name")?;
+    for exclude in excludes {
+        let target = normalize_route_target(exclude)?;
+        let addr = normalized_route_target_addr(&target)?;
+        let effective = command_stdout("ip", &["-4", "route", "get", &addr.to_string()])?;
+        let iface = linux_route_iface(&effective)
+            .ok_or_else(|| anyhow::anyhow!("cannot determine route interface for {exclude}"))?;
+        if iface == tun_name {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Repair missing underlay bypasses without replacing routes owned by another manager.
+pub fn repair_client_routing_excludes(tun_name: &str, excludes: &[String]) -> anyhow::Result<bool> {
+    validate_iface_name(tun_name, "tun name")?;
+    // A single snapshot keeps the healthy-path check cheap when many peers exist.
+    let routes = command_stdout("ip", &["-4", "route", "show", "table", "main"])?;
+    let default = routes
+        .lines()
+        .find(|line| line.split_whitespace().next() == Some("default"))
+        .ok_or_else(|| anyhow::anyhow!("physical default route is unavailable"))?;
+    let iface = linux_route_iface(default)
+        .ok_or_else(|| anyhow::anyhow!("physical default route has no interface"))?;
+    if iface == tun_name {
+        anyhow::bail!("default route points to SDL tunnel");
+    }
+    validate_default_route_interface(tun_name, iface)?;
+    for exclude in excludes {
+        let target = normalize_route_target(exclude)?;
+        let addr = normalized_route_target_addr(&target)?;
+        let existing = routes.lines().find(|line| {
+            line.split_whitespace()
+                .next()
+                .and_then(|prefix| normalize_route_target(prefix).ok())
+                .is_some_and(|prefix| prefix == target)
+        });
+        if let Some(existing) = existing {
+            if linux_route_iface(existing) == Some(tun_name) {
+                anyhow::bail!("cannot restore bypass {target}: conflicting route {existing}");
+            }
+            continue;
+        }
+        let effective = command_stdout("ip", &["-4", "route", "get", &addr.to_string()]).ok();
+        let route = effective
+            .as_deref()
+            .and_then(|output| output.lines().next())
+            .filter(|line| linux_route_iface(line).is_some_and(|name| name != tun_name));
+        if route.is_some_and(|line| line.starts_with("local ") || line.starts_with("broadcast ")) {
+            continue;
+        }
+        let source = route.unwrap_or(default);
+        let parts = bypass_route_arguments(source)?;
+        let mut args = vec!["-4", "route", "add", target.as_str()];
+        args.extend(parts);
+        run_command("ip", &args)?;
+    }
+    Ok(["0.0.0.0/1", "128.0.0.0/1"].iter().all(|target| {
+        routes
+            .lines()
+            .any(|line| split_route_matches(line, target, tun_name))
+    }))
+}
+
+fn bypass_route_arguments(route: &str) -> anyhow::Result<Vec<&str>> {
+    let mut words = route.split_whitespace().skip(1);
+    let mut args = Vec::new();
+    while let Some(word) = words.next() {
+        if matches!(word, "via" | "dev" | "src" | "metric") {
+            let value = words
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing {word} in route: {route}"))?;
+            args.extend([word, value]);
+        }
+    }
+    if !args.contains(&"dev") {
+        anyhow::bail!("cannot determine route interface: {route}");
+    }
+    Ok(args)
+}
+
+/// Restore missing split routes only after the control path has been restored.
+pub fn restore_client_split_routes(tun_name: &str, excludes: &[String]) -> anyhow::Result<()> {
+    validate_iface_name(tun_name, "tun name")?;
+    preflight_remote_management_excludes(excludes)?;
+    let mut missing = Vec::new();
+    for target in ["0.0.0.0/1", "128.0.0.0/1"] {
+        let route = command_stdout("ip", &["-4", "route", "show", "exact", target])?;
+        if split_route_matches(&route, target, tun_name) {
+            continue;
+        }
+        if !route.trim().is_empty() {
+            anyhow::bail!("cannot restore {target}: conflicting route {route}");
+        }
+        missing.push(target);
+    }
+    let mut installed = Vec::new();
+    for target in missing {
+        if let Err(err) = run_command("ip", &["-4", "route", "add", target, "dev", tun_name]) {
+            for added in installed {
+                if let Err(rollback) =
+                    run_command("ip", &["-4", "route", "del", added, "dev", tun_name])
+                {
+                    log::warn!("failed to roll back exit-node route {added}: {rollback}");
+                }
+            }
+            return Err(err);
+        }
+        installed.push(target);
+    }
+    Ok(())
+}
+
 pub fn setup_server_routing(egress_interface: &str, tun_name: &str) -> anyhow::Result<String> {
     validate_iface_name(egress_interface, "egress interface")?;
     validate_iface_name(tun_name, "tun name")?;
@@ -188,4 +321,51 @@ fn linux_route_iface(route: &str) -> Option<&str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bypass_route_arguments, split_route_matches};
+
+    #[test]
+    fn bypass_arguments_only_include_supported_route_attributes() {
+        assert_eq!(
+            bypass_route_arguments(
+                "1.2.3.4 via 192.0.2.1 dev eth0 src 192.0.2.2 uid 1000 cache metric 10"
+            )
+            .unwrap(),
+            [
+                "via",
+                "192.0.2.1",
+                "dev",
+                "eth0",
+                "src",
+                "192.0.2.2",
+                "metric",
+                "10"
+            ]
+        );
+        assert!(bypass_route_arguments("default via 192.0.2.1").is_err());
+        assert!(bypass_route_arguments("default dev").is_err());
+    }
+
+    #[test]
+    fn split_route_must_exist_on_the_selected_tun() {
+        assert!(split_route_matches(
+            "0.0.0.0/1 dev sdl-tun scope link\n",
+            "0.0.0.0/1",
+            "sdl-tun"
+        ));
+        assert!(!split_route_matches("", "0.0.0.0/1", "sdl-tun"));
+        assert!(!split_route_matches(
+            "0.0.0.0/1 dev other-tun scope link\n",
+            "0.0.0.0/1",
+            "sdl-tun"
+        ));
+        assert!(!split_route_matches(
+            "128.0.0.0/1 dev sdl-tun scope link\n",
+            "0.0.0.0/1",
+            "sdl-tun"
+        ));
+    }
 }

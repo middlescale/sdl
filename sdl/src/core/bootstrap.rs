@@ -294,12 +294,14 @@ impl Sdl {
             let gateway_sessions = gateway_sessions.clone();
             let udp_channel = udp_channel.clone();
             let current_device = current_device.clone();
+            let callback = callback.clone();
             // Use one short grace period on every platform; power-source
             // detection is not part of underlay recovery.
             let revalidation_timeout = Duration::from_secs(3);
             crate::net::underlay_monitor::start_underlay_monitor(
                 stop_manager.clone(),
                 move || {
+                    callback.underlay_changed();
                     // A suspend/resume may preserve both Wi-Fi and the old NAT
                     // mapping. Keep the direct endpoints, but require a fresh
                     // Ping/Pong before any payload can select them again.

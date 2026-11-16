@@ -163,6 +163,21 @@ Command summary:
 - `sdl channel_change --type relay` switches the local runtime to relay mode.
 - If a device is waiting for authentication, `sdl status --json` exposes `auth_pending` and `last_error`.
 
+For `sdl exit-node status --json`, `client_requested` indicates that an exit
+node was selected. `client_active` indicates that the selection is currently
+usable according to SDL's control/peer state and local route checks; it does
+not probe end-to-end forwarding. Scripts that used `client_active` to mean
+"selected" should use `client_requested` instead. `client_route_status` and
+`client_route_error` provide route-check details. On Linux, DNS verification
+currently depends on systemd-resolved (`resolvectl`).
+On Windows, bypass verification currently looks for an exact route prefix;
+when only a broader route exists it reports `unknown`, rather than proving
+which interface Windows would actually use.
+On Linux, automatic recovery recreates missing bypasses but does not replace an
+existing bypass whose ownership or next-hop validity cannot be established. A
+stale route left behind after an underlay gateway change may require manual
+inspection; a configured route does not prove that its next hop is reachable.
+
 ## Build
 
 Debug build:

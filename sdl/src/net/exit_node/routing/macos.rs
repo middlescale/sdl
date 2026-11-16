@@ -10,6 +10,32 @@ use anyhow::Context;
 use std::net::Ipv4Addr;
 use std::process::Command;
 
+pub fn client_routing_active(tun_name: &str) -> anyhow::Result<bool> {
+    validate_iface_name(tun_name, "tun name")?;
+    let routes = command_stdout("netstat", &["-rn", "-f", "inet"])?;
+    Ok([["0/1", "0.0.0.0/1"], ["128.0/1", "128.0.0.0/1"]]
+        .iter()
+        .all(|aliases| {
+            aliases
+                .iter()
+                .any(|prefix| macos_netstat_route_iface(&routes, prefix) == Some(tun_name))
+        }))
+}
+
+pub fn client_bypasses_active(tun_name: &str, excludes: &[String]) -> anyhow::Result<bool> {
+    validate_iface_name(tun_name, "tun name")?;
+    for exclude in excludes {
+        let (addr, _) = route_target_addr_mask(exclude)?;
+        let route = command_stdout("route", &["-n", "get", &addr.to_string()])?;
+        match macos_route_interface(&route) {
+            Some(iface) if iface != tun_name => {}
+            Some(_) => return Ok(false),
+            None => anyhow::bail!("cannot determine route interface for {exclude}"),
+        }
+    }
+    Ok(true)
+}
+
 pub fn setup_server_routing(_egress_interface: &str, _tun_name: &str) -> anyhow::Result<String> {
     anyhow::bail!("exit-node routing setup is currently supported only on Linux")
 }

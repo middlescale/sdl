@@ -20,10 +20,63 @@ use sdl::{ConnectInfo, ErrorInfo, ErrorType, HandshakeInfo, RegisterInfo, SdlCal
 use std::collections::BTreeSet;
 use std::io;
 use std::net::Ipv4Addr;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::Condvar;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use crate::root_check;
+
+fn teardown_exit_node_with(
+    dns: impl FnOnce() -> anyhow::Result<String>,
+    routes: impl FnOnce() -> anyhow::Result<String>,
+) -> anyhow::Result<(String, String)> {
+    let dns_result = dns();
+    let route_result = routes();
+    Ok((dns_result?, route_result?))
+}
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::teardown_exit_node_with;
+    use std::cell::Cell;
+
+    #[test]
+    fn route_cleanup_is_attempted_even_if_dns_cleanup_fails() {
+        let called = Cell::new(false);
+        let result = teardown_exit_node_with(
+            || anyhow::bail!("dns failed"),
+            || {
+                called.set(true);
+                Ok("routes removed".into())
+            },
+        );
+        assert!(called.get());
+        assert!(result.is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn next_exit_node_recovery_delay(delay: Duration) -> Duration {
+    delay.saturating_mul(2).min(Duration::from_secs(30))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod recovery_delay_tests {
+    use super::next_exit_node_recovery_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn recovery_backoff_is_bounded() {
+        let mut delay = Duration::from_secs(5);
+        for expected in [10, 20, 30, 30] {
+            delay = next_exit_node_recovery_delay(delay);
+            assert_eq!(delay, Duration::from_secs(expected));
+        }
+    }
+}
 
 struct ServiceManager {
     config: Mutex<Config>,
@@ -32,6 +85,14 @@ struct ServiceManager {
     runtime_start_lock: Mutex<()>,
     // Serializes system route/DNS changes with their corresponding persisted state.
     exit_node_client_route_lock: Mutex<()>,
+    #[cfg(target_os = "linux")]
+    exit_node_recovery_running: AtomicBool,
+    #[cfg(target_os = "linux")]
+    exit_node_recovery_generation: AtomicU64,
+    #[cfg(target_os = "linux")]
+    exit_node_recovery_error: Mutex<Option<String>>,
+    #[cfg(target_os = "linux")]
+    exit_node_recovery_wake: (Mutex<()>, Condvar),
 }
 
 #[derive(Clone)]
@@ -228,6 +289,7 @@ impl ServiceManager {
     ) {
         let mut saved_config = self.saved_config.lock().unwrap();
         saved_config.exit_node.client_active = true;
+        saved_config.exit_node.cleanup_pending = false;
         saved_config.exit_node.selected_identity = Some(selection.peer_identity.fingerprint_hex());
         saved_config.exit_node.tun_name = Some(selection.tun_name.clone());
         saved_config.exit_node.route_excludes = selection.route_excludes.clone();
@@ -239,6 +301,7 @@ impl ServiceManager {
         self.persist_saved_config();
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn reapply_exit_node_client_routes(&self) -> anyhow::Result<Option<String>> {
         let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
         let saved_config = self.saved_config.lock().unwrap().clone();
@@ -315,18 +378,173 @@ impl ServiceManager {
             Err(err) => {
                 if err.rollback_failed() {
                     let mut saved_config = self.saved_config.lock().unwrap();
-                    saved_config.exit_node.client_active = false;
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        saved_config.exit_node.client_active = false;
+                    }
                     saved_config.exit_node.applied_route_excludes = Self::merge_route_exclude_lists(
                         &saved_config.exit_node.applied_route_excludes,
                         &next_excludes,
                     );
                     drop(saved_config);
                     self.persist_saved_config();
+                    #[cfg(not(target_os = "linux"))]
                     runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+                    #[cfg(target_os = "linux")]
+                    {
+                        *self.exit_node_recovery_error.lock().unwrap() = Some(format!("{err}"));
+                    }
                 }
                 Err(anyhow::Error::new(err))
             }
         }
+    }
+
+    /// Repair bypasses before waiting for control: control and gateways must not
+    /// be routed through the tunnel they are needed to reconnect.
+    #[cfg(target_os = "linux")]
+    fn reconcile_exit_node_after_underlay_change(&self, refresh_dns: bool) -> anyhow::Result<bool> {
+        let _guard = self.exit_node_client_route_lock.lock().unwrap();
+        let saved = self.saved_config.lock().unwrap().clone();
+        if !saved.exit_node.client_active {
+            return Ok(true);
+        }
+        let runtime = self.current_runtime()?;
+        if runtime.is_suspended() {
+            return Ok(false);
+        }
+        let tun_name = Self::saved_exit_node_tun_name(&saved);
+        if let Some(current_tun) = runtime.tun_device_name() {
+            if current_tun != tun_name {
+                anyhow::bail!("exit-node TUN changed from {tun_name} to {current_tun}; reselect the exit node to apply routes safely");
+            }
+        }
+        let routes_active = exit_node::repair_client_routing_excludes(
+            &tun_name,
+            &saved.exit_node.applied_route_excludes,
+        )?;
+        if !runtime.connection_status().online() {
+            return Ok(false);
+        }
+        let identity = saved
+            .exit_node
+            .selected_identity
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("selected exit-node identity is missing"))?;
+        let peer = Self::selected_exit_node_peer(&runtime, identity)?;
+        if !peer.exit_node_usable() {
+            return Ok(false);
+        }
+        if !routes_active || refresh_dns {
+            let dns = Self::exit_node_dns_service_ip(&runtime)?;
+            let dns_active = exit_node::client_exit_dns_active(&tun_name, dns)?;
+            if !routes_active || dns_active == Some(false) {
+                exit_node::setup_client_dns(
+                    &tun_name,
+                    dns,
+                    Self::saved_client_dns_state(&saved).as_ref(),
+                )?;
+            }
+        }
+        if !routes_active {
+            exit_node::restore_client_split_routes(
+                &tun_name,
+                &saved.exit_node.applied_route_excludes,
+            )?;
+            log::info!("exit-node client routes restored after underlay recovery");
+        }
+        Ok(true)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn request_exit_node_recovery(self: &Arc<Self>) {
+        let _wake_guard = self.exit_node_recovery_wake.0.lock().unwrap();
+        self.exit_node_recovery_generation
+            .fetch_add(1, Ordering::AcqRel);
+        if self.exit_node_recovery_running.swap(true, Ordering::AcqRel) {
+            self.exit_node_recovery_wake.1.notify_one();
+            return;
+        }
+        let manager = self.clone();
+        std::thread::spawn(move || {
+            let mut last_reconciled_generation = None;
+            let mut retry_generation = None;
+            let mut retry_delay = Duration::from_secs(5);
+            let handled_generation = loop {
+                let generation = manager
+                    .exit_node_recovery_generation
+                    .load(Ordering::Acquire);
+                if retry_generation != Some(generation) {
+                    retry_generation = Some(generation);
+                    retry_delay = Duration::from_secs(5);
+                }
+                match manager.reconcile_exit_node_after_underlay_change(
+                    last_reconciled_generation != Some(generation),
+                ) {
+                    Ok(done) => {
+                        *manager.exit_node_recovery_error.lock().unwrap() = None;
+                        if done {
+                            retry_delay = Duration::from_secs(5);
+                            last_reconciled_generation = Some(generation);
+                            if !manager.saved_config.lock().unwrap().exit_node.client_active {
+                                if manager
+                                    .exit_node_recovery_generation
+                                    .load(Ordering::Acquire)
+                                    == generation
+                                {
+                                    break generation;
+                                }
+                                continue;
+                            }
+                            // Reconcile even if a short outage began and ended
+                            // between the underlay monitor's polls.
+                            manager.wait_exit_node_recovery(generation, Duration::from_secs(15));
+                            continue;
+                        }
+                    }
+                    Err(err) => {
+                        let message = format!("{err:#}");
+                        let mut last = manager.exit_node_recovery_error.lock().unwrap();
+                        if last.as_deref() != Some(message.as_str()) {
+                            log::warn!("exit-node recovery pending: {message}");
+                        }
+                        *last = Some(message);
+                    }
+                }
+                manager.wait_exit_node_recovery(generation, retry_delay);
+                retry_delay = next_exit_node_recovery_delay(retry_delay);
+            };
+            manager
+                .exit_node_recovery_running
+                .store(false, Ordering::Release);
+            if manager
+                .exit_node_recovery_generation
+                .load(Ordering::Acquire)
+                != handled_generation
+            {
+                manager.request_exit_node_recovery();
+            }
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_exit_node_recovery(&self, generation: u64, timeout: Duration) {
+        let guard = self.exit_node_recovery_wake.0.lock().unwrap();
+        if self.exit_node_recovery_generation.load(Ordering::Acquire) == generation {
+            let _ = self
+                .exit_node_recovery_wake
+                .1
+                .wait_timeout(guard, timeout)
+                .unwrap();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wake_exit_node_recovery(&self) {
+        let _guard = self.exit_node_recovery_wake.0.lock().unwrap();
+        self.exit_node_recovery_generation
+            .fetch_add(1, Ordering::AcqRel);
+        self.exit_node_recovery_wake.1.notify_one();
     }
 
     fn persist_device_name(self: &Arc<Self>, applied_name: String) {
@@ -390,6 +608,14 @@ impl ServiceManager {
             runtime: Mutex::new(None),
             runtime_start_lock: Mutex::new(()),
             exit_node_client_route_lock: Mutex::new(()),
+            #[cfg(target_os = "linux")]
+            exit_node_recovery_running: AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            exit_node_recovery_generation: AtomicU64::new(0),
+            #[cfg(target_os = "linux")]
+            exit_node_recovery_error: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            exit_node_recovery_wake: (Mutex::new(()), Condvar::new()),
         }
     }
 
@@ -613,8 +839,21 @@ impl ServiceManager {
 
     fn cleanup_exit_node_client_state(&self) -> anyhow::Result<Option<String>> {
         let _route_guard = self.exit_node_client_route_lock.lock().unwrap();
-        let saved_config = self.saved_config.lock().unwrap().clone();
+        let saved_config = {
+            let mut saved = self.saved_config.lock().unwrap();
+            let previous = saved.clone();
+            saved.exit_node.client_active = false;
+            saved.exit_node.cleanup_pending = previous.exit_node.client_active
+                || previous.exit_node.cleanup_pending
+                || !previous.exit_node.applied_route_excludes.is_empty()
+                || !previous.exit_node.original_dns.is_empty();
+            previous
+        };
+        self.persist_saved_config();
+        #[cfg(target_os = "linux")]
+        self.wake_exit_node_recovery();
         if !saved_config.exit_node.client_active
+            && !saved_config.exit_node.cleanup_pending
             && saved_config.exit_node.applied_route_excludes.is_empty()
             && saved_config.exit_node.original_dns.is_empty()
         {
@@ -622,14 +861,19 @@ impl ServiceManager {
         }
         let tun_name = Self::saved_exit_node_tun_name(&saved_config);
         let dns_state = Self::saved_client_dns_state(&saved_config);
-        let dns_result = exit_node::teardown_client_dns(dns_state.as_ref())?;
-        let setup_result = exit_node::teardown_client_routing(
-            &tun_name,
-            &saved_config.exit_node.applied_route_excludes,
+        let (dns_result, setup_result) = teardown_exit_node_with(
+            || exit_node::teardown_client_dns(dns_state.as_ref()),
+            || {
+                exit_node::teardown_client_routing(
+                    &tun_name,
+                    &saved_config.exit_node.applied_route_excludes,
+                )
+            },
         )?;
         {
             let mut saved_config = self.saved_config.lock().unwrap();
             saved_config.exit_node.client_active = false;
+            saved_config.exit_node.cleanup_pending = false;
             saved_config.exit_node.applied_route_excludes.clear();
             saved_config.exit_node.original_dns.clear();
         }
@@ -693,11 +937,7 @@ impl ServiceManager {
             .and_then(|state| state.egress_interface.clone())
             .or_else(|| saved.exit_node.egress_interface.clone())
             .unwrap_or_default();
-        let client_active = saved.exit_node.client_active
-            && runtime_state
-                .as_ref()
-                .and_then(|state| state.selected_identity)
-                .is_some();
+        let client_requested = saved.exit_node.client_active;
         let selected_identity = runtime_state
             .as_ref()
             .and_then(|state| state.selected_identity)
@@ -716,8 +956,89 @@ impl ServiceManager {
                 }
             }
         }
-        let note = if client_active && selected_usable {
-            "using selected exit node".to_string()
+        let (client_route_status, client_route_error) = if !client_requested {
+            if saved.exit_node.cleanup_pending
+                || !saved.exit_node.applied_route_excludes.is_empty()
+                || !saved.exit_node.original_dns.is_empty()
+            {
+                (
+                    "cleanup_required".to_string(),
+                    Some(
+                        "exit-node cleanup is incomplete; retry `sdl exit-node clear`".to_string(),
+                    ),
+                )
+            } else {
+                ("disabled".to_string(), None)
+            }
+        } else if self
+            .current_runtime()
+            .is_ok_and(|runtime| runtime.is_suspended())
+        {
+            ("suspended".to_string(), None)
+        } else {
+            #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+            {
+                let tun = Self::saved_exit_node_tun_name(&saved);
+                match exit_node::client_routing_active(&tun) {
+                    Ok(true) => match exit_node::client_bypasses_active(
+                        &tun,
+                        &saved.exit_node.applied_route_excludes,
+                    ) {
+                        Ok(true) => ("configured".to_string(), None),
+                        Ok(false) => (
+                            "degraded".to_string(),
+                            Some(
+                                "one or more underlay bypasses route through the SDL tunnel"
+                                    .to_string(),
+                            ),
+                        ),
+                        Err(err) => (
+                            "unknown".to_string(),
+                            Some(format!("cannot inspect underlay bypasses: {err}")),
+                        ),
+                    },
+                    Ok(false) => (
+                        "degraded".to_string(),
+                        Some(
+                            "exit-node default routes are missing or point to another interface"
+                                .to_string(),
+                        ),
+                    ),
+                    Err(err) => (
+                        "unknown".to_string(),
+                        Some(format!("cannot inspect exit-node routes: {err}")),
+                    ),
+                }
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                (
+                    "unknown".to_string(),
+                    Some("route verification is not available on this platform".to_string()),
+                )
+            }
+        };
+        #[cfg(target_os = "linux")]
+        let (client_route_status, client_route_error) =
+            if client_requested && client_route_status != "suspended" {
+                match self.exit_node_recovery_error.lock().unwrap().clone() {
+                    Some(error) => ("degraded".to_string(), Some(error)),
+                    None => (client_route_status, client_route_error),
+                }
+            } else {
+                (client_route_status, client_route_error)
+            };
+        let control_connected = self
+            .current_runtime()
+            .is_ok_and(|runtime| runtime.connection_status().online());
+        let client_active = client_requested
+            && selected_usable
+            && control_connected
+            && client_route_status == "configured";
+        let note = if client_active {
+            "exit-node routes configured; end-to-end forwarding not probed".to_string()
+        } else if client_requested {
+            format!("exit node selected but not confirmed active (routes: {client_route_status}, control connected: {control_connected}, peer usable: {selected_usable})")
         } else if !selected_identity.is_empty() && selected_usable {
             "last selected exit node is usable but not active; run `sdl exit-node use <target>` to enable it".to_string()
         } else if !selected_identity.is_empty() {
@@ -735,6 +1056,9 @@ impl ServiceManager {
             local_ready,
             egress_interface,
             client_active,
+            client_requested,
+            client_route_status,
+            client_route_error,
             selected_identity,
             selected_name,
             selected_virtual_ip,
@@ -908,11 +1232,26 @@ impl ServiceManager {
             &saved_config.exit_node.applied_route_excludes,
             &current_effective_excludes,
         );
-        let dns_result = exit_node::teardown_client_dns(dns_state.as_ref())?;
-        let setup_result = exit_node::teardown_client_routing(&tun_name, &effective_excludes)?;
+        {
+            let mut saved = self.saved_config.lock().unwrap();
+            saved.exit_node.client_active = false;
+            saved.exit_node.cleanup_pending = true;
+            saved.exit_node.applied_route_excludes = effective_excludes.clone();
+        }
+        self.persist_saved_config();
+        #[cfg(target_os = "linux")]
+        self.wake_exit_node_recovery();
+        if let Ok(runtime) = self.current_runtime() {
+            runtime.set_exit_node_state(self.exit_node_state_from_saved_config());
+        }
+        let (dns_result, setup_result) = teardown_exit_node_with(
+            || exit_node::teardown_client_dns(dns_state.as_ref()),
+            || exit_node::teardown_client_routing(&tun_name, &effective_excludes),
+        )?;
         {
             let mut saved_config = self.saved_config.lock().unwrap();
             saved_config.exit_node.client_active = false;
+            saved_config.exit_node.cleanup_pending = false;
             saved_config.exit_node.selected_identity = None;
             saved_config.exit_node.route_excludes.clear();
             saved_config.exit_node.applied_route_excludes.clear();
@@ -932,6 +1271,8 @@ impl ServiceManager {
         let runtime = self.spawn_service_runtime()?;
         if runtime.is_suspended() {
             runtime.resume()?;
+            #[cfg(target_os = "linux")]
+            self.request_exit_node_recovery();
             self.mutate_state(|state| {
                 state.runtime_starting = false;
                 state.runtime_running = true;
@@ -1188,13 +1529,17 @@ impl CommandHandler for ServiceCommandHandler {
     }
 
     fn exit_node_use(&self, use_command: ExitNodeUseCommand) -> io::Result<String> {
-        self.0
+        let result = self
+            .0
             .use_exit_node(
                 &use_command.target,
                 use_command.tun_name.as_deref(),
                 &use_command.excludes,
             )
-            .map_err(|e| io::Error::other(format!("exit-node use failed: {e}")))
+            .map_err(|e| io::Error::other(format!("exit-node use failed: {e}")))?;
+        #[cfg(target_os = "linux")]
+        self.0.request_exit_node_recovery();
+        Ok(result)
     }
 
     fn exit_node_clear(&self, clear: ExitNodeDisableCommand) -> io::Result<String> {
@@ -1348,6 +1693,7 @@ impl ServiceCallback {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn request_exit_node_client_state_reapply(&self) {
         if let Some(manager) = self.manager.upgrade() {
             std::thread::spawn(move || match manager.reapply_exit_node_client_routes() {
@@ -1386,6 +1732,8 @@ impl SdlCallback for ServiceCallback {
     fn success(&self) {
         self.clear_error_state();
         if let Some(manager) = self.manager.upgrade() {
+            #[cfg(target_os = "linux")]
+            manager.request_exit_node_recovery();
             let current = manager.current_config();
             if current.auth_user_id.is_some() && current.auth_group.is_some() {
                 manager.record_auth_success();
@@ -1395,6 +1743,11 @@ impl SdlCallback for ServiceCallback {
     }
 
     fn create_tun(&self, info: sdl::DeviceInfo) {
+        #[cfg(target_os = "linux")]
+        if let Some(manager) = self.manager.upgrade() {
+            manager.request_exit_node_recovery();
+        }
+        #[cfg(not(target_os = "linux"))]
         self.request_exit_node_client_state_reapply();
         println!("create_tun {}", info)
     }
@@ -1411,12 +1764,23 @@ impl SdlCallback for ServiceCallback {
     fn register(&self, info: RegisterInfo) -> bool {
         self.clear_error_state();
         self.request_exit_node_state_after_auth_reapply();
+        #[cfg(target_os = "linux")]
+        if let Some(manager) = self.manager.upgrade() {
+            manager.request_exit_node_recovery();
+        }
         println!("register {}", style(info).green());
         true
     }
 
     fn direct_route_changed(&self, peer_ip: Ipv4Addr) {
         self.request_exit_node_client_exclude_refresh(peer_ip);
+    }
+
+    fn underlay_changed(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(manager) = self.manager.upgrade() {
+            manager.request_exit_node_recovery();
+        }
     }
 
     fn device_renamed(&self, new_name: String) {

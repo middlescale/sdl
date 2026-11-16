@@ -423,12 +423,24 @@ fn handle_exit_node(args: &[String]) -> i32 {
                                 "Using exit node: {}",
                                 if status.client_active {
                                     "enabled"
+                                } else if status.client_route_status == "unknown" {
+                                    "unknown"
+                                } else if status.client_requested {
+                                    "not active"
                                 } else {
                                     "disabled"
                                 }
                             );
+                            if status.client_requested
+                                || status.client_route_status == "cleanup_required"
+                            {
+                                println!("Route status: {}", status.client_route_status);
+                                if let Some(error) = &status.client_route_error {
+                                    println!("Route detail: {}", error);
+                                }
+                            }
                             if !status.selected_name.is_empty() {
-                                let label = if status.client_active {
+                                let label = if status.client_requested || status.client_active {
                                     "Name"
                                 } else {
                                     "Last selected name"
@@ -436,14 +448,14 @@ fn handle_exit_node(args: &[String]) -> i32 {
                                 println!("{}: {}", label, status.selected_name);
                             }
                             if !status.selected_virtual_ip.is_empty() {
-                                let label = if status.client_active {
+                                let label = if status.client_requested || status.client_active {
                                     "Virtual IP"
                                 } else {
                                     "Last selected IP"
                                 };
                                 println!("{}: {}", label, status.selected_virtual_ip);
                             }
-                            let label = if status.client_active {
+                            let label = if status.client_requested || status.client_active {
                                 "Identity"
                             } else {
                                 "Last selected identity"

@@ -1,6 +1,6 @@
 //! windows route operations.
 
-use super::super::excludes::{route_exclude_diff, route_target_addr_mask};
+use super::super::excludes::{normalize_route_target, route_exclude_diff, route_target_addr_mask};
 use super::super::{run_command, run_powershell, validate_iface_name};
 use super::{
     preflight_remote_management_excludes, route_preflight_warning,
@@ -8,6 +8,36 @@ use super::{
 };
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
+
+pub fn client_routing_active(tun_name: &str) -> anyhow::Result<bool> {
+    let index = windows_interface_index(tun_name)?;
+    for prefix in ["0.0.0.0/1", "128.0.0.0/1"] {
+        let route = run_powershell(&format!(
+            "$ErrorActionPreference = 'Stop'; (Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '{prefix}' -ErrorAction SilentlyContinue | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1).ifIndex"
+        ))?;
+        if route.trim() != index.trim() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub fn client_bypasses_active(tun_name: &str, excludes: &[String]) -> anyhow::Result<bool> {
+    let index = windows_interface_index(tun_name)?;
+    for exclude in excludes {
+        let target = normalize_route_target(exclude)?;
+        let route = run_powershell(&format!(
+            "$ErrorActionPreference = 'Stop'; (Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '{target}' -ErrorAction SilentlyContinue | Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1).ifIndex"
+        ))?;
+        if route.trim().is_empty() {
+            anyhow::bail!("cannot determine route interface for {exclude}");
+        }
+        if route.trim() == index.trim() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 pub fn setup_server_routing(_egress_interface: &str, _tun_name: &str) -> anyhow::Result<String> {
     anyhow::bail!("exit-node routing setup is currently supported only on Linux")
