@@ -640,7 +640,6 @@ mod tests {
     use super::{executable_root_from, parse_args_config_from};
     use crate::config::{DEFAULT_SERVICE_GROUP, DEFAULT_SERVICE_SERVER};
     use std::fs;
-    use std::path::PathBuf;
 
     fn write_temp_config(contents: &str, suffix: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -760,8 +759,9 @@ ports: [30001]
         symlink(&real_exe, &link_exe).expect("create symlink");
 
         let root = executable_root_from(link_exe);
+        let expected_root = fs::canonicalize(&real_dir).expect("canonicalize real dir");
 
-        assert_eq!(root, PathBuf::from(&real_dir));
+        assert_eq!(root, expected_root);
 
         let _ = fs::remove_dir_all(base);
     }
