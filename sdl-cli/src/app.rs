@@ -29,6 +29,9 @@ use std::time::Duration;
 
 use crate::root_check;
 
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod native_exit_node_tests;
+
 fn teardown_exit_node_with(
     dns: impl FnOnce() -> anyhow::Result<String>,
     routes: impl FnOnce() -> anyhow::Result<String>,
